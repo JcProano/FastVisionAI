@@ -49,3 +49,14 @@ Phase 2.5 adds lazy model lifecycle infrastructure, trusted plugin discovery,
 ordered sequential scheduling and benchmark snapshots. The demonstration uses
 only `DummyPlugin`; no model framework is imported. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for contracts, lifecycle states and extension boundaries.
+
+## Live USB person detection validation
+
+With a `/dev/videoX` device connected, run the isolated validation UI:
+
+```bash
+venv/bin/python -m src.validation.live_person_detection --source 0 --max-duration 30
+```
+
+Use `--no-display`, `--max-frames`, `--result-max-age`, resolution, confidence,
+image-size and inference-interval options for bounded or headless validation.
