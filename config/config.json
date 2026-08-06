@@ -71,6 +71,27 @@
             "model_alias": "face_detector_default",
             "model_path": "models/face/face_detection_yunet_2026may.onnx"
           }
+        },
+        {
+          "id": "face_embedding",
+          "enabled": false,
+          "priority": 20,
+          "settings": {
+            "model_alias": "face_embedding_default",
+            "model_name": "w600k_mbf",
+            "model_version": "buffalo_sc-v0.7",
+            "model_path": "models/face_embedding/w600k_mbf.onnx",
+            "embedding_dimension": 512,
+            "input_width": 112,
+            "input_height": 112,
+            "source_color": "BGR",
+            "model_color": "RGB",
+            "scale": 1.0,
+            "mean": [127.5, 127.5, 127.5],
+            "std": [127.5, 127.5, 127.5],
+            "layout": "NCHW",
+            "device": "auto"
+          }
         }
       ]
     },
