@@ -100,6 +100,15 @@ lazy OpenCV-DNN ONNX loader. Its only output is a typed, finite, L2-normalized,
 read-only vector with provenance; comparison and identity policy remain out of
 scope.
 
+`FaceGallery` is the initial thread-safe, in-memory store for identities and
+template-level biometric vectors. It fixes compatible model provenance from
+the first template and rejects exact canonical duplicates. `FaceMatcher`
+calculates bounded cosine scores and deterministic rankings; `MatchPolicy`
+keeps optional decisions separate and disabled by default. No template fusion
+or identity-level aggregation is performed. Optional JSON+NPZ development
+persistence is explicit, integrity-checked and transactionally imported, but
+is neither encrypted nor production-ready.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

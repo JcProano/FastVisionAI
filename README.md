@@ -114,3 +114,17 @@ Official pretrained InsightFace weights are restricted to non-commercial
 research use. Before commercializing FastVisionAI, replace those weights with
 a commercially licensed model or obtain the corresponding license from the
 model owner. Model files are not downloaded automatically or committed to Git.
+
+## In-memory face gallery
+
+The Phase 8 gallery stores temporary identities and read-only templates in
+memory. Matching returns template-level cosine scores and ranked candidates;
+automatic decisions are disabled by default and no universal threshold is
+defined. Run the non-identifying static validation with:
+
+```bash
+venv/bin/python -m src.validation.static_face_gallery --input bus.jpg --top-k 2
+```
+
+Optional JSON+NPZ persistence is explicit, disabled by default and intended
+only for controlled development. See [docs/BIOMETRIC_DATA.md](docs/BIOMETRIC_DATA.md).
