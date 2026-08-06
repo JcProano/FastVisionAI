@@ -1,0 +1,1 @@
+"""FastVisionAI test suite."""

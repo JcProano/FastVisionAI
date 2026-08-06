@@ -1,0 +1,74 @@
+{
+  "camera": {
+    "name": "droidcam_http",
+    "type": "rtsp",
+    "source": "http://192.168.1.17:4747/video",
+    "open_timeout_ms": 5000,
+    "read_timeout_ms": 5000,
+    "reconnect": {
+      "enabled": true,
+      "max_attempts": 60,
+      "interval_seconds": 1.0
+    }
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "logs/fastvisionai.log"
+  },
+  "pipeline": {
+    "queue": {
+      "capacity": 4,
+      "policy": "realtime",
+      "wait_timeout_seconds": 0.5
+    },
+    "simulated_detector": {
+      "detection_count": 1,
+      "class_name": "person",
+      "confidence": 0.9,
+      "latency_ms": 5.0,
+      "fail": false
+    },
+    "plugins": {
+      "directories": ["plugins"],
+      "continue_on_error": true,
+      "enabled": [
+        {
+          "id": "dummy",
+          "enabled": true,
+          "priority": 100,
+          "settings": {
+            "detection_count": 1,
+            "class_name": "person",
+            "confidence": 0.9,
+            "latency_ms": 5.0,
+            "fail": false
+          }
+        },
+        {
+          "id": "person_detector",
+          "enabled": false,
+          "priority": 10,
+          "settings": {
+            "model_alias": "person_detector_default",
+            "model_name": "yolov8n",
+            "model_version": "8",
+            "model_path": "models/yolo/yolov8n.pt",
+            "confidence": 0.4,
+            "iou_threshold": 0.45,
+            "image_size": 640,
+            "allowed_classes": [0],
+            "device": "auto"
+          }
+        }
+      ]
+    },
+    "runtime": {
+      "name": "scheduler",
+      "settings": {
+        "device": "auto",
+        "model_aliases": ["person_detector_default"]
+      }
+    },
+    "synthetic_frame_count": 20
+  }
+}

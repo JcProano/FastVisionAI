@@ -10,8 +10,22 @@ logs/*
 !logs/.gitkeep
 runs/
 
-# Modelos de IA
+# Entornos virtuales y caché
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Logs y resultados generados
+logs/*
+!logs/.gitkeep
+runs/
+
+# Modelos de inteligencia artificial
 models/**/*.pt
 models/**/*.onnx
 models/**/*.engine
 models/**/*.trt
+
+# Imágenes locales para validación
+bus.jpg
