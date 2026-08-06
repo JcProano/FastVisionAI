@@ -1,0 +1,11 @@
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# Archivos generados
+logs/*
+!logs/.gitkeep
+runs/
