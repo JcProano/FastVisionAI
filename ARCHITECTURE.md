@@ -116,6 +116,15 @@ write. `min_pairwise_similarity` expresses minimum within-identity consistency;
 Both default to `None`. Inputs beyond the configured maximum are selected by
 stable input order, and rollback is verified against a logical gallery snapshot.
 
+`CalibrationService` is a pure analysis layer downstream of face embeddings. It
+groups samples by temporary identity, generates every genuine pair and either all
+or a deterministic seeded sample of impostor pairs. It reports descriptive
+distributions, explicit-threshold FAR/FRR and an estimated EER without recognizing
+anyone or selecting a production threshold. Samples retain session, UTC capture,
+source, resolution, quality and model provenance. Optional JSON+NPZ persistence
+is disabled by default, integrity checked and loaded without pickle. Operator
+capture remains isolated under `src/validation` and does not alter Camera Service.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

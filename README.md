@@ -140,3 +140,28 @@ values and synthetic photometric variants only:
 ```bash
 venv/bin/python -m src.validation.static_face_enrollment --input bus.jpg --templates-per-identity 3
 ```
+
+## Face similarity calibration
+
+Phase 10 performs offline analysis, not recognition. Capture is one consenting
+participant and one temporary identifier per session. Nothing is saved unless
+`--save-data` or `--save-images` is supplied; either requires
+`--consent-confirmed`.
+
+```bash
+venv/bin/python -m src.validation.capture_face_calibration \
+  --temporary-id temporary_calibration_001 --source 0 \
+  --min-samples 5 --target-samples 10 --min-capture-interval 1.0 \
+  --max-near-duplicate-similarity 0.995 --consent-confirmed --save-data
+```
+
+Analyze saved temporary identities with explicitly chosen development thresholds:
+
+```bash
+venv/bin/python -m src.validation.analyze_face_calibration \
+  --input data/calibration/session_id --thresholds 0.2 0.3 0.4 0.5
+```
+
+Acceptance is `similarity >= threshold`; rejection is `similarity < threshold`.
+FAR, FRR and approximate EER remain diagnostics and do not establish a production
+threshold.

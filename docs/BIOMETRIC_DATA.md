@@ -22,3 +22,24 @@ model with appropriate commercial rights or a corresponding license.
 Static enrollment creates deterministic brightness variants solely to exercise
 transaction and policy code. These variants are not independent biometric
 captures and must never be used to calibrate production thresholds.
+
+## Calibration captures and consent
+
+Face-similarity calibration uses temporary test identifiers only. The operator
+must obtain informed, explicit consent before persisting embeddings or diagnostic
+images. The capture command requires `--consent-confirmed` whenever `--save-data`
+or `--save-images` is selected. Nothing is saved by default.
+
+Each session is restricted operationally to one person. Because Phase 10 has no
+recognition or tracking, continuity of identity is the operator's responsibility.
+Calibration artifacts are Git-ignored under `data/calibration/`. JSON+NPZ provides
+integrity checking but no encryption and is not production storage.
+
+Session deletion removes known manifests, archives and associated images, but it
+does not claim secure physical erasure from the storage medium. Production policy
+must define consent, access, retention, verifiable deletion and key management.
+
+A score is accepted when `similarity >= threshold` and rejected when
+`similarity < threshold`. FAR is accepted impostor pairs divided by evaluated
+impostor pairs; FRR is rejected genuine pairs divided by genuine pairs. EER is a
+sample-dependent estimate, never a production threshold recommendation.
