@@ -92,3 +92,25 @@ The fixed `fva-5pt-112-v1` template expects, in order: left eye, right eye,
 nose, left mouth corner and right mouth corner. Outputs are 112 x 112 pixels.
 Low-quality but geometrically valid faces remain aligned and are labelled
 `low_quality`; this phase creates no embeddings or identity data.
+
+## Face embedding postprocessor
+
+`FaceEmbeddingPlugin` is a biometric postprocessor over `AlignedFace`; despite
+its functional name, it is not an `InferenceBackend` and is not registered in
+the PreparedFrame Scheduler. It produces normalized, read-only float32 vectors
+and never compares, identifies or stores them.
+
+Once the explicitly configured model exists locally, validate the complete
+static flow with:
+
+```bash
+venv/bin/python -m src.validation.static_face_embedding --input bus.jpg
+```
+
+### LICENSE / MODEL NOTICE
+
+FastVisionAI source code does not inherit the license of a model artifact.
+Official pretrained InsightFace weights are restricted to non-commercial
+research use. Before commercializing FastVisionAI, replace those weights with
+a commercially licensed model or obtain the corresponding license from the
+model owner. Model files are not downloaded automatically or committed to Git.

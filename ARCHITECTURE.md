@@ -91,6 +91,15 @@ Detection-to-landmark cardinality is validated before alignment. Low-quality
 geometry may still yield an aligned crop; malformed or degenerate geometry is
 represented as a typed rejected result.
 
+Face embedding is a post-alignment biometric transformation. The functional
+`FaceEmbeddingPlugin` consumes `AlignedFace` values directly and therefore is
+not an `InferenceBackend`, is not discovered by `PluginManager`, and does not
+run in the PreparedFrame Scheduler. It uses a dedicated `ModelManager` in the
+end-to-end validator, explicit color/normalization/layout preprocessing and a
+lazy OpenCV-DNN ONNX loader. Its only output is a typed, finite, L2-normalized,
+read-only vector with provenance; comparison and identity policy remain out of
+scope.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,
