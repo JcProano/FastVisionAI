@@ -82,6 +82,15 @@ normalized landmarks per detection in namespaced result attachments. The
 landmarks are metadata only; no recognition or biometric processing is part of
 the plugin.
 
+Face alignment is a downstream, model-free component and does not alter
+inference contracts. `FaceAligner` consumes the detector result and its five
+landmark groups in the fixed order left eye, right eye, nose, left mouth corner
+and right mouth corner. Versioned template `fva-5pt-112-v1` deterministically
+produces 112 x 112 crops, forward/inverse transforms and quality measurements.
+Detection-to-landmark cardinality is validated before alignment. Low-quality
+geometry may still yield an aligned crop; malformed or degenerate geometry is
+represented as a typed rejected result.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

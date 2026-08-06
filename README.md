@@ -79,3 +79,16 @@ The separate live USB runner is available as
 `python -m src.validation.live_face_detection`; do not run it until the model
 artifact and a camera are available. It enables only the face plugin and leaves
 the person detector untouched.
+
+## Static face alignment
+
+Run detection and deterministic five-point alignment without a camera:
+
+```bash
+venv/bin/python -m src.validation.static_face_alignment --input bus.jpg --output-dir outputs/face_alignment
+```
+
+The fixed `fva-5pt-112-v1` template expects, in order: left eye, right eye,
+nose, left mouth corner and right mouth corner. Outputs are 112 x 112 pixels.
+Low-quality but geometrically valid faces remain aligned and are labelled
+`low_quality`; this phase creates no embeddings or identity data.
