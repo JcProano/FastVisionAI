@@ -26,6 +26,7 @@ models/**/*.pt
 models/**/*.onnx
 models/**/*.engine
 models/**/*.trt
+outputs/
 
 # Imágenes locales para validación
 bus.jpg

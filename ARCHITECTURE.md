@@ -75,6 +75,13 @@ The first real-model adapter is `PersonDetectorPlugin`. It uses a logical model
 alias, normalized boxes and a lazy `ModelLoader`; weights are never downloaded
 automatically. Device `auto` is resolved by `ModelRuntime`.
 
+`FaceDetectorPlugin` is an independent OpenCV YuNet backend. Its ONNX artifact
+is resolved through `ModelManager`, loaded lazily and hashed with SHA-256. It
+emits normalized face-only boxes for multiple faces and preserves five
+normalized landmarks per detection in namespaced result attachments. The
+landmarks are metadata only; no recognition or biometric processing is part of
+the plugin.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

@@ -59,6 +59,18 @@
             "allowed_classes": [0],
             "device": "auto"
           }
+        },
+        {
+          "id": "face_detector",
+          "enabled": false,
+          "priority": 10,
+          "settings": {
+            "confidence": 0.6,
+            "nms_threshold": 0.3,
+            "top_k": 5000,
+            "model_alias": "face_detector_default",
+            "model_path": "models/face/face_detection_yunet_2026may.onnx"
+          }
         }
       ]
     },

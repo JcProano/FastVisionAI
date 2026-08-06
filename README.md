@@ -60,3 +60,22 @@ venv/bin/python -m src.validation.live_person_detection --source 0 --max-duratio
 
 Use `--no-display`, `--max-frames`, `--result-max-age`, resolution, confidence,
 image-size and inference-interval options for bounded or headless validation.
+
+## Static face detection validation
+
+`FaceDetectorPlugin` uses OpenCV YuNet and is disabled by default. Once the
+configured ONNX artifact is available locally, validate one image without
+opening a camera:
+
+```bash
+venv/bin/python -m src.validation.static_face_detection --input bus.jpg --output outputs/face_validation/bus_faces.jpg
+```
+
+The plugin returns normalized face-only boxes and retains YuNet's five
+normalized landmarks per face in `InferenceResult.attachments`. It does not
+perform recognition, embeddings, identity comparison, iris or liveness work.
+
+The separate live USB runner is available as
+`python -m src.validation.live_face_detection`; do not run it until the model
+artifact and a camera are available. It enables only the face plugin and leaves
+the person detector untouched.
