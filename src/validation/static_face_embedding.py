@@ -9,6 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 from src.camera.frame import Frame
 from src.core.config_manager import PROJECT_ROOT, load_config
@@ -72,6 +73,23 @@ def run(input_path: Path) -> dict[str, object]:
     embedding_plugin = FaceEmbeddingPlugin(embedding_config.settings, embedding_models)
     try:
         embeddings = embedding_plugin.embed(aligned_faces)
+        repeated = embedding_plugin.embed((aligned_faces[0],)) if aligned_faces else ()
+        repeat_cosine = (
+            _cosine_similarity(embeddings[0].embedding, repeated[0].embedding)
+            if embeddings and repeated
+            else None
+        )
+        repeat_max_delta = (
+            float(np.max(np.abs(embeddings[0].embedding - repeated[0].embedding)))
+            if embeddings and repeated
+            else None
+        )
+        pair_cosine = (
+            _cosine_similarity(embeddings[0].embedding, embeddings[1].embedding)
+            if len(embeddings) >= 2
+            else None
+        )
+        model_metrics = embedding_models.metrics()
         report = {
             "run_id": "static-face-embedding",
             "faces_detected": len(detection_result.detections),
@@ -79,9 +97,16 @@ def run(input_path: Path) -> dict[str, object]:
             "embeddings": [
                 {
                     "face_index": item.face_index,
-                    "dimension": item.dimension,
-                    "l2_norm": item.l2_norm,
+                    "run_id": item.run_id,
                     "alignment_quality": item.alignment_quality.value,
+                    "dimension": item.dimension,
+                    "dtype": str(item.embedding.dtype),
+                    "l2_norm": item.l2_norm,
+                    "pre_normalization_l2_norm": (
+                        embedding_plugin.diagnostic_pre_normalization_norm(
+                            item.run_id, item.face_index
+                        )
+                    ),
                     "inference_time_ms": item.inference_time_ms,
                     "backend": item.backend,
                     "model": item.model,
@@ -90,6 +115,29 @@ def run(input_path: Path) -> dict[str, object]:
                 }
                 for item in embeddings
             ],
+            "repeatability": {
+                "face_index": embeddings[0].face_index if embeddings else None,
+                "cosine_similarity": repeat_cosine,
+                "maximum_absolute_delta": repeat_max_delta,
+                "deterministic_within_tolerance": (
+                    bool(np.allclose(embeddings[0].embedding, repeated[0].embedding,
+                                     rtol=1e-5, atol=1e-6))
+                    if embeddings and repeated else None
+                ),
+            },
+            "between_detected_faces": {
+                "face_indices": (
+                    [embeddings[0].face_index, embeddings[1].face_index]
+                    if len(embeddings) >= 2 else []
+                ),
+                "cosine_similarity": pair_cosine,
+                "identity_decision": None,
+            },
+            "model_manager": {
+                "load_attempts": model_metrics.load_attempts,
+                "cache_hits": model_metrics.cache_hits,
+                "loaded_models_before_release": model_metrics.loaded_models,
+            },
             "metrics": asdict(embedding_plugin.metrics()),
         }
     finally:
@@ -100,6 +148,13 @@ def run(input_path: Path) -> dict[str, object]:
         embedding_models.resolve_alias(embedding_plugin.alias)
     ).value
     return report
+
+
+def _cosine_similarity(left: np.ndarray, right: np.ndarray) -> float:
+    denominator = float(np.linalg.norm(left) * np.linalg.norm(right))
+    if denominator <= 0:
+        raise ValueError("cosine similarity requires non-zero vectors")
+    return float(np.dot(left, right) / denominator)
 
 
 def build_parser() -> argparse.ArgumentParser:

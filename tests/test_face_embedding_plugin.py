@@ -107,6 +107,10 @@ class FaceEmbeddingPluginTests(unittest.TestCase):
         self.assertEqual(first.dimension, 4)
         self.assertAlmostEqual(first.l2_norm, 1.0, places=6)
         self.assertFalse(first.embedding.flags.writeable)
+        self.assertAlmostEqual(
+            plugin.diagnostic_pre_normalization_norm(first.run_id, first.face_index),
+            np.linalg.norm(np.array([1, 2, 3, 4], dtype=np.float32)),
+        )
         with self.assertRaises(ValueError):
             first.embedding[0] = 0
 

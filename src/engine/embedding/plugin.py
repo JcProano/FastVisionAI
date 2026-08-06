@@ -84,6 +84,7 @@ class FaceEmbeddingPlugin:
         self._total_ms = 0.0
         self._model_load_ms = 0.0
         self._last_pre_normalization_norm: float | None = None
+        self._diagnostic_norms: dict[tuple[str, int], float] = {}
 
     def embed(self, aligned_faces: Sequence[AlignedFace]) -> tuple[FaceEmbedding, ...]:
         started = time.monotonic()
@@ -138,6 +139,12 @@ class FaceEmbeddingPlugin:
     def release(self) -> None:
         self.manager.unload(self.manager.resolve_alias(self.alias))
 
+    def diagnostic_pre_normalization_norm(self, run_id: str, face_index: int) -> float | None:
+        """Return a diagnostic norm; it is never used as identity information."""
+
+        with self._lock:
+            return self._diagnostic_norms.get((run_id, face_index))
+
     def _embed_one(self, face: AlignedFace, loaded: LoadedArcFaceModel) -> FaceEmbedding:
         if face.image is None:
             raise InvalidAlignedFaceError(f"face {face.face_index} has no aligned image")
@@ -165,6 +172,8 @@ class FaceEmbeddingPlugin:
         inference_ms = (time.monotonic() - inference_started) * 1_000
         # raw_norm is intentionally diagnostic-only and never exposed as identity data.
         self._last_pre_normalization_norm = raw_norm
+        with self._lock:
+            self._diagnostic_norms[(face.run_id, face.face_index)] = raw_norm
         LOGGER.debug(
             "Pre-normalization embedding norm; run_id=%s face_index=%d norm=%.6f",
             face.run_id,
