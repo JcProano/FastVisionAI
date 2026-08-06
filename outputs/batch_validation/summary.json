@@ -1,0 +1,224 @@
+{
+  "images_processed": 6,
+  "model_load_ms": 8387.875,
+  "batch_total_ms": 7990.529,
+  "average_latency_ms": 1321.012,
+  "minimum_latency_ms": 368.647,
+  "maximum_latency_ms": 4514.488,
+  "effective_fps": 0.751,
+  "model_loads": 1,
+  "model_cache_hits": 6,
+  "runtime_state": "released",
+  "model_state_after_release": "registered",
+  "device": "cpu",
+  "images": [
+    {
+      "name": "bus_original",
+      "resolution": [
+        810,
+        1080
+      ],
+      "inference_ms": 4514.318,
+      "total_latency_ms": 4514.488,
+      "people_detected": 3,
+      "run_id": "batch-01-bus_original",
+      "detections": [
+        {
+          "confidence": 0.865691,
+          "normalized_box": [
+            0.059939,
+            0.36903,
+            0.302896,
+            0.835836
+          ]
+        },
+        {
+          "confidence": 0.852836,
+          "normalized_box": [
+            0.82651,
+            0.363135,
+            0.999655,
+            0.81207
+          ]
+        },
+        {
+          "confidence": 0.825225,
+          "normalized_box": [
+            0.273478,
+            0.375739,
+            0.42589,
+            0.794015
+          ]
+        }
+      ],
+      "output": "outputs/batch_validation/01_bus_original.jpg"
+    },
+    {
+      "name": "bus_640x480",
+      "resolution": [
+        640,
+        480
+      ],
+      "inference_ms": 830.715,
+      "total_latency_ms": 830.925,
+      "people_detected": 4,
+      "run_id": "batch-02-bus_640x480",
+      "detections": [
+        {
+          "confidence": 0.884131,
+          "normalized_box": [
+            0.82719,
+            0.358187,
+            0.999399,
+            0.809854
+          ]
+        },
+        {
+          "confidence": 0.872634,
+          "normalized_box": [
+            0.061636,
+            0.360633,
+            0.302786,
+            0.840166
+          ]
+        },
+        {
+          "confidence": 0.860165,
+          "normalized_box": [
+            0.276687,
+            0.374228,
+            0.424323,
+            0.793149
+          ]
+        },
+        {
+          "confidence": 0.62254,
+          "normalized_box": [
+            0.0,
+            0.510569,
+            0.094419,
+            0.806041
+          ]
+        }
+      ],
+      "output": "outputs/batch_validation/02_bus_640x480.jpg"
+    },
+    {
+      "name": "bus_1280x720",
+      "resolution": [
+        1280,
+        720
+      ],
+      "inference_ms": 806.245,
+      "total_latency_ms": 806.372,
+      "people_detected": 4,
+      "run_id": "batch-03-bus_1280x720",
+      "detections": [
+        {
+          "confidence": 0.902486,
+          "normalized_box": [
+            0.828581,
+            0.356179,
+            0.999662,
+            0.80498
+          ]
+        },
+        {
+          "confidence": 0.867123,
+          "normalized_box": [
+            0.064203,
+            0.338244,
+            0.299038,
+            0.840314
+          ]
+        },
+        {
+          "confidence": 0.761756,
+          "normalized_box": [
+            0.276292,
+            0.371079,
+            0.426399,
+            0.792548
+          ]
+        },
+        {
+          "confidence": 0.67469,
+          "normalized_box": [
+            5.1e-05,
+            0.511286,
+            0.097655,
+            0.806911
+          ]
+        }
+      ],
+      "output": "outputs/batch_validation/03_bus_1280x720.jpg"
+    },
+    {
+      "name": "bus_left_crop",
+      "resolution": [
+        421,
+        691
+      ],
+      "inference_ms": 676.931,
+      "total_latency_ms": 677.069,
+      "people_detected": 3,
+      "run_id": "batch-04-bus_left_crop",
+      "detections": [
+        {
+          "confidence": 0.862298,
+          "normalized_box": [
+            0.523646,
+            0.151482,
+            0.816962,
+            0.812911
+          ]
+        },
+        {
+          "confidence": 0.779261,
+          "normalized_box": [
+            0.126423,
+            0.138873,
+            0.554175,
+            0.871321
+          ]
+        },
+        {
+          "confidence": 0.668691,
+          "normalized_box": [
+            0.002529,
+            0.365098,
+            0.185458,
+            0.828591
+          ]
+        }
+      ],
+      "output": "outputs/batch_validation/04_bus_left_crop.jpg"
+    },
+    {
+      "name": "facade_no_people",
+      "resolution": [
+        810,
+        324
+      ],
+      "inference_ms": 368.507,
+      "total_latency_ms": 368.647,
+      "people_detected": 0,
+      "run_id": "batch-05-facade_no_people",
+      "detections": [],
+      "output": "outputs/batch_validation/05_facade_no_people.jpg"
+    },
+    {
+      "name": "blank_no_people",
+      "resolution": [
+        320,
+        240
+      ],
+      "inference_ms": 728.432,
+      "total_latency_ms": 728.573,
+      "people_detected": 0,
+      "run_id": "batch-06-blank_no_people",
+      "detections": [],
+      "output": "outputs/batch_validation/06_blank_no_people.jpg"
+    }
+  ]
+}
