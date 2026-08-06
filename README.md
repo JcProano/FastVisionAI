@@ -128,3 +128,15 @@ venv/bin/python -m src.validation.static_face_gallery --input bus.jpg --top-k 2
 
 Optional JSON+NPZ persistence is explicit, disabled by default and intended
 only for controlled development. See [docs/BIOMETRIC_DATA.md](docs/BIOMETRIC_DATA.md).
+
+## Local biometric enrollment
+
+`EnrollmentService` validates a complete sequence before transactionally
+registering a temporary identity. Pairwise minimum consistency and maximum
+near-duplicate limits are optional (`None` disables either check); no biometric
+limits are assumed by default. The static validator uses explicit development
+values and synthetic photometric variants only:
+
+```bash
+venv/bin/python -m src.validation.static_face_enrollment --input bus.jpg --templates-per-identity 3
+```

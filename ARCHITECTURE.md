@@ -109,6 +109,13 @@ or identity-level aggregation is performed. Optional JSON+NPZ development
 persistence is explicit, integrity-checked and transactionally imported, but
 is neither encrypted nor production-ready.
 
+`EnrollmentService` is a transactional layer above `FaceGallery`. It validates
+quality, provenance, exact duplicates and optional pairwise bounds before any
+write. `min_pairwise_similarity` expresses minimum within-identity consistency;
+`max_pairwise_similarity` limits near-identical samples that add no diversity.
+Both default to `None`. Inputs beyond the configured maximum are selected by
+stable input order, and rollback is verified against a logical gallery snapshot.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

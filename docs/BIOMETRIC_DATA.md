@@ -18,3 +18,7 @@ jurisdiction before collecting real identities.
 Official InsightFace weights used during current validation are restricted to
 non-commercial research and development. Commercial deployment requires a
 model with appropriate commercial rights or a corresponding license.
+
+Static enrollment creates deterministic brightness variants solely to exercise
+transaction and policy code. These variants are not independent biometric
+captures and must never be used to calibrate production thresholds.
