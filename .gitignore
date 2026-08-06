@@ -9,3 +9,9 @@ __pycache__/
 logs/*
 !logs/.gitkeep
 runs/
+
+# Modelos de IA
+models/**/*.pt
+models/**/*.onnx
+models/**/*.engine
+models/**/*.trt
