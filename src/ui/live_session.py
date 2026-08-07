@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from src.engine.capture_quality import CapturePose, GuidedCapturePlan
+from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
 from src.ui.contracts import (
     EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
     RegistrationFormData, RuntimeStatusDTO, UIErrorCode, UIState, VisualFrameDTO,
@@ -41,6 +41,7 @@ class LiveFaceSession:
         self, adapter: UIRuntimeAdapter, controller: LocalFaceUIController, *,
         event_queue_size: int = 16, command_queue_size: int = 8,
         close_timeout_seconds: float = 5.0,
+        mirrored_source: bool = False,
         persistence: PersistenceCallback | None = None,
         manifest_path: Path | None = None, archive_path: Path | None = None,
     ) -> None:
@@ -52,6 +53,7 @@ class LiveFaceSession:
         self.event_queue: queue.Queue[UIEvent] = queue.Queue(maxsize=event_queue_size)
         self.command_queue: queue.Queue[SessionCommand] = queue.Queue(maxsize=command_queue_size)
         self.close_timeout_seconds = close_timeout_seconds
+        self.mirrored_source = mirrored_source
         self._persistence = persistence
         self._manifest_path = manifest_path
         self._archive_path = archive_path
@@ -175,19 +177,24 @@ class LiveFaceSession:
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "Ya existe un registro guiado activo.", True)
                     continue
-                if not self._last_single_valid:
-                    self._error(UIErrorCode.ENROLLMENT_ERROR,
-                                "El registro requiere exactamente un rostro visualmente válido.",
-                                True)
-                    continue
                 try:
+                    plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     progress = self.controller.begin_enrollment(command.form)
-                    self._plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     self.adapter.new_evaluator()
+                    self._plan = plan
                     self._event(progress)
                 except Exception:
+                    LOGGER.exception(
+                        "Enrollment start failed before biometric sample collection; "
+                        "target_samples=%d consent_confirmed=%s",
+                        self.controller.enrollment.target_samples,
+                        command.form.consent_confirmed,
+                    )
+                    if self.controller.enrollment.active:
+                        self.controller.cancel_enrollment()
+                    self._plan = None
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
-                                "No se pudo iniciar el registro guiado.", True)
+                                "No se pudo iniciar el registro guiado.", False)
 
     def _monitoring_step(self, face_count: int, guided) -> None:
         if face_count == 0:
@@ -225,12 +232,15 @@ class LiveFaceSession:
             plan.accept()
             progress = self.controller.add_enrollment_sample(
                 guided.embedding, score,
-                "Registro completo" if plan.completed else plan.current.instruction,
+                "Registro completo" if plan.completed else
+                operator_instruction(plan.current, self.mirrored_source),
             )
             self._event(progress)
         else:
             self._event(EnrollmentProgressDTO(
-                UIState.ENROLLING, plan.current.instruction, plan.accepted_count,
+                UIState.ENROLLING,
+                operator_instruction(plan.current, self.mirrored_source),
+                plan.accepted_count,
                 plan.target_samples, tuple(reason.value for reason in guided.reasons),
                 None if score is None else score.total_score,
                 None if score is None else score.quality_band.value, True,
@@ -247,8 +257,11 @@ class LiveFaceSession:
                 self._error(UIErrorCode.PERSISTENCE_ERROR,
                             "Registro en memoria correcto; la persistencia local falló.", True)
         except Exception:
+            LOGGER.exception(
+                "Enrollment finalization failed; temporary biometric payload omitted from log"
+            )
             self._error(UIErrorCode.ENROLLMENT_ERROR,
-                        "El registro no pudo completarse.", True)
+                        "El registro no pudo completarse.", False)
         finally:
             self._plan = None
             self.adapter.new_evaluator()
@@ -282,3 +295,19 @@ def _drain(target: queue.Queue) -> tuple:
             items.append(target.get_nowait())
         except queue.Empty:
             return tuple(items)
+
+
+def operator_instruction(step: CapturePlanStep, mirrored_source: bool) -> str:
+    """Translate an image-coordinate pose into the operator's mirrored perspective.
+
+    CapturePose remains expressed in image coordinates. Only the human-facing
+    instruction is exchanged for LEFT/RIGHT when the preview source is mirrored.
+    FRONTAL, UNKNOWN and the logical order of GuidedCapturePlan are unchanged.
+    """
+    if not mirrored_source:
+        return step.instruction
+    if step.requested_pose is CapturePose.SLIGHT_LEFT:
+        return "Gire ligeramente a la derecha"
+    if step.requested_pose is CapturePose.SLIGHT_RIGHT:
+        return "Gire ligeramente a la izquierda"
+    return step.instruction

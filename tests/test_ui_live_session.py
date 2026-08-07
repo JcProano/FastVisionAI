@@ -3,18 +3,21 @@ from __future__ import annotations
 import dataclasses
 import time
 import unittest
+from dataclasses import replace
 
 import numpy as np
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
+from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan, GuidedCaptureState
 from src.engine.gallery import FaceGallery, FaceIdentity, FaceMatcher, MatchPolicy
 from src.ui.contracts import (
-    EnrollmentResultDTO, ErrorDTO, MonitoringDTO, UIErrorCode, UIState, VisualFrameDTO,
+    EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
+    UIErrorCode, UIState, VisualFrameDTO,
 )
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 from src.ui.form_validation import validate_registration_form
-from src.ui.live_session import LiveFaceSession
+from src.ui.live_session import LiveFaceSession, operator_instruction
 from src.ui.mock_runtime import MockUIRuntimeAdapter
 from src.ui.recognition_session import ExperimentalRecognitionSession
 
@@ -56,6 +59,146 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_operator_pose_instructions_respect_mirrored_perspective(self):
+        left = CapturePlanStep("left", CapturePose.SLIGHT_LEFT,
+                               "Gire ligeramente a la izquierda")
+        right = CapturePlanStep("right", CapturePose.SLIGHT_RIGHT,
+                                "Gire ligeramente a la derecha")
+        frontal = CapturePlanStep("front", CapturePose.FRONTAL, "Mire al frente")
+        self.assertEqual(operator_instruction(left, False), "Gire ligeramente a la izquierda")
+        self.assertEqual(operator_instruction(right, False), "Gire ligeramente a la derecha")
+        self.assertEqual(operator_instruction(left, True), "Gire ligeramente a la derecha")
+        self.assertEqual(operator_instruction(right, True), "Gire ligeramente a la izquierda")
+        self.assertEqual(operator_instruction(frontal, True), "Mire al frente")
+
+    def test_mirrored_presentation_preserves_guided_plan_logical_order(self):
+        plan = GuidedCapturePlan(4)
+        logical = []
+        messages = []
+        while not plan.completed:
+            logical.append(plan.current.requested_pose)
+            messages.append(operator_instruction(plan.current, True))
+            plan.accept()
+        self.assertEqual(logical, [
+            CapturePose.FRONTAL, CapturePose.SLIGHT_LEFT,
+            CapturePose.SLIGHT_RIGHT, CapturePose.FRONTAL,
+        ])
+        self.assertEqual(messages, [
+            "Mire al frente", "Gire ligeramente a la derecha",
+            "Gire ligeramente a la izquierda", "Mire al frente con expresión neutra",
+        ])
+
+    def test_enrollment_progress_message_uses_operator_perspective(self):
+        _, ui = controller(target=3)
+        adapter = MockUIRuntimeAdapter(delay=.02)
+        session = LiveFaceSession(adapter, ui, event_queue_size=32, mirrored_source=True)
+        session.start(); session.start_enrollment(form())
+        seen = []
+
+        def has_mirrored_left_step():
+            seen.extend(session.drain_events())
+            return any(isinstance(item, EnrollmentProgressDTO) and
+                       item.accepted_samples == 1 and
+                       item.instruction == "Gire ligeramente a la derecha"
+                       for item in seen)
+
+        self.assertTrue(wait_until(has_mirrored_left_step))
+        session.cancel_enrollment(); session.close()
+
+    def test_enrollment_starts_immediately_before_any_valid_face(self):
+        class NoFaceThenValidAdapter(MockUIRuntimeAdapter):
+            def process(self, requested_pose):
+                step = super().process(requested_pose)
+                if self.sequence <= 2:
+                    rejected = replace(
+                        step.guided,
+                        primary_state=GuidedCaptureState.NO_FACE,
+                        reasons=(GuidedCaptureState.NO_FACE,),
+                        accepted=False,
+                        visual_quality_passed=False,
+                        temporal_check_passed=False,
+                        diversity_check_passed=False,
+                        face_index=None,
+                        embedding=None,
+                    )
+                    return replace(step, face_count=0, guided=rejected)
+                return step
+
+        gallery, ui = controller(target=3)
+        adapter = NoFaceThenValidAdapter(delay=.05)
+        session = LiveFaceSession(adapter, ui, event_queue_size=32)
+        session.start()
+        self.assertTrue(session.start_enrollment(form()))
+        seen = []
+
+        def started():
+            seen.extend(session.drain_events())
+            return any(isinstance(item, EnrollmentProgressDTO) and
+                       item.accepted_samples == 0 and item.target_samples == 3 and
+                       item.instruction == "Mire al frente" for item in seen)
+
+        self.assertTrue(wait_until(started))
+        self.assertTrue(wait_until(lambda: adapter.sequence >= 2))
+        seen.extend(session.drain_events())
+        self.assertTrue(any(
+            isinstance(item, EnrollmentProgressDTO)
+            and "no_face" in item.current_reasons
+            and item.accepted_samples == 0
+            for item in seen
+        ))
+        self.assertEqual(ui.state, UIState.ENROLLING)
+        self.assertTrue(ui.enrollment.active)
+        session.cancel_enrollment()
+        self.assertTrue(wait_until(lambda: not ui.enrollment.active))
+        session.close()
+        self.assertEqual(len(gallery), 0)
+
+    def test_multiple_and_invalid_faces_remain_enrolling_then_valid_face_advances(self):
+        class RecoveringAdapter(MockUIRuntimeAdapter):
+            def open(self):
+                time.sleep(.05)
+                return super().open()
+
+            def process(self, requested_pose):
+                step = super().process(requested_pose)
+                if self.sequence == 2:
+                    rejected = replace(
+                        step.guided,
+                        primary_state=GuidedCaptureState.BLURRY,
+                        reasons=(GuidedCaptureState.BLURRY,),
+                        accepted=False,
+                        visual_quality_passed=False,
+                        temporal_check_passed=False,
+                        diversity_check_passed=False,
+                        embedding=None,
+                    )
+                    return replace(step, guided=rejected)
+                return step
+
+        gallery, ui = controller(target=5)
+        adapter = RecoveringAdapter(delay=.02, multiple_at={1})
+        session = LiveFaceSession(adapter, ui, event_queue_size=64)
+        session.start(); session.start_enrollment(form())
+        seen = []
+
+        def progressed_after_rejections():
+            seen.extend(session.drain_events())
+            rejected = [item for item in seen if isinstance(item, EnrollmentProgressDTO)
+                        and item.accepted_samples == 0 and item.current_reasons]
+            progressed = any(isinstance(item, EnrollmentProgressDTO) and
+                             item.accepted_samples >= 1 for item in seen)
+            return len(rejected) >= 2 and progressed
+
+        self.assertTrue(wait_until(progressed_after_rejections, 1.2))
+        rejected_reasons = {reason for item in seen if isinstance(item, EnrollmentProgressDTO)
+                            for reason in item.current_reasons}
+        self.assertIn("multiple_faces", rejected_reasons)
+        self.assertIn("blurry", rejected_reasons)
+        self.assertEqual(ui.state, UIState.ENROLLING)
+        self.assertTrue(ui.enrollment.active)
+        session.cancel_enrollment(); self.assertTrue(wait_until(lambda: not ui.enrollment.active))
+        session.close(); self.assertEqual(len(gallery), 0)
+
     def test_monitoring_empty_gallery_visual_backpressure_and_safe_dtos(self):
         gallery, ui = controller()
         adapter = MockUIRuntimeAdapter(delay=.001)

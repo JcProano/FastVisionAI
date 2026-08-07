@@ -88,6 +88,7 @@ def main() -> int:
         event_queue_size=int(settings["queues"]["event_size"]),
         command_queue_size=int(settings["queues"]["command_size"]),
         close_timeout_seconds=float(settings["worker"]["close_timeout_seconds"]),
+        mirrored_source=bool(settings["guided_capture"].get("mirrored_source", False)),
     )
     root = tk.Tk()
     def register(form):
