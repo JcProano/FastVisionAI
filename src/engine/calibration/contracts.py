@@ -53,6 +53,10 @@ class CalibrationSampleMetadata:
     model: str
     version: str
     weights_sha256: str
+    face_quality_score: float | None = None
+    face_quality_band: str | None = None
+    quality_profile_name: str | None = None
+    quality_profile_version: str | None = None
 
     def __post_init__(self) -> None:
         if not all((self.session_id, self.temporary_identity_id, self.source_identifier,
@@ -66,6 +70,10 @@ class CalibrationSampleMetadata:
             raise ValueError("resolution must be positive")
         if self.alignment_quality is AlignmentQuality.REJECTED:
             raise ValueError("rejected samples cannot be calibrated")
+        if self.face_quality_score is not None and (
+            not math.isfinite(self.face_quality_score) or not 0 <= self.face_quality_score <= 100
+        ):
+            raise ValueError("face_quality_score must be finite and within 0..100")
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,4 +145,3 @@ class CalibrationReport:
     generated_at: datetime
     run_id: str
     synthetic_validation: bool
-

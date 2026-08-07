@@ -1,0 +1,23 @@
+{
+  "profile_name": "guided_capture_development",
+  "profile_version": "1.0.0",
+  "limits": {
+    "min_detection_confidence": 0.75,
+    "min_relative_face_size": 0.08,
+    "min_interocular_distance": 0.10,
+    "min_visible_box_ratio": 0.95,
+    "max_center_offset_x": 0.18,
+    "max_center_offset_y": 0.18,
+    "min_blur_variance": 80.0,
+    "min_mean_illumination": 55.0,
+    "max_mean_illumination": 205.0,
+    "min_contrast": 25.0,
+    "frontal_max_yaw_ratio": 0.10,
+    "slight_turn_min_yaw_ratio": 0.14,
+    "slight_turn_max_yaw_ratio": 0.38,
+    "pose_ambiguity_tolerance": 0.12,
+    "min_sample_interval_seconds": 1.0,
+    "max_near_duplicate_similarity": 0.98,
+    "mirrored_source": false
+  }
+}

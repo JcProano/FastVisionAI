@@ -43,3 +43,15 @@ A score is accepted when `similarity >= threshold` and rejected when
 `similarity < threshold`. FAR is accepted impostor pairs divided by evaluated
 impostor pairs; FRR is rejected genuine pairs divided by genuine pairs. EER is a
 sample-dependent estimate, never a production threshold recommendation.
+
+Guided capture persists nothing by default. Enabling diagnostic aligned-face
+images requires both `--save-data` and explicit consent. Rejected frames, rejected
+aligned faces and embeddings rejected as near duplicates are never persisted.
+Logs and final summaries contain states, aggregate quality metrics and safe sample
+indices only; they must not serialize `GuidedCaptureResult.embedding`.
+
+Face quality scores are diagnostic metadata, not identity evidence. They may be
+stored with accepted calibration samples to support ordering and analysis, but
+must not be interpreted as recognition confidence or access authorization. Score
+reports include components, bands and profile provenance only; no image,
+landmark, embedding or embedding fragment is included.

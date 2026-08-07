@@ -63,6 +63,9 @@ class AcceptedEnrollmentTemplate:
     face_index: int
     quality: AlignmentQuality
     gallery_template_index: int | None
+    face_quality_score: float | None = None
+    quality_profile_name: str | None = None
+    quality_profile_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

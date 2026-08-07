@@ -165,3 +165,39 @@ venv/bin/python -m src.validation.analyze_face_calibration \
 Acceptance is `similarity >= threshold`; rejection is `similarity < threshold`.
 FAR, FRR and approximate EER remain diagnostics and do not establish a production
 threshold.
+
+## Guided face capture
+
+Guided capture evaluates face count, alignment, geometry, centering, illumination,
+contrast, blur, requested pose, capture interval and sample diversity before a
+sample is accepted. Its thresholds come from the explicit development profile
+`config/guided_capture.dev.json`; they are not universal biometric limits.
+
+```bash
+venv/bin/python -m src.validation.guided_face_capture \
+  --temporary-id temporary_guided_001 --source 0 --target-samples 9 \
+  --consent-confirmed
+```
+
+Nothing is persisted by default. `--save-data` requires consent, and
+`--save-images` additionally requires `--save-data`; only accepted aligned faces
+may be stored. Neutral expression is an operator instruction, not an inferred
+biometric attribute.
+
+### Continuous face quality score
+
+Guided capture also computes an informational `0..100` score using
+`config/face_quality.dev.json`. It never changes acceptance and is not an identity
+threshold. Detection, size, interocular distance, visibility, sharpness and
+contrast use a clamped linear function:
+
+```text
+clamp((value - minimum) / (full_score - minimum), 0, 1)
+```
+
+Centering decreases linearly with Euclidean offset. Illumination scores `1` in
+the configured ideal interval and falls linearly to `0` at its dark and bright
+absolute limits. Pose scores are explicit constants. Normalized components are
+multiplied by weights whose sum must equal `1`, then configured critical-state
+penalties are applied. Structural failures produce `INVALID` and zero. Every
+component and final result is clamped to its documented range.

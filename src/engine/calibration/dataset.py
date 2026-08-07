@@ -85,6 +85,10 @@ class CalibrationDatasetStore:
                     "alignment_quality": meta.alignment_quality.value,
                     "model": meta.model, "version": meta.version,
                     "weights_sha256": meta.weights_sha256,
+                    "face_quality_score": meta.face_quality_score,
+                    "face_quality_band": meta.face_quality_band,
+                    "quality_profile_name": meta.quality_profile_name,
+                    "quality_profile_version": meta.quality_profile_version,
                 })
         if len(groups) > self.limits.max_identities or len(records) > self.limits.max_samples:
             raise CalibrationDatasetError("calibration dataset exceeds configured limits")
@@ -169,6 +173,16 @@ class CalibrationDatasetStore:
                         alignment_quality=AlignmentQuality(str(raw["alignment_quality"])),
                         model=str(raw["model"]), version=str(raw["version"]),
                         weights_sha256=str(raw["weights_sha256"]),
+                        face_quality_score=(None if raw.get("face_quality_score") is None
+                                            else float(raw["face_quality_score"])),
+                        face_quality_band=(None if raw.get("face_quality_band") is None
+                                           else str(raw["face_quality_band"])),
+                        quality_profile_name=(None if raw.get("quality_profile_name") is None
+                                              else str(raw["quality_profile_name"])),
+                        quality_profile_version=(
+                            None if raw.get("quality_profile_version") is None
+                            else str(raw["quality_profile_version"])
+                        ),
                     )
                     staged.setdefault(identity, []).append(CalibrationSample(vector, metadata))
                 if keys != set(archive.files):

@@ -125,6 +125,24 @@ source, resolution, quality and model provenance. Optional JSON+NPZ persistence
 is disabled by default, integrity checked and loaded without pickle. Operator
 capture remains isolated under `src/validation` and does not alter Camera Service.
 
+`FaceCaptureQualityEvaluator` is an independent, stateful gate between alignment
+and embedding during guided validation. Its fixed order is face count, alignment,
+confidence, geometry, centering, image quality, requested pose, time, embedding
+and diversity. It calls embedding only after visual and temporal gates pass and
+never retains rejected images or rejected embeddings. Pose combines eye, nose and
+mouth geometry and returns `UNKNOWN` for disagreement. `GuidedCapturePlan` advances
+only after acceptance; expression prompts remain operator guidance rather than
+automatic analysis.
+
+`FaceQualityScorer` is a deterministic, stateless informational layer over
+`GuidedQualityMetrics`. It does not participate in `GuidedCapturePolicy` and
+cannot alter acceptance. All component normalization, weights, band boundaries,
+critical penalties and structural invalid states are loaded from a versioned
+profile. Higher-is-better metrics use clamped linear interpolation; centering
+uses inverse clamped Euclidean offset; illumination uses a piecewise-linear ideal
+band; pose uses explicit constants. The weighted sum is multiplied by penalties
+and clamped to `0..100`. Structural failures yield `QualityBand.INVALID`.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

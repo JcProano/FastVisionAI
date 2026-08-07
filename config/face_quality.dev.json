@@ -1,0 +1,41 @@
+{
+  "profile_name": "face_quality_development",
+  "profile_version": "1.0.0",
+  "weights": {
+    "detection": 0.12,
+    "size": 0.10,
+    "interocular": 0.10,
+    "visibility": 0.12,
+    "centering": 0.10,
+    "sharpness": 0.16,
+    "illumination": 0.12,
+    "contrast": 0.10,
+    "pose": 0.08
+  },
+  "normalization_limits": {
+    "detection": {"minimum": 0.50, "full_score": 0.95},
+    "size": {"minimum": 0.03, "full_score": 0.20},
+    "interocular": {"minimum": 0.04, "full_score": 0.25},
+    "visibility": {"minimum": 0.70, "full_score": 1.00},
+    "centering": {"ideal_offset": 0.03, "maximum_offset": 0.35},
+    "sharpness": {"minimum": 20.0, "full_score": 250.0},
+    "illumination": {
+      "absolute_minimum": 20.0,
+      "ideal_minimum": 85.0,
+      "ideal_maximum": 175.0,
+      "absolute_maximum": 235.0
+    },
+    "contrast": {"minimum": 8.0, "full_score": 60.0},
+    "pose": {"requested_match": 1.0, "requested_mismatch": 0.25, "unknown": 0.0}
+  },
+  "bands": {"excellent": 85.0, "good": 70.0, "acceptable": 50.0},
+  "critical_penalties": {
+    "low_detection_confidence": 0.65,
+    "partially_visible": 0.60,
+    "blurry": 0.65,
+    "too_dark": 0.70,
+    "too_bright": 0.70,
+    "pose_not_requested": 0.85
+  },
+  "structural_invalid_states": ["no_face", "multiple_faces", "alignment_failed"]
+}
