@@ -25,6 +25,7 @@
   },
   "persistence": {
     "enabled_by_default": false,
+    "load_on_startup": false,
     "directory": "data/ui_validation"
   }
 }

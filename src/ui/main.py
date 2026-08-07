@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
@@ -24,7 +25,59 @@ from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.runtime_adapter import RealUIRuntimeAdapter
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
+from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
 from src.validation.guided_face_capture import load_guided_profile
+
+
+@dataclass(frozen=True, slots=True)
+class GalleryStartupResult:
+    gallery: FaceGallery
+    message: str
+    error: ErrorDTO | None = None
+
+
+def load_startup_gallery(
+    settings: dict[str, object], *, force_load: bool = False,
+    project_root: Path = PROJECT_ROOT,
+) -> GalleryStartupResult:
+    """Optionally import a validated gallery before matcher construction."""
+    persistence_settings = settings["persistence"]
+    if not isinstance(persistence_settings, dict):
+        raise ValueError("persistence configuration must be an object")
+    enabled = force_load or bool(persistence_settings.get("load_on_startup", False))
+    gallery = FaceGallery()
+    if not enabled:
+        return GalleryStartupResult(gallery, "Galería vacía")
+    _, manifest, archive = build_persistence(settings, project_root)
+    manifest_exists = manifest.is_file()
+    archive_exists = archive.is_file()
+    if not manifest_exists and not archive_exists:
+        return GalleryStartupResult(gallery, "Galería vacía")
+    if manifest_exists != archive_exists:
+        return GalleryStartupResult(
+            gallery, "Galería vacía",
+            ErrorDTO(
+                UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR,
+                "La galería persistida está incompleta; se inició una galería vacía.", True,
+            ),
+        )
+    try:
+        GalleryPersistence(enabled=True).import_into(gallery, manifest, archive)
+    except Exception:
+        # Do not expose exception text, hashes, templates or biometric vectors.
+        return GalleryStartupResult(
+            FaceGallery(), "Galería vacía",
+            ErrorDTO(
+                UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR,
+                "La galería persistida no superó la validación; se inició una galería vacía.",
+                True,
+            ),
+        )
+    return GalleryStartupResult(
+        gallery,
+        f"Galería cargada: {len(gallery.list_identities())} identidades, "
+        f"{len(gallery.templates())} templates",
+    )
 
 
 def build_persistence(
@@ -49,10 +102,12 @@ def build_persistence(
     )
 
 
-def build_controller(config_path: Path) -> LocalFaceUIController:
+def build_controller(
+    config_path: Path, gallery: FaceGallery | None = None,
+) -> LocalFaceUIController:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     enrollment_config = config["enrollment"]
-    gallery = FaceGallery()
+    gallery = gallery if gallery is not None else FaceGallery()
     matcher = FaceMatcher(
         top_k=int(config["matcher"]["top_k"]),
         policy=MatchPolicy(automatic_decision_enabled=False, threshold=None),
@@ -82,13 +137,16 @@ def main() -> int:
                         help="run a consented, non-persistent mock enrollment smoke test")
     parser.add_argument("--mock-duration", type=float,
                         help="close a mock UI automatically after this many seconds")
+    parser.add_argument("--load-gallery", action="store_true",
+                        help="load the configured local gallery for this execution")
     args = parser.parse_args()
     if (args.mock_auto_enroll or args.mock_duration is not None) and not args.mock_camera:
         parser.error("mock automation options require --mock-camera")
     if args.mock_duration is not None and args.mock_duration <= 0:
         parser.error("--mock-duration must be positive")
     settings = json.loads(args.config.read_text(encoding="utf-8"))
-    controller = build_controller(args.config)
+    startup = load_startup_gallery(settings, force_load=args.load_gallery)
+    controller = build_controller(args.config, startup.gallery)
     persistence, manifest_path, archive_path = build_persistence(settings)
     try:
         import tkinter as tk
@@ -133,6 +191,9 @@ def main() -> int:
         on_close=close,
     )
     app.show_monitoring(controller.monitoring.empty())
+    app.status.configure(text=startup.message)
+    if startup.error is not None:
+        app.show_error(startup.error)
     session.start()
     app.poll_session(session, int(settings["worker"]["ui_poll_interval_ms"]))
     if args.mock_auto_enroll:
