@@ -14,6 +14,8 @@ from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
+from src.engine.gallery.persistence import GalleryPersistence
+from src.core.config_manager import PROJECT_ROOT
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 from src.ui.live_session import LiveFaceSession
@@ -23,6 +25,28 @@ from src.ui.runtime_adapter import RealUIRuntimeAdapter
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
 from src.validation.guided_face_capture import load_guided_profile
+
+
+def build_persistence(
+    settings: dict[str, object], project_root: Path = PROJECT_ROOT,
+):
+    """Build an explicit post-enrollment export without touching its destination."""
+    persistence_settings = settings["persistence"]
+    if not isinstance(persistence_settings, dict):
+        raise ValueError("persistence configuration must be an object")
+    configured = Path(str(persistence_settings["directory"]))
+    if configured.is_absolute():
+        raise ValueError("persistence directory must be relative to the project root")
+    root = project_root.resolve()
+    destination = (root / configured).resolve()
+    if destination != root and root not in destination.parents:
+        raise ValueError("persistence directory escapes the project root")
+    persistence = GalleryPersistence(enabled=True)
+    return (
+        persistence.export,
+        destination / "gallery.json",
+        destination / "gallery.npz",
+    )
 
 
 def build_controller(config_path: Path) -> LocalFaceUIController:
@@ -65,6 +89,7 @@ def main() -> int:
         parser.error("--mock-duration must be positive")
     settings = json.loads(args.config.read_text(encoding="utf-8"))
     controller = build_controller(args.config)
+    persistence, manifest_path, archive_path = build_persistence(settings)
     try:
         import tkinter as tk
     except ModuleNotFoundError as exc:
@@ -89,6 +114,9 @@ def main() -> int:
         command_queue_size=int(settings["queues"]["command_size"]),
         close_timeout_seconds=float(settings["worker"]["close_timeout_seconds"]),
         mirrored_source=bool(settings["guided_capture"].get("mirrored_source", False)),
+        persistence=persistence,
+        manifest_path=manifest_path,
+        archive_path=archive_path,
     )
     root = tk.Tk()
     def register(form):

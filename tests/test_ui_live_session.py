@@ -138,14 +138,16 @@ class LiveFaceSessionTests(unittest.TestCase):
                        item.instruction == "Mire al frente" for item in seen)
 
         self.assertTrue(wait_until(started))
-        self.assertTrue(wait_until(lambda: adapter.sequence >= 2))
-        seen.extend(session.drain_events())
-        self.assertTrue(any(
-            isinstance(item, EnrollmentProgressDTO)
-            and "no_face" in item.current_reasons
-            and item.accepted_samples == 0
-            for item in seen
-        ))
+        def has_no_face_progress():
+            seen.extend(session.drain_events())
+            return any(
+                isinstance(item, EnrollmentProgressDTO)
+                and "no_face" in item.current_reasons
+                and item.accepted_samples == 0
+                for item in seen
+            )
+
+        self.assertTrue(wait_until(has_no_face_progress))
         self.assertEqual(ui.state, UIState.ENROLLING)
         self.assertTrue(ui.enrollment.active)
         session.cancel_enrollment()
