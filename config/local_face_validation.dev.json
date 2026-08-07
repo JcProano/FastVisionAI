@@ -1,0 +1,29 @@
+{
+  "profile_name": "local_face_validation_dev",
+  "profile_version": "1.0",
+  "camera": {"source": 0},
+  "queues": {"visual_size": 1, "event_size": 16, "command_size": 8},
+  "worker": {
+    "ui_poll_interval_ms": 30,
+    "close_timeout_seconds": 5.0,
+    "mock_frame_delay_seconds": 0.03
+  },
+  "matcher": {"top_k": 3, "automatic_decision_enabled": false, "threshold": null},
+  "guided_capture": {
+    "target_samples": 5,
+    "policy_file": "config/guided_capture.dev.json"
+  },
+  "quality": {"profile_file": "config/face_quality.dev.json"},
+  "enrollment": {
+    "min_templates": 3,
+    "max_templates": 5,
+    "allow_low_quality": false,
+    "min_pairwise_similarity": null,
+    "max_pairwise_similarity": null,
+    "reject_exact_duplicates": true
+  },
+  "persistence": {
+    "enabled_by_default": false,
+    "directory": "data/ui_validation"
+  }
+}

@@ -55,3 +55,11 @@ stored with accepted calibration samples to support ordering and analysis, but
 must not be interpreted as recognition confidence or access authorization. Score
 reports include components, bands and profile provenance only; no image,
 landmark, embedding or embedding fragment is included.
+## Interfaz local de validación
+
+La interfaz local no registra imágenes ni embeddings por defecto. Cualquier
+persistencia requiere consentimiento explícito y debe ocurrir después de un
+enrollment válido. Los DTO públicos no transportan vectores biométricos. La
+persistencia JSON+NPZ sigue siendo una facilidad de desarrollo sin cifrado y no
+es adecuada para producción; requiere controles futuros de acceso, auditoría,
+retención, borrado verificable y gestión de claves.

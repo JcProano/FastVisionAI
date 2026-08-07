@@ -201,3 +201,44 @@ absolute limits. Pose scores are explicit constants. Normalized components are
 multiplied by weights whose sum must equal `1`, then configured critical-state
 penalties are applied. Structural failures produce `INVALID` and zero. Every
 component and final result is clamped to its documented range.
+
+### Guided profile diagnostics
+
+Run a guided session with aggregate-only diagnostics using:
+
+```bash
+venv/bin/python -m src.validation.diagnose_guided_capture \
+  --temporary-id temporary_diagnostic_001 --source 0 --target-samples 9
+```
+
+The report separates accepted, visually valid and rejected frames; summarizes
+confidence, face size, interocular distance, visibility, centering, blur,
+illumination and contrast; and includes requested-versus-estimated pose plus the
+detected-face-count histogram. Diagnostic mode rejects `--save-data` and
+`--save-images`. It does not retain images, landmarks, identities or embeddings.
+# Interfaz facial local experimental
+
+La capa `src/ui/` presenta candidatos de similitud y coordina un registro guiado
+sin modificar el pipeline biométrico. Nunca confirma una identidad: muestra
+únicamente **Candidato experimental**, la similitud y
+`Decisión automática: deshabilitada / NOT_EVALUATED`. La galería es en memoria y
+la persistencia local exige consentimiento y selección explícita; ocurre después
+de que `EnrollmentService` complete la transacción. No se guardan imágenes por
+defecto ni se exponen embeddings en DTOs, logs o pantalla.
+
+La ventana base se inicia con:
+
+```bash
+venv/bin/python -m src.ui.main --config config/local_face_validation.dev.json
+```
+
+Sin dispositivo físico puede validarse la ventana, el worker, enrollment en
+memoria y el regreso a monitorización sin persistir artefactos:
+
+```bash
+venv/bin/python -m src.ui.main --config config/local_face_validation.dev.json \
+  --mock-camera --mock-auto-enroll --mock-duration 2
+```
+
+La captura y el procesamiento biométrico deben ejecutarse fuera del hilo de
+Tkinter y entregar a la vista únicamente DTOs seguros y el frame RGB transitorio.

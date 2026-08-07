@@ -143,6 +143,12 @@ uses inverse clamped Euclidean offset; illumination uses a piecewise-linear idea
 band; pose uses explicit constants. The weighted sum is multiplied by penalties
 and clamped to `0..100`. Structural failures yield `QualityBand.INVALID`.
 
+`GuidedProfileDiagnosticCollector` is an optional validation observer. It copies
+only scalar quality measurements, categorical poses, rejection states and face
+counts from each result, then produces cohort distributions and current-profile
+comparisons. It never retains the frame, aligned image, landmarks, embedding or
+the `GuidedCaptureResult` object. Diagnostic mode cannot enable persistence.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,
@@ -150,3 +156,26 @@ preparation, inference and release. Typed `InternalEventBus` and
 `ExternalEventBus` boundaries currently share a synchronous `EventBus`.
 Architectural decisions are recorded under `docs/adr/`; plugin authors should
 follow `PLUGIN_API.md`.
+# Capa UI local experimental
+
+`src/ui/` es una frontera de presentación independiente. `ExperimentalRecognitionSession`
+consulta `FaceMatcher` con `MatchPolicy(False, None)`; un error del matcher se
+convierte en `ErrorDTO` recuperable y no detiene captura ni registro.
+`LocalEnrollmentWorkflow` mantiene las muestras temporales privadas hasta la
+confirmación, bloquea workflows simultáneos y usa `EnrollmentService` como único
+punto de commit. La persistencia opcional se ejecuta solamente después de un
+resultado `ENROLLED`; un fallo de persistencia no revierte silenciosamente la
+galería en memoria.
+
+La frontera pública usa `MonitoringDTO`, `EnrollmentProgressDTO`,
+`EnrollmentResultDTO` y `ErrorDTO`. Estos contratos excluyen frames, rostros
+alineados, arrays de embeddings y objetos de modelo. La imagen mostrada por
+Tkinter vive únicamente durante el ciclo de presentación actual.
+
+`LiveFaceSession` mantiene Tkinter en el hilo principal y ejecuta captura e
+inferencia en un worker. Usa una cola visual de tamaño uno y colas limitadas de
+eventos y comandos; cuando se llenan descarta el elemento más antiguo para
+conservar estado reciente. `RealUIRuntimeAdapter` es la única frontera que conoce
+CameraManager, Runtime, plugins, alineación, calidad y embedding. Los errores se
+reducen a códigos seguros y el cierre solicita STOP, espera un timeout configurable
+y ejecuta liberación idempotente.
