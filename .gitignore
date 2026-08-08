@@ -28,6 +28,7 @@ models/**/*.engine
 models/**/*.trt
 outputs/
 data/calibration/
+data/ui_validation/
 
 # Imágenes locales para validación
 bus.jpg
