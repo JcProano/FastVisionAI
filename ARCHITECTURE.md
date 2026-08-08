@@ -158,6 +158,15 @@ Persistence remains an explicit post-change operation through the existing
 `GalleryPersistence`; import fully validates a temporary gallery before operator
 confirmation and never merges galleries implicitly.
 
+`RecognitionService` is a policy boundary above `FaceMatcher`. The matcher remains
+score-only and non-deciding; the service converts its ranked template candidates
+into a safe structured result. With automatic decisions disabled it always keeps
+candidates informational and returns `NOT_EVALUATED`. `NO_GALLERY` and
+`INCOMPATIBLE` are structural outcomes. Explicit test policies may produce
+`MATCH`, `UNKNOWN` or `AMBIGUOUS`, but the project config contains no biometric
+threshold and does not enable automatic recognition. Ambiguity compares only the
+best candidate belonging to a different identity.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

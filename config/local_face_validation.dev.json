@@ -9,6 +9,16 @@
     "mock_frame_delay_seconds": 0.03
   },
   "matcher": {"top_k": 3, "automatic_decision_enabled": false, "threshold": null},
+  "recognition": {
+    "policy_name": "local_recognition_disabled",
+    "policy_version": "1.0",
+    "automatic_decision_enabled": false,
+    "match_threshold": null,
+    "ambiguity_margin": null,
+    "top_k": 3,
+    "minimum_quality_score": null,
+    "allow_low_quality": false
+  },
   "guided_capture": {
     "target_samples": 5,
     "policy_file": "config/guided_capture.dev.json",

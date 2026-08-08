@@ -255,3 +255,12 @@ Los cambios no se persisten automáticamente. Guardar, importar y exportar son
 acciones explícitas JSON+NPZ; sobrescribir o reemplazar requiere confirmación.
 La UI nunca presenta embeddings, huellas internas de templates ni imágenes
 biométricas. Los templates antiguos sin puntuación se muestran como `sin score`.
+
+### Recognition Service
+
+`RecognitionService` transforma los rankings de `FaceMatcher` en resultados
+seguros y estructurados sin acceder directamente a embeddings o templates. La
+configuración local mantiene la decisión automática deshabilitada, sin threshold
+ni margen biométrico. Por ello la UI continúa mostrando únicamente **Candidato
+experimental** y `NOT_EVALUATED`. Los estados `MATCH`, `UNKNOWN` y `AMBIGUOUS`
+solo pueden producirse con una política de prueba habilitada explícitamente.
