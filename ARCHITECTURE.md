@@ -203,6 +203,23 @@ recognition state. The UI composition root rejects automatic decisions and any
 configured match threshold or ambiguity margin. Enrollment routes frames away
 from the service until monitoring resumes.
 
+`PersonEnrollmentCoordinator` owns the cross-store enrollment state machine:
+`IDLE -> RESERVING_PERSON -> ENROLLING -> ACTIVATING_PERSON -> ACTIVE`. SQLite is
+reserved as `PENDING_BIOMETRIC` before capture; only a committed FaceGallery
+enrollment may transition it to `ACTIVE`. Cancellation and rejection remove the
+current pending reservation. Activation failure enters `ROLLING_BACK`, removes
+and verifies only the current gallery identity, then removes and verifies its
+pending civil row. Any unverifiable compensation becomes `INCONSISTENT`; no
+global cleanup is attempted. Persistence and thumbnails are post-activation
+best-effort effects.
+
+`PersonProfileController` is a read-oriented UI composition over PersonRepository,
+the existing people controllers and ThumbnailManager. Every refresh rebuilds a
+safe `PersonProfileDTO`; it is not a source of truth. Template vectors and model
+provenance remain internal, while only counts, optional quality aggregates and
+template date bounds cross the presentation boundary. Cedula lookup resolves to
+the immutable internal `person_id` before profile composition.
+
 The Phase 17 dashboard remains a presentation projection over safe UI DTOs.
 `DashboardStateStore` is bounded, ephemeral and never authoritative for gallery,
 recognition, enrollment, runtime or configuration. `LiveFaceSession` exposes a

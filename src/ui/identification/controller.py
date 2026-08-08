@@ -85,6 +85,8 @@ class IdentificationPresentationController:
                 person.person_id, person.display_name, person.external_identifier,
                 event.similarity, "NOT_EVALUATED", thumbnail.available,
                 "Candidato experimental registrado", self._utcnow(),
+                getattr(person, "address", None), getattr(person, "phone", None),
+                getattr(person, "email", None), getattr(person, "status", None),
             )
 
         if now - self._unknown_last < self.policy.unknown_cooldown_seconds:

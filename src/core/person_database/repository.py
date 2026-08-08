@@ -168,6 +168,23 @@ class PersonRepository:
         finally:
             connection.close()
 
+    def delete_pending(self, person_id: str) -> bool:
+        normalized = validate_person_id(person_id)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN")
+            cursor = connection.execute(
+                "DELETE FROM people WHERE person_id = ? AND status = ?",
+                (normalized, PersonStatus.PENDING_BIOMETRIC.value),
+            )
+            connection.commit()
+            return cursor.rowcount == 1
+        except Exception as exc:
+            connection.rollback()
+            raise PersonRepositoryError("pending person deletion failed") from exc
+        finally:
+            connection.close()
+
     def list(self, *, limit: int = 100, offset: int = 0) -> tuple[PersonRecord, ...]:
         return self.search(PersonSearchQuery(limit=limit, offset=offset))
 

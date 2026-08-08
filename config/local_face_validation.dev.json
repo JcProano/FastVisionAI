@@ -61,5 +61,10 @@
     "registered_cooldown_seconds": 10.0,
     "unknown_cooldown_seconds": 10.0,
     "candidate_stability_frames": 3
+  },
+  "person_database": {
+    "enabled": true,
+    "path": "data/fastvision/people.db",
+    "timeout_seconds": 5.0
   }
 }

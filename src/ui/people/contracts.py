@@ -33,6 +33,14 @@ class PersonSummaryDTO:
     minimum_quality: float | None
     maximum_quality: float | None
     created_at: datetime | None
+    cedula: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    birth_date: str | None = None
+    sex: str | None = None
+    notes: str | None = None
+    civil_status: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,4 +69,3 @@ class PeopleOperationResultDTO:
     affected_templates: int = 0
     identity_count: int | None = None
     template_count: int | None = None
-

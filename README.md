@@ -264,6 +264,28 @@ venv/bin/python -m src.ui.main --config config/local_face_validation.dev.json \
 La captura y el procesamiento biométrico deben ejecutarse fuera del hilo de
 Tkinter y entregar a la vista únicamente DTOs seguros y el frame RGB transitorio.
 
+### Coordinación civil y biométrica
+
+Con `person_database.enabled=true`, la UI reserva primero una persona civil como
+`PENDING_BIOMETRIC`. `PersonEnrollmentCoordinator` confirma el enrollment
+biométrico y después cambia el registro a `ACTIVE`. Una cancelación o rechazo
+elimina únicamente la reserva pendiente actual. Si la activación falla, la
+compensación verifica ambos almacenes; si no puede garantizar el estado anterior
+informa `INCONSISTENT` para reconciliación administrativa.
+
+Los datos civiles permanecen en SQLite y no se copian a metadata de templates.
+Miniatura y exportación son efectos opcionales posteriores a `ACTIVE`; su fallo
+no revierte un alta válida. Las identidades antiguas se presentan como registros
+biométricos heredados sin datos civiles.
+
+### Ficha completa de persona
+
+La ficha local compone información civil SQLite, estadísticas biométricas
+escalares y una miniatura visual opcional. Puede resolverse por `person_id` o por
+cédula, pero esta última nunca se usa como identificador biométrico. Distingue
+`ACTIVE`, `DISABLED`, `PENDING_BIOMETRIC`, registros heredados y ausencias sin
+inventar datos. Solo `ACTIVE` habilita muestras adicionales.
+
 ### Administrador local de personas
 
 La acción **Personas registradas** administra exclusivamente la galería en

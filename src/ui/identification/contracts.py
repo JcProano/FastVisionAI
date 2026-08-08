@@ -7,7 +7,6 @@ from datetime import datetime
 from enum import Enum
 from typing import Protocol
 
-from src.ui.people.contracts import PersonSummaryDTO
 from src.ui.thumbnails import ThumbnailDTO
 
 
@@ -42,11 +41,29 @@ class IdentificationPopupDTO:
     thumbnail_available: bool
     message: str
     timestamp: datetime
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    civil_status: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityPersonDTO:
+    person_id: str
+    first_name: str
+    last_name: str
+    display_name: str
+    external_identifier: str | None
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    status: str | None = None
+    legacy_without_civil_data: bool = False
 
 
 class IdentityInfoProvider(Protocol):
     """UI-only lookup boundary; never exposes gallery or biometric payloads."""
 
-    def get_person(self, person_id: str) -> PersonSummaryDTO | None: ...
+    def get_person(self, person_id: str) -> IdentityPersonDTO | None: ...
 
     def get_thumbnail(self, person_id: str) -> ThumbnailDTO: ...

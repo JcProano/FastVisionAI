@@ -7,7 +7,7 @@ import math
 import queue
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
@@ -398,7 +398,6 @@ class LiveFaceSession:
                 persistence=self._persistence, manifest_path=self._manifest_path,
                 archive_path=self._archive_path,
             )
-            self._event(result)
             if (
                 result.enrollment_status.casefold() == "enrolled"
                 and self._thumbnail_consent
@@ -418,9 +417,26 @@ class LiveFaceSession:
                             "Registro en memoria correcto; la miniatura visual no pudo guardarse.",
                             True,
                         )
+            if result.persistence_requested and result.persistence_succeeded is None:
+                succeeded = False
+                try:
+                    if (self._persistence is None or self._manifest_path is None
+                            or self._archive_path is None):
+                        raise RuntimeError("gallery persistence is not configured")
+                    self._persistence(
+                        self.controller.enrollment.gallery,
+                        self._manifest_path, self._archive_path,
+                    )
+                    succeeded = True
+                except Exception:
+                    LOGGER.exception(
+                        "Gallery persistence failed after ACTIVE; biometric payload omitted"
+                    )
+                result = replace(result, persistence_succeeded=succeeded)
             if result.persistence_requested and result.persistence_succeeded is False:
                 self._error(UIErrorCode.PERSISTENCE_ERROR,
                             "Registro en memoria correcto; la persistencia local falló.", True)
+            self._event(result)
         except Exception:
             LOGGER.exception(
                 "Enrollment finalization failed; temporary biometric payload omitted from log"

@@ -63,6 +63,13 @@ class RegistrationFormData:
     external_identifier: str | None
     consent_confirmed: bool
     persist_locally: bool
+    cedula: str | None = None
+    address: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    birth_date: str | None = None
+    sex: str | None = None
+    notes: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +114,7 @@ class EnrollmentResultDTO:
     persistence_requested: bool
     persistence_succeeded: bool | None
     message: str
+    coordination_state: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

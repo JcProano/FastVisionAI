@@ -69,6 +69,8 @@ class IdentificationPopupWindow:
             similarity = "N/D" if dto.similarity is None else f"{dto.similarity:.4f}"
             self.details.configure(text=(
                 f"{dto.display_name}\nIdentificador: {identifier}\n"
+                f"Dirección: {dto.address or 'N/D'}\nTeléfono: {dto.phone or 'N/D'}\n"
+                f"Email: {dto.email or 'N/D'}\n"
                 f"Similitud: {similarity}\nEstado: Candidato experimental registrado\n"
                 "Decisión automática: NOT_EVALUATED"
             ))

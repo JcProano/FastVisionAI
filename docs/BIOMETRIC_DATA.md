@@ -91,3 +91,14 @@ SQLite local no se considera almacenamiento seguro de producción. Un despliegue
 real deberá añadir cifrado en reposo, roles y control de acceso, auditoría,
 políticas de retención y borrado, backups cifrados y gestión de claves. Esta fase
 no implementa consultas externas, scraping ni acceso a instituciones nacionales.
+
+La coordinación conserva dominios separados: PII civil en SQLite y templates
+con metadata técnica en FaceGallery. Cédula, dirección, teléfono, email y fecha
+de nacimiento no se copian a templates ni logs biométricos. `PENDING_BIOMETRIC`
+solo cambia a `ACTIVE` después del commit biométrico. Una compensación no
+verificable exige revisión administrativa y nunca autoriza borrados globales.
+
+La ficha de persona expone únicamente agregados biométricos seguros y una
+miniatura visual autorizada. No transporta embeddings, templates, landmarks,
+procedencia del modelo ni rutas físicas. La cédula sirve solo para resolver el
+registro civil y nunca participa en matching o reconocimiento.

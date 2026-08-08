@@ -29,6 +29,7 @@ from src.ui.form_validation import validate_registration_form
 from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
 from src.ui.people.controller import PeopleManagerController
 from src.ui.people.tk_window import PeopleManagerWindow
+from src.ui.people.database_controller import DatabasePeopleManagerController
 from src.ui.dashboard.config_window import DashboardConfigurationWindow
 from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
 from src.ui.thumbnails import ThumbnailManager
@@ -37,6 +38,13 @@ from src.ui.identification import (
     PeopleThumbnailIdentityInfoProvider,
 )
 from src.ui.identification.tk_popup import IdentificationPopupWindow
+from src.ui.identification import SQLiteThumbnailIdentityInfoProvider
+from src.core.person_database import (
+    PersonRepository, SQLiteIdentityDataProvider,
+)
+from src.ui.person_enrollment import PersonEnrollmentCoordinator
+from src.ui.person_profile import PersonProfileController
+from src.ui.person_profile.tk_window import PersonProfileWindow
 from src.validation.guided_face_capture import load_guided_profile
 
 
@@ -132,6 +140,7 @@ def build_thumbnail_manager(
 
 def build_controller(
     config_path: Path, gallery: FaceGallery | None = None,
+    person_repository: PersonRepository | None = None,
 ) -> LocalFaceUIController:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     enrollment_config = config["enrollment"]
@@ -172,7 +181,33 @@ def build_controller(
     workflow = LocalEnrollmentWorkflow(
         gallery, service, target_samples=int(config["guided_capture"]["target_samples"])
     )
-    return LocalFaceUIController(ExperimentalRecognitionSession(recognition_service), workflow)
+    coordinator = (None if person_repository is None else
+                   PersonEnrollmentCoordinator(person_repository, gallery, workflow))
+    return LocalFaceUIController(
+        ExperimentalRecognitionSession(recognition_service), workflow, coordinator,
+    )
+
+
+def build_person_repository(
+    settings: dict[str, object], project_root: Path = PROJECT_ROOT,
+) -> PersonRepository | None:
+    database = settings.get("person_database", {})
+    if not isinstance(database, dict):
+        raise ValueError("person_database configuration must be an object")
+    if not bool(database.get("enabled", False)):
+        return None
+    configured = Path(str(database.get("path", "data/fastvision/people.db")))
+    if configured.is_absolute():
+        raise ValueError("person database path must be relative")
+    root = project_root.resolve()
+    resolved = (root / configured).resolve()
+    if root not in resolved.parents:
+        raise ValueError("person database path escapes project root")
+    repository = PersonRepository(
+        resolved, timeout=float(database.get("timeout_seconds", 5.0))
+    )
+    repository.initialize()
+    return repository
 
 
 def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
@@ -215,18 +250,26 @@ def main() -> int:
         parser.error("--mock-duration must be positive")
     settings = json.loads(args.config.read_text(encoding="utf-8"))
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
-    controller = build_controller(args.config, startup.gallery)
+    person_repository = build_person_repository(settings)
+    controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
     people_controller = PeopleManagerController(
         startup.gallery, controller.enrollment.enrollment,
         GalleryPersistence(enabled=True), manifest_path, archive_path,
     )
+    if person_repository is not None:
+        people_controller = DatabasePeopleManagerController(  # type: ignore[assignment]
+            person_repository, people_controller,
+        )
     popup_settings = settings.get("identification_popup", {})
     if not isinstance(popup_settings, dict):
         raise ValueError("identification_popup configuration must be an object")
-    identity_provider = PeopleThumbnailIdentityInfoProvider(
-        people_controller, thumbnail_manager,
+    identity_provider = (
+        PeopleThumbnailIdentityInfoProvider(people_controller, thumbnail_manager)
+        if person_repository is None else SQLiteThumbnailIdentityInfoProvider(
+            SQLiteIdentityDataProvider(person_repository), thumbnail_manager, startup.gallery,
+        )
     )
     identification_controller = IdentificationPresentationController(
         IdentificationPopupPolicy(
@@ -281,6 +324,7 @@ def main() -> int:
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, DashboardConfigurationWindow] = {}
+    profile_windows: dict[str, PersonProfileWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -292,7 +336,32 @@ def main() -> int:
         config_window = configuration_window.pop("window", None)
         if config_window is not None and config_window.window.winfo_exists():
             config_window.close()
+        for profile in tuple(profile_windows.values()):
+            if profile.window.winfo_exists():
+                profile.close()
+        profile_windows.clear()
         session.close()
+
+    profile_controller = None if person_repository is None else PersonProfileController(
+        person_repository, people_controller, people_controller.biometrics, thumbnail_manager,
+    )
+
+    def close_profile(person_id: str) -> None:
+        profile_windows.pop(person_id, None)
+
+    def open_profile(person_id: str) -> None:
+        current = profile_windows.get(person_id)
+        if current is not None and current.window.winfo_exists():
+            current.focus()
+            return
+        if profile_controller is None:
+            open_people(person_id)
+            return
+        profile_windows[person_id] = PersonProfileWindow(
+            root, profile_controller, person_id,
+            on_additional=session.start_additional_enrollment,
+            thumbnail_manager=thumbnail_manager, on_close=close_profile,
+        )
 
     def open_people(_person_id: str | None = None):
         current = people_window.get("window")
@@ -305,6 +374,7 @@ def main() -> int:
             on_additional=session.start_additional_enrollment,
             on_cancel_additional=session.cancel_enrollment,
             thumbnail_manager=thumbnail_manager,
+            on_view_profile=open_profile,
         )
 
     def open_configuration():
@@ -337,7 +407,7 @@ def main() -> int:
 
     identification_popup = IdentificationPopupWindow(
         root, identity_provider,
-        on_view_person=open_people,
+        on_view_person=open_profile,
         on_register=lambda: app.open_form(),
     )
 
@@ -364,7 +434,7 @@ def main() -> int:
     if args.mock_auto_enroll:
         mock_form = validate_registration_form(
             "Temporary", "Mock", None, consent_confirmed=True, persist_locally=False,
-            id_factory=lambda: "person_mock_ui_smoke",
+            cedula="1710034065",
         )
         root.after(250, register, mock_form)
     if args.mock_duration is not None:

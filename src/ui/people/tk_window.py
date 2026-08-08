@@ -22,6 +22,7 @@ class PeopleManagerWindow:
         self, root: Any, controller: PeopleManagerController, *,
         on_additional: Callable[[str], bool], on_cancel_additional: Callable[[], bool],
         thumbnail_manager: ThumbnailManager | None = None,
+        on_view_profile: Callable[[str], None] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError("Tkinter no está disponible")
@@ -29,17 +30,18 @@ class PeopleManagerWindow:
         self._on_additional = on_additional
         self._on_cancel_additional = on_cancel_additional
         self._thumbnails = thumbnail_manager
+        self._on_view_profile = on_view_profile
         self._thumbnail_photo: Any | None = None
         self.window = tk.Toplevel(root)
         self.window.title("Personas registradas")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
         self.query = tk.StringVar(master=self.window)
         ttk.Label(self.window, text="Personas registradas").grid(
-            row=0, column=0, columnspan=7, sticky="w", padx=8, pady=8
+            row=0, column=0, columnspan=8, sticky="w", padx=8, pady=8
         )
         ttk.Label(self.window, text="Buscar").grid(row=1, column=0, padx=8)
         search = ttk.Entry(self.window, textvariable=self.query, width=48)
-        search.grid(row=1, column=1, columnspan=6, sticky="ew", padx=8)
+        search.grid(row=1, column=1, columnspan=7, sticky="ew", padx=8)
         search.bind("<KeyRelease>", lambda _event: self.refresh())
         columns = ("first", "last", "external", "templates", "quality")
         self.table = ttk.Treeview(self.window, columns=columns, show="headings", height=12)
@@ -47,10 +49,10 @@ class PeopleManagerWindow:
             "Nombre", "Apellido", "Identificador", "Templates", "Calidad",
         )):
             self.table.heading(key, text=label)
-        self.table.grid(row=2, column=0, columnspan=7, sticky="nsew", padx=8, pady=8)
+        self.table.grid(row=2, column=0, columnspan=8, sticky="nsew", padx=8, pady=8)
         self.table.bind("<<TreeviewSelect>>", lambda _event: self._show_thumbnail())
         actions = (
-            ("Editar", self.edit), ("Eliminar", self.delete),
+            ("Ver ficha", self.view_profile), ("Editar", self.edit), ("Eliminar", self.delete),
             ("Agregar muestras", self.add_samples), ("Refrescar", self.refresh),
             ("Guardar cambios", self.save), ("Importar", self.import_gallery),
             ("Exportar", self.export_gallery),
@@ -81,6 +83,11 @@ class PeopleManagerWindow:
         self.window.columnconfigure(1, weight=1)
         self.refresh()
         self.window.after(200, self._poll_state)
+
+    def view_profile(self) -> None:
+        person = self.selected()
+        if person is not None and self._on_view_profile is not None:
+            self._on_view_profile(person.person_id)
 
     def refresh(self) -> None:
         listing = self.controller.list_people(self.query.get())
@@ -157,19 +164,38 @@ class PeopleManagerWindow:
         if person is None:
             return
         dialog = tk.Toplevel(self.window); dialog.title("Editar persona")
-        values = [tk.StringVar(dialog, value=value or "") for value in (
-            person.first_name, person.last_name, person.external_identifier,
-        )]
-        for row, label in enumerate(("Nombre", "Apellido", "Identificador externo")):
+        raw_values = (
+            person.first_name, person.last_name, person.cedula or person.external_identifier,
+            person.address, person.phone, person.email, person.birth_date, person.sex,
+            person.notes,
+        )
+        values = [tk.StringVar(dialog, value=value or "") for value in raw_values]
+        labels = (
+            "Nombre", "Apellido", "Cédula (inmutable)", "Dirección", "Teléfono",
+            "Email", "Fecha nacimiento", "Sexo", "Observaciones",
+        )
+        for row, label in enumerate(labels):
             ttk.Label(dialog, text=label).grid(row=row, column=0, padx=6, pady=4)
-            ttk.Entry(dialog, textvariable=values[row]).grid(row=row, column=1, padx=6, pady=4)
+            entry = ttk.Entry(dialog, textvariable=values[row])
+            entry.grid(row=row, column=1, padx=6, pady=4)
+            if row == 2:
+                entry.configure(state="disabled")
         def apply() -> None:
-            result = self.controller.update_person(
-                person.person_id, values[0].get(), values[1].get(), values[2].get()
-            )
+            try:
+                result = self.controller.update_person(
+                    person.person_id, values[0].get(), values[1].get(), values[2].get(),
+                    address=values[3].get(), phone=values[4].get(), email=values[5].get(),
+                    birth_date=values[6].get(), sex=values[7].get(), notes=values[8].get(),
+                )
+            except TypeError:  # legacy controller without Person Database
+                result = self.controller.update_person(
+                    person.person_id, values[0].get(), values[1].get(), values[2].get()
+                )
             self.status.configure(text=result.message); dialog.destroy(); self.refresh()
-        ttk.Button(dialog, text="Guardar en memoria", command=apply).grid(row=3, column=0)
-        ttk.Button(dialog, text="Cancelar", command=dialog.destroy).grid(row=3, column=1)
+        ttk.Button(dialog, text="Guardar", command=apply).grid(row=len(labels), column=0)
+        ttk.Button(dialog, text="Cancelar", command=dialog.destroy).grid(
+            row=len(labels), column=1
+        )
 
     def delete(self) -> None:
         person = self.selected()

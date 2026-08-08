@@ -482,9 +482,8 @@ class LocalFaceTkApp:
         values = {
             name: tk.StringVar(master=form)
             for name in (
-                "first",
-                "last",
-                "external",
+                "cedula", "first", "last", "address", "phone", "email",
+                "birth_date", "sex", "notes",
             )
         }
 
@@ -499,12 +498,15 @@ class LocalFaceTkApp:
         )
 
         fields = (
+            ("Cédula", "cedula"),
             ("Nombre", "first"),
             ("Apellido", "last"),
-            (
-                "Identificador interno (opcional)",
-                "external",
-            ),
+            ("Dirección (opcional)", "address"),
+            ("Teléfono (opcional)", "phone"),
+            ("Email (opcional)", "email"),
+            ("Fecha nacimiento YYYY-MM-DD (opcional)", "birth_date"),
+            ("Sexo (opcional)", "sex"),
+            ("Observaciones (opcional)", "notes"),
         )
 
         for row, (label, key) in enumerate(fields):
@@ -537,6 +539,7 @@ class LocalFaceTkApp:
             if row == 0:
                 entry.focus_set()
 
+        consent_row = len(fields)
         ttk.Checkbutton(
             form,
             text=(
@@ -544,7 +547,7 @@ class LocalFaceTkApp:
             ),
             variable=consent,
         ).grid(
-            row=3,
+            row=consent_row,
             column=0,
             columnspan=2,
             sticky="w",
@@ -560,7 +563,7 @@ class LocalFaceTkApp:
             ),
             variable=persist,
         ).grid(
-            row=4,
+            row=consent_row + 1,
             column=0,
             columnspan=2,
             sticky="w",
@@ -593,9 +596,16 @@ class LocalFaceTkApp:
                 data = validate_registration_form(
                     values["first"].get(),
                     values["last"].get(),
-                    values["external"].get(),
+                    None,
                     consent_confirmed=consent.get(),
                     persist_locally=persist.get(),
+                    cedula=values["cedula"].get(),
+                    address=values["address"].get(),
+                    phone=values["phone"].get(),
+                    email=values["email"].get(),
+                    birth_date=values["birth_date"].get(),
+                    sex=values["sex"].get(),
+                    notes=values["notes"].get(),
                 )
 
             except RegistrationFormError as exc:
@@ -618,7 +628,7 @@ class LocalFaceTkApp:
             text="Iniciar captura guiada",
             command=submit,
         ).grid(
-            row=5,
+            row=consent_row + 2,
             column=0,
             padx=8,
             pady=10,
@@ -629,7 +639,7 @@ class LocalFaceTkApp:
             text="Cancelar",
             command=close_form,
         ).grid(
-            row=5,
+            row=consent_row + 2,
             column=1,
             padx=8,
             pady=10,

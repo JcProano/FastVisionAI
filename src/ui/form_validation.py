@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Callable
 
 from src.ui.contracts import RegistrationFormData
+from src.core.person_database import PersonCreateRequest, PersonDataValidationError
 
 
 class RegistrationFormError(ValueError):
@@ -20,18 +21,40 @@ def validate_registration_form(
     consent_confirmed: bool,
     persist_locally: bool,
     id_factory: Callable[[], str] | None = None,
+    cedula: str | None = None,
+    address: str | None = None,
+    phone: str | None = None,
+    email: str | None = None,
+    birth_date: str | None = None,
+    sex: str | None = None,
+    notes: str | None = None,
 ) -> RegistrationFormData:
     first, last, external = validate_identity_fields(
         first_name, last_name, external_identifier
     )
     if not consent_confirmed:
         raise RegistrationFormError("Se requiere consentimiento biométrico explícito")
-    generated = (id_factory or (lambda: f"person_{uuid.uuid4().hex}"))()
+    generated = (id_factory or (lambda: str(uuid.uuid4())))()
     if not generated.strip() or generated in {first, last, f"{first} {last}"}:
         raise RegistrationFormError("El generador produjo un person_id inválido")
+    if cedula is not None:
+        try:
+            civil = PersonCreateRequest(
+                generated, cedula, first, last, address, phone, email,
+                birth_date, sex, notes,
+            )
+        except PersonDataValidationError as exc:
+            raise RegistrationFormError(str(exc)) from exc
+        generated, cedula, first, last = (
+            civil.person_id, civil.cedula, civil.first_name, civil.last_name,
+        )
+        address, phone, email, birth_date, sex, notes = (
+            civil.address, civil.phone, civil.email, civil.birth_date, civil.sex, civil.notes,
+        )
     return RegistrationFormData(
         first, last, f"{first} {last}", generated, external,
-        consent_confirmed, persist_locally,
+        consent_confirmed, persist_locally, cedula, address, phone, email,
+        birth_date, sex, notes,
     )
 
 

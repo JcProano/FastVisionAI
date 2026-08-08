@@ -13,13 +13,16 @@ from src.ui.contracts import (
 )
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow, PersistenceCallback
 from src.ui.recognition_session import ExperimentalRecognitionSession
+from src.ui.person_enrollment import PersonEnrollmentCoordinator
 
 
 class LocalFaceUIController:
     def __init__(self, monitoring: ExperimentalRecognitionSession,
-                 enrollment: LocalEnrollmentWorkflow) -> None:
+                 enrollment: LocalEnrollmentWorkflow,
+                 person_coordinator: PersonEnrollmentCoordinator | None = None) -> None:
         self.monitoring = monitoring
         self.enrollment = enrollment
+        self.person_coordinator = person_coordinator
         self._state = UIState.MONITORING
         self._lock = threading.RLock()
 
@@ -42,7 +45,8 @@ class LocalFaceUIController:
 
     def begin_enrollment(self, form: RegistrationFormData) -> EnrollmentProgressDTO:
         with self._lock:
-            progress = self.enrollment.start(form)
+            progress = (self.person_coordinator.begin(form) if self.person_coordinator
+                        else self.enrollment.start(form))
             self._state = UIState.ENROLLING
             return progress
 
@@ -57,20 +61,27 @@ class LocalFaceUIController:
         manifest_path: Path | None = None, archive_path: Path | None = None,
     ) -> EnrollmentResultDTO:
         with self._lock:
-            result = self.enrollment.finish(
-                persistence=persistence, manifest_path=manifest_path,
-                archive_path=archive_path,
-            )
+            result = (self.person_coordinator.commit() if self.person_coordinator else
+                      self.enrollment.finish(
+                          persistence=persistence, manifest_path=manifest_path,
+                          archive_path=archive_path,
+                      ))
             self._state = result.state
             return result
 
     def cancel_enrollment(self) -> None:
         with self._lock:
-            self.enrollment.cancel()
+            if self.person_coordinator:
+                self.person_coordinator.cancel()
+            else:
+                self.enrollment.cancel()
             self._state = UIState.CANCELLED
 
     def close(self) -> None:
         with self._lock:
             if self.enrollment.active:
-                self.enrollment.cancel()
+                if self.person_coordinator:
+                    self.person_coordinator.cancel()
+                else:
+                    self.enrollment.cancel()
             self._state = UIState.CLOSED

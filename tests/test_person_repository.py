@@ -58,6 +58,14 @@ class PersonRepositoryTests(unittest.TestCase):
         self.assertTrue(self.repository.delete(created.person_id))
         self.assertFalse(self.repository.delete(created.person_id))
 
+    def test_delete_pending_never_deletes_active_or_disabled(self):
+        pending = self.repository.create(request())
+        self.assertTrue(self.repository.delete_pending(pending.person_id))
+        active = self.repository.create(request("0926687856"))
+        self.repository.set_status(active.person_id, PersonStatus.ACTIVE)
+        self.assertFalse(self.repository.delete_pending(active.person_id))
+        self.assertIsNotNone(self.repository.get_by_person_id(active.person_id))
+
     def test_list_search_exists_and_stats(self):
         first = self.repository.create(request(first="Alpha", last="Zulu"))
         second = self.repository.create(request("0926687856", first="Beta", last="Andes"))

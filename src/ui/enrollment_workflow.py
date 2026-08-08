@@ -84,6 +84,8 @@ class LocalEnrollmentWorkflow:
         persistence: PersistenceCallback | None = None,
         manifest_path: Path | None = None,
         archive_path: Path | None = None,
+        defer_persistence: bool = False,
+        minimal_identity_metadata: bool = False,
     ) -> EnrollmentResultDTO:
         with self._lock:
             self._require_active()
@@ -91,12 +93,13 @@ class LocalEnrollmentWorkflow:
             embeddings = tuple(self._embeddings)
             scores = tuple(self._scores)
             assert form is not None
-            result = self.enrollment.enroll(
-                form.person_id, form.display_name, embeddings,
-                metadata={
+            identity_metadata = {} if minimal_identity_metadata else {
                     "first_name": form.first_name, "last_name": form.last_name,
                     "external_identifier": form.external_identifier,
-                },
+                }
+            result = self.enrollment.enroll(
+                form.person_id, form.display_name, embeddings,
+                metadata=identity_metadata,
             )
             accepted_indices = tuple(item.input_index for item in result.accepted_templates)
             accepted_scores = [scores[index].total_score for index in accepted_indices
@@ -123,7 +126,7 @@ class LocalEnrollmentWorkflow:
             message = "Registro rechazado"
             if enrolled:
                 message = "Registro en memoria completado"
-                if form.persist_locally:
+                if form.persist_locally and not defer_persistence:
                     if persistence is None or manifest_path is None or archive_path is None:
                         persistence_succeeded = False
                         message += "; persistencia local no configurada"
@@ -150,6 +153,15 @@ class LocalEnrollmentWorkflow:
             )
             self._discard()
             return dto
+
+    def commit_biometric(
+        self, *, minimal_identity_metadata: bool = False,
+    ) -> EnrollmentResultDTO:
+        """Commit only EnrollmentService/FaceGallery; all file IO remains deferred."""
+        return self.finish(
+            defer_persistence=True,
+            minimal_identity_metadata=minimal_identity_metadata,
+        )
 
     def _require_active(self) -> None:
         if not self._active:
