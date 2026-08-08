@@ -1,5 +1,17 @@
 # FastVisionAI Architecture
 
+## Person Database boundary
+
+Person Database separa PII administrativa de la biometría. SQLite usa conexiones
+por operación, transacciones cortas, consultas parametrizadas y migraciones
+explícitas. FaceGallery conserva únicamente su `person_id` UUID y templates; la
+cédula nunca sustituye esa clave interna.
+
+La integración futura será una saga local: `INSERT PENDING_BIOMETRIC` → captura →
+EnrollmentService/FaceGallery → `ACTIVE`. Cancelaciones o fallos previos a
+FaceGallery eliminarán la reserva. Thumbnail y Gallery JSON+NPZ ocurrirán después
+y sus fallos no cambiarán silenciosamente el estado biométrico o administrativo.
+
 ## Experimental identification presentation
 
 `IdentificationPresentationController` transforma exclusivamente `MonitoringDTO`

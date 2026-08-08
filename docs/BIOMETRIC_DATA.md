@@ -80,3 +80,14 @@ y su actualización o borrado es una acción explícita e independiente.
 El almacenamiento visual local actual no ofrece cifrado y no es apto para un
 despliegue sensible de producción sin cifrado, control de acceso, auditoría,
 retención, borrado verificable y gestión de claves.
+# Person Database y datos personales
+
+La base SQLite de Person Database contiene PII administrativa —cédula, nombres,
+dirección, teléfono, email y otros campos— y permanece separada de fotografías,
+embeddings y templates biométricos. La validación matemática de una cédula no
+confirma la existencia de una persona ni la titularidad del documento.
+
+SQLite local no se considera almacenamiento seguro de producción. Un despliegue
+real deberá añadir cifrado en reposo, roles y control de acceso, auditoría,
+políticas de retención y borrado, backups cifrados y gestión de claves. Esta fase
+no implementa consultas externas, scraping ni acceso a instituciones nacionales.

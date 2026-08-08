@@ -1,5 +1,17 @@
 # FastVisionAI
 
+## Person Database (Fase 20, infraestructura)
+
+`src/core/person_database/` aporta un repositorio SQLite local para información
+administrativa. `person_id` continúa siendo un UUID interno estable y la cédula
+es un identificador civil separado y único. La validación de cédula comprueba
+solo formato y checksum: no demuestra existencia ni titularidad.
+
+La integración futura seguirá una saga explícita: crear el registro
+`PENDING_BIOMETRIC`, realizar captura y enrollment, confirmar FaceGallery y pasar
+a `ACTIVE`. Una cancelación o fallo anterior al commit de FaceGallery eliminará
+la reserva pendiente. Este flujo todavía no está conectado a la UI.
+
 La presentación visual experimental puede abrir un único popup tras observar un
 candidato estable o un rostro sin candidato local. El popup aplica estabilidad y
 cooldown, se suspende durante enrollment y conserva `NOT_EVALUATED`: no confirma
