@@ -32,3 +32,6 @@ data/ui_validation/
 
 # Imágenes locales para validación
 bus.jpg
+
+# Datos biométricos locales y sesiones de validación
+data/
