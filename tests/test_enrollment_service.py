@@ -146,5 +146,13 @@ class EnrollmentServiceTests(GalleryTestCase):
         metadata["nested"]["temporary"] = False
         self.assertTrue(result.identity.metadata["nested"]["temporary"])
 
+    def test_accepted_template_quality_score_fields_are_optional(self):
+        result = EnrollmentService(FaceGallery(), EnrollmentPolicy(1, 2)).enroll(
+            "quality-optional", "Temporary", self.vectors()[:1]
+        )
+        accepted = result.accepted_templates[0]
+        self.assertIsNone(accepted.face_quality_score)
+        self.assertIsNone(accepted.quality_profile_name)
+
 
 if __name__ == "__main__": unittest.main()

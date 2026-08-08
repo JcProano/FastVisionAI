@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +59,21 @@ class CalibrationDatasetTests(unittest.TestCase):
         self.assertFalse(result.secure_erasure_claimed)
         repeated = store.delete_session(manifest, archive, images)
         self.assertEqual(set(repeated.not_found), {manifest, archive})
+
+    def test_old_manifest_without_face_quality_fields_still_loads(self):
+        store = CalibrationDatasetStore(enabled=True)
+        manifest, archive = self.root / "manifest.json", self.root / "data.npz"
+        store.save(self.groups, manifest, archive, consent_confirmed=True)
+        root = json.loads(manifest.read_text(encoding="utf-8"))
+        for item in root["samples"]:
+            for field in ("face_quality_score", "face_quality_band",
+                          "quality_profile_name", "quality_profile_version"):
+                item.pop(field)
+        manifest.write_text(json.dumps(root), encoding="utf-8")
+        loaded = store.load(manifest, archive)
+        metadata = loaded["temporary-a"][0].metadata
+        self.assertIsNone(metadata.face_quality_score)
+        self.assertIsNone(metadata.quality_profile_name)
 
 
 if __name__ == "__main__": unittest.main()
