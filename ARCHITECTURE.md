@@ -1,5 +1,14 @@
 # FastVisionAI Architecture
 
+## Experimental identification presentation
+
+`IdentificationPresentationController` transforma exclusivamente `MonitoringDTO`
+en DTOs seguros para un popup Tk singleton. `IdentityInfoProvider` separa los
+datos visibles de People Manager y Thumbnail Manager de la presentación; el
+popup nunca conoce galería, matcher, RecognitionService ni payloads biométricos.
+La estabilidad, cooldown y suspensión durante enrollment son controles UI y no
+constituyen una decisión de identidad.
+
 ## Face Thumbnail Manager
 
 `src/ui/thumbnails/` es una dependencia exclusiva de presentación. Recibe de la

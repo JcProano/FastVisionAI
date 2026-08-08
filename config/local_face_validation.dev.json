@@ -55,5 +55,11 @@
     "format": "jpeg",
     "jpeg_quality": 90,
     "replace_existing": false
+  },
+  "identification_popup": {
+    "enabled": true,
+    "registered_cooldown_seconds": 10.0,
+    "unknown_cooldown_seconds": 10.0,
+    "candidate_stability_frames": 3
   }
 }

@@ -32,6 +32,11 @@ from src.ui.people.tk_window import PeopleManagerWindow
 from src.ui.dashboard.config_window import DashboardConfigurationWindow
 from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
 from src.ui.thumbnails import ThumbnailManager
+from src.ui.identification import (
+    IdentificationPopupPolicy, IdentificationPresentationController,
+    PeopleThumbnailIdentityInfoProvider,
+)
+from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.validation.guided_face_capture import load_guided_profile
 
 
@@ -217,6 +222,27 @@ def main() -> int:
         startup.gallery, controller.enrollment.enrollment,
         GalleryPersistence(enabled=True), manifest_path, archive_path,
     )
+    popup_settings = settings.get("identification_popup", {})
+    if not isinstance(popup_settings, dict):
+        raise ValueError("identification_popup configuration must be an object")
+    identity_provider = PeopleThumbnailIdentityInfoProvider(
+        people_controller, thumbnail_manager,
+    )
+    identification_controller = IdentificationPresentationController(
+        IdentificationPopupPolicy(
+            enabled=bool(popup_settings.get("enabled", True)),
+            registered_cooldown_seconds=float(
+                popup_settings.get("registered_cooldown_seconds", 10.0)
+            ),
+            unknown_cooldown_seconds=float(
+                popup_settings.get("unknown_cooldown_seconds", 10.0)
+            ),
+            candidate_stability_frames=int(
+                popup_settings.get("candidate_stability_frames", 3)
+            ),
+        ),
+        identity_provider,
+    )
     try:
         import tkinter as tk
         from tkinter import messagebox
@@ -268,7 +294,7 @@ def main() -> int:
             config_window.close()
         session.close()
 
-    def open_people():
+    def open_people(_person_id: str | None = None):
         current = people_window.get("window")
         if current is not None and current.window.winfo_exists():
             current.window.lift()
@@ -309,6 +335,12 @@ def main() -> int:
                 return None
         return people_controller.save_changes(overwrite_confirmed=overwrite)
 
+    identification_popup = IdentificationPopupWindow(
+        root, identity_provider,
+        on_view_person=open_people,
+        on_register=lambda: app.open_form(),
+    )
+
     app = LocalFaceTkApp(
         root,
         on_register=register,
@@ -320,6 +352,8 @@ def main() -> int:
         get_gallery=gallery_summary,
         dashboard_settings=settings.get("dashboard", {}),
         get_thumbnail=thumbnail_manager.load,
+        identification_controller=identification_controller,
+        identification_popup=identification_popup,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

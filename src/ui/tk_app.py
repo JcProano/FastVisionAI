@@ -22,6 +22,7 @@ from src.ui.contracts import (
     MonitoringDTO,
     RegistrationFormData,
     RuntimeStatusDTO,
+    UIState,
 )
 from src.ui.form_validation import (
     RegistrationFormError,
@@ -32,6 +33,10 @@ from src.ui.dashboard.contracts import DashboardGalleryDTO
 from src.ui.dashboard.state import DashboardStateStore
 from src.ui.thumbnails import ThumbnailDTO
 from src.ui.thumbnails.presentation import thumbnail_to_ppm
+from src.ui.identification import (
+    IdentificationPopupType, IdentificationPresentationController,
+)
+from src.ui.identification.tk_popup import IdentificationPopupWindow
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +82,8 @@ class LocalFaceTkApp:
         get_gallery: Callable[[], DashboardGalleryDTO] | None = None,
         dashboard_settings: dict[str, object] | None = None,
         get_thumbnail: Callable[[str], ThumbnailDTO] | None = None,
+        identification_controller: IdentificationPresentationController | None = None,
+        identification_popup: IdentificationPopupWindow | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -95,6 +102,9 @@ class LocalFaceTkApp:
         self._get_thumbnail = get_thumbnail
         self._thumbnail_person_id: str | None = None
         self._thumbnail_photo: tk.PhotoImage | None = None
+        self._identification = identification_controller
+        self._identification_popup = identification_popup
+        self._enrollment_active = False
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -200,11 +210,25 @@ class LocalFaceTkApp:
             if dto.registration_enabled
             else "disabled"
         )
+        self._enrollment_active = False
+        if self._identification is not None and self._identification_popup is not None:
+            popup = self._identification.observe(dto)
+            if (
+                popup.popup_type is IdentificationPopupType.SUPPRESSED
+                and dto.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}
+            ):
+                self._identification_popup.dismiss()
+            self._identification_popup.show(popup)
 
     def show_progress(
         self,
         dto: EnrollmentProgressDTO,
     ) -> None:
+        self._enrollment_active = True
+        if self._identification is not None:
+            self._identification.suspend()
+        if self._identification_popup is not None:
+            self._identification_popup.dismiss()
         self.status.configure(
             text=(
                 f"{dto.instruction} — "
@@ -228,6 +252,9 @@ class LocalFaceTkApp:
         self,
         dto: EnrollmentResultDTO,
     ) -> None:
+        self._enrollment_active = False
+        if self._identification is not None:
+            self._identification.resume()
         self.status.configure(text=dto.message)
         self.candidate.configure(text=dto.display_name)
 
@@ -626,6 +653,9 @@ class LocalFaceTkApp:
         """
 
         self._on_cancel()
+        self._enrollment_active = False
+        if self._identification is not None:
+            self._identification.resume()
 
         self.register_button.configure(
             state="normal"
@@ -639,6 +669,8 @@ class LocalFaceTkApp:
         """
         Close UI and request resource cleanup.
         """
+        if self._identification_popup is not None:
+            self._identification_popup.close()
 
         self._on_close()
 

@@ -1,5 +1,10 @@
 # FastVisionAI
 
+La presentación visual experimental puede abrir un único popup tras observar un
+candidato estable o un rostro sin candidato local. El popup aplica estabilidad y
+cooldown, se suspende durante enrollment y conserva `NOT_EVALUATED`: no confirma
+identidad ni toma decisiones automáticas.
+
 Las miniaturas opcionales de la UI son archivos visuales sensibles separados de
 la galería biométrica. No se usan para comparar rostros ni tomar decisiones y no
 se incluyen al importar o exportar JSON+NPZ.
