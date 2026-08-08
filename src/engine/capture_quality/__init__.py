@@ -5,10 +5,12 @@ from .contracts import (
     GuidedEvaluatorMetrics, GuidedQualityMetrics,
 )
 from .evaluator import FaceCaptureQualityEvaluator
+from .diagnostics import GuidedProfileDiagnosticCollector, GuidedProfileDiagnosticReport
 from .plan import CapturePlanStep, GuidedCapturePlan
 
 __all__ = [
     "CapturePlanStep", "CapturePose", "FaceCaptureQualityEvaluator",
     "GuidedCapturePlan", "GuidedCapturePolicy", "GuidedCaptureResult",
     "GuidedCaptureState", "GuidedEvaluatorMetrics", "GuidedQualityMetrics",
+    "GuidedProfileDiagnosticCollector", "GuidedProfileDiagnosticReport",
 ]

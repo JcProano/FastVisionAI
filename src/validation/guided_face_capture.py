@@ -26,7 +26,7 @@ from src.engine.calibration.contracts import CalibrationSample, CalibrationSampl
 from src.engine.calibration.dataset import CalibrationDatasetStore, require_capture_consent
 from src.engine.capture_quality import (
     FaceCaptureQualityEvaluator, GuidedCapturePlan, GuidedCapturePolicy,
-    GuidedCaptureResult, GuidedCaptureState,
+    GuidedCaptureResult, GuidedCaptureState, GuidedProfileDiagnosticCollector,
 )
 from src.engine.contracts.detection import InferenceResult
 from src.engine.contracts.inference_context import InferenceContext
@@ -102,6 +102,7 @@ class CameraLike(Protocol):
 InferenceFunction = Callable[[Frame, str], InferenceResult]
 AlignmentFunction = Callable[[InferenceResult], tuple[AlignedFace, ...]]
 EmbeddingFunction = Callable[[AlignedFace], FaceEmbedding]
+ResultObserver = Callable[[GuidedCaptureResult, int], None]
 
 
 def load_guided_profile(path: Path) -> GuidedProfile:
@@ -145,6 +146,7 @@ def run_guided_loop(
     cancelled: threading.Event,
     run_id: str,
     quality_scorer: FaceQualityScorer | None = None,
+    result_observer: ResultObserver | None = None,
 ) -> tuple[list[AcceptedCapture], Counter[str], float, str]:
     validate_runtime_options(options)
     accepted: list[AcceptedCapture] = []
@@ -182,6 +184,8 @@ def run_guided_loop(
             )
             # Scoring is informational: all original policy fields remain unchanged.
             result = replace(result, face_quality_score=score)
+        if result_observer is not None:
+            result_observer(result, len(inference.detections))
         if result.accepted:
             aligned_face = next(item for item in aligned if item.face_index == result.face_index)
             accepted.append(AcceptedCapture(len(accepted), result, aligned_face))
@@ -303,14 +307,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
+def main(*, diagnostics_enabled: bool = False) -> int:
     args = build_parser().parse_args()
+    if diagnostics_enabled and (args.save_data or args.save_images):
+        raise SystemExit("diagnostic mode does not permit --save-data or --save-images")
     options = GuidedOptions(args.target_samples, args.max_duration, args.no_display)
     validate_runtime_options(options)
     validate_persistence_options(save_data=args.save_data, save_images=args.save_images,
                                  consent_confirmed=args.consent_confirmed)
     profile_path = args.policy_file if args.policy_file.is_absolute() else PROJECT_ROOT / args.policy_file
     profile = load_guided_profile(profile_path)
+    diagnostics = (
+        GuidedProfileDiagnosticCollector(profile.policy, profile.profile_name,
+                                         profile.profile_version)
+        if diagnostics_enabled else None
+    )
     quality_profile_path = (
         args.quality_profile_file if args.quality_profile_file.is_absolute()
         else PROJECT_ROOT / args.quality_profile_file
@@ -349,6 +360,7 @@ def main() -> int:
             lambda result: FaceAligner().align_result(result),
             lambda face: embedding_plugin.embed((face,))[0], evaluator, plan, options,
             cancelled, run_id, quality_scorer,
+            None if diagnostics is None else diagnostics.record,
         )
         persist_accepted(captures, output, args.temporary_id, run_id,
                          save_data=args.save_data, save_images=args.save_images,
@@ -385,7 +397,13 @@ def main() -> int:
         detection_models.state(detection_models.resolve_alias(alias)).value,
         embedding_models.state(embedding_models.resolve_alias(embedding_plugin.alias)).value,
     )
-    print(json.dumps(asdict(summary), indent=2))
+    payload: object = asdict(summary)
+    if diagnostics is not None:
+        payload = {
+            "guided_capture_summary": asdict(summary),
+            "profile_diagnostics": asdict(diagnostics.report()),
+        }
+    print(json.dumps(payload, indent=2))
     return 0
 
 

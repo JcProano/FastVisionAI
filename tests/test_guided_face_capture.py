@@ -7,19 +7,22 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
 from src.camera.camera_types import ReadStatus
 from src.camera.frame import Frame
 from src.engine.alignment import AlignedFace, AlignmentQuality, AlignmentStatus
-from src.engine.capture_quality import FaceCaptureQualityEvaluator, GuidedCapturePlan
+from src.engine.capture_quality import (
+    FaceCaptureQualityEvaluator, GuidedCapturePlan, GuidedProfileDiagnosticCollector,
+)
 from src.engine.contracts.detection import BoundingBox, Detection
 from src.engine.embedding.contracts import FaceEmbedding
 from src.engine.face_quality import FaceQualityScorer, load_face_quality_profile
 from src.validation.guided_face_capture import (
     GuidedCaptureSummary, GuidedOptions, load_guided_profile, persist_accepted, run_guided_loop,
-    validate_persistence_options, validate_runtime_options,
+    validate_persistence_options, validate_runtime_options, main as guided_main,
 )
 
 
@@ -88,11 +91,15 @@ class GuidedFaceCaptureTests(unittest.TestCase):
 
         camera = Camera()
         scorer = FaceQualityScorer(load_face_quality_profile(Path("config/face_quality.dev.json")))
+        profile = load_guided_profile(Path("config/guided_capture.dev.json"))
+        diagnostics = GuidedProfileDiagnosticCollector(
+            profile.policy, profile.profile_name, profile.profile_version
+        )
         captures, rejected, average, state = run_guided_loop(
             camera, lambda _frame, _run: inference, lambda _result: (aligned,),
             lambda _face: embedding, FaceCaptureQualityEvaluator(policy),
             GuidedCapturePlan(1), GuidedOptions(1, 1.0, True), threading.Event(), "mock-run",
-            scorer,
+            scorer, diagnostics.record,
         )
         camera.release()
         self.assertEqual(len(captures), 1)
@@ -102,6 +109,15 @@ class GuidedFaceCaptureTests(unittest.TestCase):
         self.assertTrue(captures[0].result.accepted)
         self.assertIsNotNone(captures[0].result.face_quality_score)
         self.assertEqual(average, captures[0].result.face_quality_score.total_score)
+        report = diagnostics.report()
+        self.assertEqual(report.frames_evaluated, 1)
+        self.assertEqual(report.accepted_frames, 1)
+
+    def test_diagnostic_mode_forbids_biometric_or_image_persistence(self):
+        with patch("sys.argv", ["diagnose", "--temporary-id", "temporary",
+                                "--save-data", "--consent-confirmed"]):
+            with self.assertRaisesRegex(SystemExit, "does not permit"):
+                guided_main(diagnostics_enabled=True)
 
 
 if __name__ == "__main__": unittest.main()
