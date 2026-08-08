@@ -21,9 +21,9 @@ def validate_registration_form(
     persist_locally: bool,
     id_factory: Callable[[], str] | None = None,
 ) -> RegistrationFormData:
-    first = _clean_required(first_name, "Nombre")
-    last = _clean_required(last_name, "Apellido")
-    external = _clean_optional(external_identifier)
+    first, last, external = validate_identity_fields(
+        first_name, last_name, external_identifier
+    )
     if not consent_confirmed:
         raise RegistrationFormError("Se requiere consentimiento biométrico explícito")
     generated = (id_factory or (lambda: f"person_{uuid.uuid4().hex}"))()
@@ -32,6 +32,16 @@ def validate_registration_form(
     return RegistrationFormData(
         first, last, f"{first} {last}", generated, external,
         consent_confirmed, persist_locally,
+    )
+
+
+def validate_identity_fields(
+    first_name: str, last_name: str, external_identifier: str | None,
+) -> tuple[str, str, str | None]:
+    return (
+        _clean_required(first_name, "Nombre"),
+        _clean_required(last_name, "Apellido"),
+        _clean_optional(external_identifier),
     )
 
 
@@ -56,4 +66,3 @@ def _validate_text(value: str, label: str) -> None:
         raise RegistrationFormError(f"{label} excede la longitud máxima")
     if any(ord(character) < 32 or ord(character) == 127 for character in value):
         raise RegistrationFormError(f"{label} contiene caracteres de control")
-

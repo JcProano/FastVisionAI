@@ -9,10 +9,12 @@ from src.ui.enrollment_workflow import EnrollmentAlreadyActiveError, LocalEnroll
 from src.ui.form_validation import RegistrationFormError, validate_registration_form
 from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.live_session import LiveFaceSession
+from src.ui.people import PeopleManagerController, PeopleManagerState
 
 __all__ = [
     "EnrollmentAlreadyActiveError", "EnrollmentProgressDTO", "EnrollmentResultDTO",
     "ErrorDTO", "ExperimentalRecognitionSession", "LocalEnrollmentWorkflow",
-    "LiveFaceSession", "LocalFaceUIController", "MonitoringDTO", "RegistrationFormData",
+    "LiveFaceSession", "LocalFaceUIController", "MonitoringDTO", "PeopleManagerController",
+    "PeopleManagerState", "RegistrationFormData",
     "RegistrationFormError", "UIState", "validate_registration_form",
 ]

@@ -55,6 +55,12 @@ stored with accepted calibration samples to support ordering and analysis, but
 must not be interpreted as recognition confidence or access authorization. Score
 reports include components, bands and profile provenance only; no image,
 landmark, embedding or embedding fragment is included.
+
+The people manager associates optional template quality metadata by the stable
+gallery `template_index`. Its versioned `face_quality_templates` object contains
+only score, band, profile provenance and recording time. Rebuilding a gallery
+remaps indices explicitly; an absent score remains `sin score`. This metadata
+must never contain vector fingerprints, embedding hashes, images or vector data.
 ## Interfaz local de validación
 
 La interfaz local no registra imágenes ni embeddings por defecto. Cualquier

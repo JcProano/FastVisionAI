@@ -26,6 +26,8 @@ from src.ui.runtime_adapter import RealUIRuntimeAdapter
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
 from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
+from src.ui.people.controller import PeopleManagerController
+from src.ui.people.tk_window import PeopleManagerWindow
 from src.validation.guided_face_capture import load_guided_profile
 
 
@@ -148,6 +150,10 @@ def main() -> int:
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     controller = build_controller(args.config, startup.gallery)
     persistence, manifest_path, archive_path = build_persistence(settings)
+    people_controller = PeopleManagerController(
+        startup.gallery, controller.enrollment.enrollment,
+        GalleryPersistence(enabled=True), manifest_path, archive_path,
+    )
     try:
         import tkinter as tk
     except ModuleNotFoundError as exc:
@@ -175,20 +181,37 @@ def main() -> int:
         persistence=persistence,
         manifest_path=manifest_path,
         archive_path=archive_path,
+        people_controller=people_controller,
     )
     root = tk.Tk()
+    people_window: dict[str, PeopleManagerWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
 
     def close():
+        window = people_window.pop("window", None)
+        if window is not None and window.window.winfo_exists():
+            window.close()
         session.close()
+
+    def open_people():
+        current = people_window.get("window")
+        if current is not None and current.window.winfo_exists():
+            current.window.lift()
+            return
+        people_window["window"] = PeopleManagerWindow(
+            root, people_controller,
+            on_additional=session.start_additional_enrollment,
+            on_cancel_additional=session.cancel_enrollment,
+        )
 
     app = LocalFaceTkApp(
         root,
         on_register=register,
         on_cancel=session.cancel_enrollment,
         on_close=close,
+        on_people=open_people,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

@@ -14,6 +14,7 @@ from src.engine.gallery import FaceGallery
 from src.ui.contracts import (
     EnrollmentProgressDTO, EnrollmentResultDTO, RegistrationFormData, UIState,
 )
+from src.ui.people.controller import record_template_quality_scores
 
 LOGGER = logging.getLogger(__name__)
 PersistenceCallback = Callable[[FaceGallery, Path, Path], None]
@@ -101,6 +102,23 @@ class LocalEnrollmentWorkflow:
             accepted_scores = [scores[index].total_score for index in accepted_indices
                                if scores[index] is not None]
             enrolled = result.status is EnrollmentStatus.ENROLLED
+            if enrolled:
+                quality_scores = tuple(
+                    (accepted.gallery_template_index, scores[accepted.input_index])
+                    for accepted in result.accepted_templates
+                    if accepted.gallery_template_index is not None
+                    and scores[accepted.input_index] is not None
+                )
+                if quality_scores:
+                    try:
+                        record_template_quality_scores(
+                            self.gallery, form.person_id, quality_scores  # type: ignore[arg-type]
+                        )
+                    except Exception:
+                        LOGGER.exception(
+                            "Could not attach safe quality metadata after enrollment; "
+                            "biometric payload omitted"
+                        )
             persistence_succeeded: bool | None = None
             message = "Registro rechazado"
             if enrolled:

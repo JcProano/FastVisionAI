@@ -19,21 +19,26 @@ from src.ui.enrollment_workflow import PersistenceCallback
 from src.ui.runtime_adapter import (
     CameraAdapterError, InferenceAdapterError, UIRuntimeAdapter,
 )
+from src.ui.people.contracts import PeopleOperationResultDTO
+from src.ui.people.controller import PeopleManagerController
 
 LOGGER = logging.getLogger(__name__)
-UIEvent = MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO | RuntimeStatusDTO
+UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
+           RuntimeStatusDTO | PeopleOperationResultDTO)
 
 
 class SessionCommandType(str, Enum):
     START_ENROLLMENT = "start_enrollment"
     CANCEL_ENROLLMENT = "cancel_enrollment"
     STOP = "stop"
+    START_ADDITIONAL_ENROLLMENT = "start_additional_enrollment"
 
 
 @dataclass(frozen=True, slots=True)
 class SessionCommand:
     kind: SessionCommandType
     form: RegistrationFormData | None = None
+    person_id: str | None = None
 
 
 class LiveFaceSession:
@@ -44,6 +49,7 @@ class LiveFaceSession:
         mirrored_source: bool = False,
         persistence: PersistenceCallback | None = None,
         manifest_path: Path | None = None, archive_path: Path | None = None,
+        people_controller: PeopleManagerController | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -57,10 +63,13 @@ class LiveFaceSession:
         self._persistence = persistence
         self._manifest_path = manifest_path
         self._archive_path = archive_path
+        self._people = people_controller
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._plan: GuidedCapturePlan | None = None
         self._last_single_valid = False
+        self._additional_person_id: str | None = None
+        self._additional_samples: list[tuple[object, object]] = []
 
     @property
     def alive(self) -> bool:
@@ -77,6 +86,11 @@ class LiveFaceSession:
 
     def cancel_enrollment(self) -> bool:
         return self._command(SessionCommand(SessionCommandType.CANCEL_ENROLLMENT))
+
+    def start_additional_enrollment(self, person_id: str) -> bool:
+        return self._command(SessionCommand(
+            SessionCommandType.START_ADDITIONAL_ENROLLMENT, person_id=person_id
+        ))
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -157,6 +171,10 @@ class LiveFaceSession:
             self.adapter.close()
             if self.controller.enrollment.active:
                 self.controller.cancel_enrollment()
+            if self._people is not None and self._additional_person_id is not None:
+                self._people.cancel_additional()
+                self._additional_person_id = None
+                self._additional_samples.clear()
             self._event(self.adapter.status())
 
     def _commands(self) -> None:
@@ -167,6 +185,10 @@ class LiveFaceSession:
                 if self.controller.enrollment.active:
                     self.controller.cancel_enrollment()
                 self._plan = None
+                if self._people is not None and self._additional_person_id is not None:
+                    self._event(self._people.cancel_additional())
+                self._additional_person_id = None
+                self._additional_samples.clear()
                 self.adapter.new_evaluator()
                 self._event(MonitoringDTO(
                     UIState.MONITORING, "Registro cancelado", None, None,
@@ -195,6 +217,39 @@ class LiveFaceSession:
                     self._plan = None
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "No se pudo iniciar el registro guiado.", False)
+            elif (command.kind is SessionCommandType.START_ADDITIONAL_ENROLLMENT and
+                  command.person_id is not None):
+                if self._plan is not None or self.controller.enrollment.active or (
+                    self._additional_person_id is not None
+                ):
+                    self._error(UIErrorCode.ENROLLMENT_ERROR,
+                                "Ya existe un registro guiado activo.", True)
+                    continue
+                if self._people is None:
+                    self._error(UIErrorCode.ENROLLMENT_ERROR,
+                                "El administrador de personas no está disponible.", False)
+                    continue
+                try:
+                    started = self._people.begin_additional(command.person_id)
+                    if not started.success:
+                        self._event(started)
+                        continue
+                    self._plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
+                    self._additional_person_id = command.person_id
+                    self._additional_samples.clear()
+                    self.adapter.new_evaluator()
+                    self._event(started)
+                    self._event(EnrollmentProgressDTO(
+                        UIState.ENROLLING, "Mire al frente", 0, self._plan.target_samples,
+                        (), None, None, True,
+                    ))
+                except Exception:
+                    LOGGER.exception("Additional enrollment start failed; biometric data omitted")
+                    self._plan = None
+                    self._additional_person_id = None
+                    self._additional_samples.clear()
+                    self._error(UIErrorCode.ENROLLMENT_ERROR,
+                                "No se pudo iniciar la captura adicional.", False)
 
     def _monitoring_step(self, face_count: int, guided) -> None:
         if face_count == 0:
@@ -230,11 +285,22 @@ class LiveFaceSession:
         score = guided.face_quality_score
         if guided.accepted and guided.embedding is not None:
             plan.accept()
-            progress = self.controller.add_enrollment_sample(
-                guided.embedding, score,
-                "Registro completo" if plan.completed else
-                operator_instruction(plan.current, self.mirrored_source),
-            )
+            if self._additional_person_id is not None:
+                self._additional_samples.append((guided.embedding, score))
+                progress = EnrollmentProgressDTO(
+                    UIState.ENROLLING,
+                    "Registro completo" if plan.completed else
+                    operator_instruction(plan.current, self.mirrored_source),
+                    plan.accepted_count, plan.target_samples, (),
+                    None if score is None else score.total_score,
+                    None if score is None else score.quality_band.value, True,
+                )
+            else:
+                progress = self.controller.add_enrollment_sample(
+                    guided.embedding, score,
+                    "Registro completo" if plan.completed else
+                    operator_instruction(plan.current, self.mirrored_source),
+                )
             self._event(progress)
         else:
             self._event(EnrollmentProgressDTO(
@@ -246,6 +312,22 @@ class LiveFaceSession:
                 None if score is None else score.quality_band.value, True,
             ))
         if not plan.completed:
+            return
+        if self._additional_person_id is not None:
+            person_id = self._additional_person_id
+            try:
+                assert self._people is not None
+                result = self._people.complete_additional(
+                    person_id, tuple(self._additional_samples)  # type: ignore[arg-type]
+                )
+                self._event(result)
+                if not result.success:
+                    self._error(UIErrorCode.ENROLLMENT_ERROR, result.message, True)
+            finally:
+                self._additional_person_id = None
+                self._additional_samples.clear()
+                self._plan = None
+                self.adapter.new_evaluator()
             return
         try:
             result = self.controller.finish_enrollment(

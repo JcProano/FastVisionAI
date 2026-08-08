@@ -242,3 +242,16 @@ venv/bin/python -m src.ui.main --config config/local_face_validation.dev.json \
 
 La captura y el procesamiento biométrico deben ejecutarse fuera del hilo de
 Tkinter y entregar a la vista únicamente DTOs seguros y el frame RGB transitorio.
+
+### Administrador local de personas
+
+La acción **Personas registradas** administra exclusivamente la galería en
+memoria compartida con la monitorización. Permite buscar, editar datos visibles,
+eliminar identidades y agregar muestras mediante captura guiada. `person_id` es
+inmutable; `display_name` siempre se deriva de nombre y apellido. Las mutaciones
+se validan primero en una galería temporal y solo se publican con `replace_from()`.
+
+Los cambios no se persisten automáticamente. Guardar, importar y exportar son
+acciones explícitas JSON+NPZ; sobrescribir o reemplazar requiere confirmación.
+La UI nunca presenta embeddings, huellas internas de templates ni imágenes
+biométricas. Los templates antiguos sin puntuación se muestran como `sin score`.

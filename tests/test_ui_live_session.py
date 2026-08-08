@@ -4,6 +4,8 @@ import dataclasses
 import time
 import unittest
 from dataclasses import replace
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -20,6 +22,8 @@ from src.ui.form_validation import validate_registration_form
 from src.ui.live_session import LiveFaceSession, operator_instruction
 from src.ui.mock_runtime import MockUIRuntimeAdapter
 from src.ui.recognition_session import ExperimentalRecognitionSession
+from src.ui.people.controller import PeopleManagerController
+from src.engine.gallery.persistence import GalleryPersistence
 
 
 class FailingMatcher(FaceMatcher):
@@ -59,6 +63,45 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_additional_enrollment_unknown_cancel_and_complete(self):
+        gallery = FaceGallery()
+        gallery.register_identity(FaceIdentity("existing", "Existing Person", {
+            "first_name": "Existing", "last_name": "Person",
+        }))
+        gallery.add_template("existing", self._mock_embedding(distinct=True))
+        _, ui = controller(gallery, target=2)
+        root = Path(tempfile.mkdtemp())
+        people = PeopleManagerController(
+            gallery, ui.enrollment.enrollment, GalleryPersistence(enabled=True),
+            root / "gallery.json", root / "gallery.npz",
+        )
+        adapter = MockUIRuntimeAdapter(delay=.02)
+        session = LiveFaceSession(adapter, ui, people_controller=people, event_queue_size=64)
+        session.start()
+        self.assertTrue(session.start_additional_enrollment("missing"))
+        self.assertTrue(wait_until(lambda: people.state.value == "error"))
+        self.assertEqual(len(gallery.templates()), 1)
+
+        self.assertTrue(session.start_additional_enrollment("existing"))
+        self.assertTrue(wait_until(lambda: people.state.value == "enrolling_more"))
+        session.cancel_enrollment()
+        self.assertTrue(wait_until(lambda: people.state.value == "idle"))
+        self.assertEqual(len(gallery.templates()), 1)
+
+        session.start_additional_enrollment("existing")
+        self.assertTrue(wait_until(lambda: len(gallery.templates()) == 3, 1.5))
+        self.assertEqual(people.state.value, "idle")
+        session.close()
+
+    def _mock_embedding(self, distinct=False):
+        adapter = MockUIRuntimeAdapter(delay=0)
+        adapter.open()
+        embedding = adapter.process(CapturePose.FRONTAL).guided.embedding
+        if distinct:
+            vector = np.zeros(embedding.dimension, np.float32); vector[100] = 1
+            embedding = replace(embedding, embedding=vector)
+        return embedding
+
     def test_operator_pose_instructions_respect_mirrored_perspective(self):
         left = CapturePlanStep("left", CapturePose.SLIGHT_LEFT,
                                "Gire ligeramente a la izquierda")

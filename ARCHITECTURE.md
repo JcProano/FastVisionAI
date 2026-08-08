@@ -149,6 +149,15 @@ counts from each result, then produces cohort distributions and current-profile
 comparisons. It never retains the frame, aligned image, landmarks, embedding or
 the `GuidedCaptureResult` object. Diagnostic mode cannot enable persistence.
 
+`PeopleManagerController` is the transactional application boundary for the
+local registered-people UI. It exposes safe scalar DTOs, reconstructs candidate
+galleries for edits, deletion and additional-template batches, and publishes a
+change only through `FaceGallery.replace_from()`. Additional capture suspends
+matching and retains accepted samples only until the whole batch validates.
+Persistence remains an explicit post-change operation through the existing
+`GalleryPersistence`; import fully validates a temporary gallery before operator
+confirmation and never merges galleries implicitly.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,
