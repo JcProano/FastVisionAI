@@ -16,6 +16,7 @@ from pathlib import Path
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
 from src.engine.gallery.persistence import GalleryPersistence
+from src.engine.recognition import RecognitionPolicy, RecognitionService
 from src.core.config_manager import PROJECT_ROOT
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
@@ -109,11 +110,31 @@ def build_controller(
 ) -> LocalFaceUIController:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     enrollment_config = config["enrollment"]
+    recognition_config = config["recognition"]
+    if not isinstance(recognition_config, dict):
+        raise ValueError("recognition configuration must be an object")
+    if recognition_config.get("automatic_decision_enabled") is not False:
+        raise ValueError("experimental UI requires automatic_decision_enabled=false")
+    if recognition_config.get("match_threshold") is not None:
+        raise ValueError("experimental UI requires match_threshold=null")
+    if recognition_config.get("ambiguity_margin") is not None:
+        raise ValueError("experimental UI requires ambiguity_margin=null")
     gallery = gallery if gallery is not None else FaceGallery()
     matcher = FaceMatcher(
         top_k=int(config["matcher"]["top_k"]),
         policy=MatchPolicy(automatic_decision_enabled=False, threshold=None),
     )
+    recognition_policy = RecognitionPolicy(
+        automatic_decision_enabled=False,
+        match_threshold=None,
+        ambiguity_margin=None,
+        top_k=int(recognition_config["top_k"]),
+        minimum_quality_score=recognition_config["minimum_quality_score"],
+        allow_low_quality=bool(recognition_config["allow_low_quality"]),
+        policy_name=str(recognition_config["policy_name"]),
+        policy_version=str(recognition_config["policy_version"]),
+    )
+    recognition_service = RecognitionService(gallery, matcher, recognition_policy)
     policy = EnrollmentPolicy(
         min_templates=int(enrollment_config["min_templates"]),
         max_templates=int(enrollment_config["max_templates"]),
@@ -126,7 +147,7 @@ def build_controller(
     workflow = LocalEnrollmentWorkflow(
         gallery, service, target_samples=int(config["guided_capture"]["target_samples"])
     )
-    return LocalFaceUIController(ExperimentalRecognitionSession(gallery, matcher), workflow)
+    return LocalFaceUIController(ExperimentalRecognitionSession(recognition_service), workflow)
 
 
 def main() -> int:

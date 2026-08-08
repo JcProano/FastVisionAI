@@ -264,3 +264,10 @@ configuración local mantiene la decisión automática deshabilitada, sin thresh
 ni margen biométrico. Por ello la UI continúa mostrando únicamente **Candidato
 experimental** y `NOT_EVALUATED`. Los estados `MATCH`, `UNKNOWN` y `AMBIGUOUS`
 solo pueden producirse con una política de prueba habilitada explícitamente.
+
+La UI consulta este servicio mediante `ExperimentalRecognitionSession` y recibe
+solo DTO seguros. En el perfil actual, `NO_GALLERY`, `INCOMPATIBLE` y
+`NOT_EVALUATED` mantienen disponible el registro; no se muestran decisiones de
+identidad. Durante enrollment principal o adicional no se ejecutan consultas de
+reconocimiento, y la misma galería compartida vuelve a estar disponible al
+regresar a monitorización.

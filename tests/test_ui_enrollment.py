@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
+from src.engine.recognition import RecognitionPolicy, RecognitionService
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import EnrollmentAlreadyActiveError, LocalEnrollmentWorkflow
 from src.ui.form_validation import RegistrationFormError, validate_registration_form
@@ -52,7 +53,10 @@ class UIEnrollmentTests(GalleryTestCase):
     def test_double_click_is_blocked_and_close_cancels(self):
         gallery, workflow = self.workflow()
         controller = LocalFaceUIController(
-            ExperimentalRecognitionSession(gallery, FaceMatcher(policy=MatchPolicy(False, None))),
+            ExperimentalRecognitionSession(RecognitionService(
+                gallery, FaceMatcher(top_k=1, policy=MatchPolicy(False, None)),
+                RecognitionPolicy(top_k=1),
+            )),
             workflow,
         )
         controller.begin_enrollment(self.form())

@@ -12,6 +12,7 @@ import numpy as np
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan, GuidedCaptureState
 from src.engine.gallery import FaceGallery, FaceIdentity, FaceMatcher, MatchPolicy
+from src.engine.recognition import RecognitionPolicy, RecognitionService
 from src.ui.contracts import (
     EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
     UIErrorCode, UIState, VisualFrameDTO,
@@ -31,18 +32,31 @@ class FailingMatcher(FaceMatcher):
         raise RuntimeError("controlled")
 
 
+class CountingRecognitionService(RecognitionService):
+    def __init__(self, gallery, matcher, policy):
+        super().__init__(gallery, matcher, policy)
+        self.calls = 0
+
+    def recognize(self, query, quality_score=None):
+        self.calls += 1
+        return super().recognize(query, quality_score)
+
+
 class OpenFailAdapter(MockUIRuntimeAdapter):
     def open(self):
         return False
 
 
-def controller(gallery=None, matcher=None, target=3):
-    gallery = gallery or FaceGallery()
+def controller(gallery=None, matcher=None, target=3, recognition=None):
+    gallery = gallery if gallery is not None else FaceGallery()
     matcher = matcher or FaceMatcher(policy=MatchPolicy(False, None))
-    service = EnrollmentService(gallery, EnrollmentPolicy(target, target))
+    recognition = recognition or RecognitionService(
+        gallery, matcher, RecognitionPolicy(top_k=matcher.top_k)
+    )
+    enrollment_service = EnrollmentService(gallery, EnrollmentPolicy(target, target))
     return gallery, LocalFaceUIController(
-        ExperimentalRecognitionSession(gallery, matcher),
-        LocalEnrollmentWorkflow(gallery, service, target),
+        ExperimentalRecognitionSession(recognition),
+        LocalEnrollmentWorkflow(gallery, enrollment_service, target),
     )
 
 
@@ -63,6 +77,57 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_recognition_is_suspended_during_primary_enrollment_and_reactivated(self):
+        gallery = FaceGallery()
+        matcher = FaceMatcher(policy=MatchPolicy(False, None))
+        recognition = CountingRecognitionService(
+            gallery, matcher, RecognitionPolicy(top_k=matcher.top_k)
+        )
+        _, ui = controller(gallery, matcher, target=20, recognition=recognition)
+        session = LiveFaceSession(MockUIRuntimeAdapter(delay=.01), ui, event_queue_size=64)
+        session.start()
+        self.assertTrue(wait_until(lambda: recognition.calls >= 2))
+        session.start_enrollment(form())
+        self.assertTrue(wait_until(lambda: ui.enrollment.active))
+        calls_during = recognition.calls
+        time.sleep(.08)
+        self.assertEqual(recognition.calls, calls_during)
+        session.cancel_enrollment()
+        self.assertTrue(wait_until(lambda: not ui.enrollment.active))
+        self.assertTrue(wait_until(lambda: recognition.calls > calls_during))
+        session.close()
+
+    def test_recognition_is_suspended_during_additional_enrollment_and_reactivated(self):
+        gallery = FaceGallery()
+        gallery.register_identity(FaceIdentity("existing", "Existing Person", {
+            "first_name": "Existing", "last_name": "Person",
+        }))
+        gallery.add_template("existing", self._mock_embedding(distinct=True))
+        matcher = FaceMatcher(policy=MatchPolicy(False, None))
+        recognition = CountingRecognitionService(
+            gallery, matcher, RecognitionPolicy(top_k=matcher.top_k)
+        )
+        _, ui = controller(gallery, matcher, target=20, recognition=recognition)
+        root = Path(tempfile.mkdtemp())
+        people = PeopleManagerController(
+            gallery, ui.enrollment.enrollment, GalleryPersistence(enabled=True),
+            root / "gallery.json", root / "gallery.npz",
+        )
+        session = LiveFaceSession(
+            MockUIRuntimeAdapter(delay=.01), ui, people_controller=people, event_queue_size=64
+        )
+        session.start()
+        self.assertTrue(wait_until(lambda: recognition.calls >= 2))
+        session.start_additional_enrollment("existing")
+        self.assertTrue(wait_until(lambda: people.state.value == "enrolling_more"))
+        calls_during = recognition.calls
+        time.sleep(.08)
+        self.assertEqual(recognition.calls, calls_during)
+        session.cancel_enrollment()
+        self.assertTrue(wait_until(lambda: people.state.value == "idle"))
+        self.assertTrue(wait_until(lambda: recognition.calls > calls_during))
+        session.close()
+
     def test_additional_enrollment_unknown_cancel_and_complete(self):
         gallery = FaceGallery()
         gallery.register_identity(FaceIdentity("existing", "Existing Person", {

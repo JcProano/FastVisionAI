@@ -13,7 +13,10 @@ from src.ui.tk_app import monitoring_text
 
 class UIContractTests(unittest.TestCase):
     def test_public_dtos_have_no_biometric_payload_fields(self):
-        forbidden = {"embedding", "embeddings", "aligned_face", "aligned_faces", "frame", "model"}
+        forbidden = {
+            "embedding", "embeddings", "template", "templates", "aligned_face",
+            "aligned_faces", "frame", "model",
+        }
         for dto in (MonitoringDTO, EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO):
             names = {field.name for field in dataclasses.fields(dto)}
             self.assertTrue(names.isdisjoint(forbidden), (dto.__name__, names & forbidden))
@@ -33,6 +36,24 @@ class UIContractTests(unittest.TestCase):
         self.assertEqual(view.headline, "Candidato experimental")
         self.assertEqual(view.similarity, "0.9123")
         self.assertEqual(view.decision, "Decisión automática: deshabilitada / NOT_EVALUATED")
+        self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
+
+    def test_presenter_uses_safe_structural_messages(self):
+        for message, state in (
+            ("Sin candidatos registrados", "NO_GALLERY"),
+            ("Sin candidatos compatibles", "INCOMPATIBLE"),
+        ):
+            dto = MonitoringDTO(
+                UIState.MONITORING, message, None, None,
+                "deshabilitada / NOT_EVALUATED", True,
+                recognition_state=state,
+            )
+            view = monitoring_text(dto)
+            self.assertEqual(view.headline, message)
+            self.assertEqual(view.candidate, message)
+            self.assertEqual(
+                view.decision, "Decisión automática: deshabilitada / NOT_EVALUATED"
+            )
 
     def test_dto_instances_do_not_contain_numpy_arrays(self):
         values = (

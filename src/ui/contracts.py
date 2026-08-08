@@ -74,6 +74,7 @@ class MonitoringDTO:
     registration_enabled: bool
     quality_score: float | None = None
     quality_band: str | None = None
+    recognition_state: str = "NOT_EVALUATED"
 
 
 @dataclass(frozen=True, slots=True)

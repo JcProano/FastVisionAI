@@ -167,6 +167,13 @@ candidates informational and returns `NOT_EVALUATED`. `NO_GALLERY` and
 threshold and does not enable automatic recognition. Ambiguity compares only the
 best candidate belonging to a different identity.
 
+The experimental UI composes `ExperimentalRecognitionSession` with
+`RecognitionService` only; presentation code no longer calls `FaceMatcher`.
+`RecognitionResult` is reduced to `MonitoringDTO`, including a safe textual
+recognition state. The UI composition root rejects automatic decisions and any
+configured match threshold or ambiguity margin. Enrollment routes frames away
+from the service until monitoring resumes.
+
 ## Runtime and events
 
 `RuntimeRegistry` registers factories while `ModelRuntime` owns initialization,

@@ -39,7 +39,11 @@ class MonitoringText:
 
 
 def monitoring_text(dto: MonitoringDTO) -> MonitoringText:
-    candidate = dto.candidate_display_name or "Sin candidatos registrados"
+    candidate = dto.candidate_display_name or (
+        dto.message if dto.message in {
+            "Sin candidatos registrados", "Sin candidatos compatibles",
+        } else "Sin candidatos registrados"
+    )
     similarity = "—" if dto.similarity is None else f"{dto.similarity:.4f}"
     quality = "—" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
 
