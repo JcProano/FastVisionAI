@@ -87,5 +87,16 @@
     "allow_manual_events": true,
     "policy_name": "attendance_manual_validation",
     "policy_version": "1.0"
+  },
+  "stability": {
+    "enabled": true,
+    "minimum_observations": 5,
+    "minimum_duration_seconds": 1.5,
+    "maximum_gap_seconds": 0.75,
+    "minimum_similarity": null,
+    "reset_on_multiple_faces": true,
+    "reset_on_candidate_change": true,
+    "policy_name": "stability_development",
+    "policy_version": "1.0"
   }
 }

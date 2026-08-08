@@ -87,6 +87,20 @@ class MonitoringDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class StabilityDTO:
+    """Ephemeral scalar projection; temporal continuity is not identity."""
+    state: str
+    person_id: str | None
+    observations_count: int
+    required_observations: int
+    stable_duration_seconds: float
+    required_duration_seconds: float
+    current_similarity: float | None
+    average_similarity: float | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class EnrollmentProgressDTO:
     state: UIState
     instruction: str

@@ -18,6 +18,7 @@ from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
 from src.engine.gallery.persistence import GalleryPersistence
 from src.engine.recognition import RecognitionPolicy, RecognitionService
+from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.core.config_manager import PROJECT_ROOT
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
@@ -298,6 +299,35 @@ def build_attendance(
     return AttendanceUIController(service, repository, people)
 
 
+def build_stability_tracker(settings: dict[str, object]) -> StabilityTracker | None:
+    configuration = settings.get("stability", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("stability configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    policy = StabilityPolicy(
+        enabled=True,
+        minimum_observations=int(configuration.get("minimum_observations", 5)),
+        minimum_duration_seconds=float(
+            configuration.get("minimum_duration_seconds", 1.5)
+        ),
+        maximum_gap_seconds=float(configuration.get("maximum_gap_seconds", 0.75)),
+        minimum_similarity=(
+            None if configuration.get("minimum_similarity") is None
+            else float(configuration["minimum_similarity"])
+        ),
+        reset_on_multiple_faces=bool(
+            configuration.get("reset_on_multiple_faces", True)
+        ),
+        reset_on_candidate_change=bool(
+            configuration.get("reset_on_candidate_change", True)
+        ),
+        policy_name=str(configuration.get("policy_name", "stability_development")),
+        policy_version=str(configuration.get("policy_version", "1.0")),
+    )
+    return StabilityTracker(policy)
+
+
 def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
     camera = settings["camera"]; guided = settings["guided_capture"]
     quality = settings["quality"]; persistence = settings["persistence"]
@@ -341,6 +371,7 @@ def main() -> int:
     person_repository = build_person_repository(settings)
     detection_event_service = build_detection_event_service(settings)
     attendance_controller = build_attendance(settings,person_repository)
+    stability_tracker = build_stability_tracker(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -420,6 +451,7 @@ def main() -> int:
                 record.status.value if (record := person_repository.get_by_person_id(person_id))
                 is not None else None
             )),
+        stability_tracker=stability_tracker,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}

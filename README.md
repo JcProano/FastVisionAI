@@ -347,3 +347,10 @@ marcación en esta fase. `MANUAL_CHECK_IN`/`MANUAL_CHECK_OUT` permanecen diferen
 de los futuros eventos automáticos. El cooldown de duplicados se aplica a acciones
 manuales; el intervalo mínimo entre entrada/salida está reservado para la política
 automática explícita. Los CSV omiten cédula completa, datos civiles y biometría.
+### Stability Tracker (Fase 24)
+
+El tracker mantiene una secuencia temporal efímera por sesión y expone al dashboard
+si un candidato permanece continuo durante el número de observaciones y duración
+configurados. `STABLE` describe exclusivamente continuidad temporal: no confirma
+identidad, no autoriza acceso, no crea asistencia y no filtra eventos. La similitud
+opcional es solo un filtro de estabilidad y permanece deshabilitada por defecto.

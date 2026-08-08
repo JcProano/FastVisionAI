@@ -13,9 +13,11 @@ from enum import Enum
 from pathlib import Path
 
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
+from src.engine.stability import StabilityObservation, StabilityTracker
 from src.ui.contracts import (
     EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
-    RegistrationFormData, RuntimeStatusDTO, UIErrorCode, UIState, VisualFrameDTO,
+    RegistrationFormData, RuntimeStatusDTO, StabilityDTO, UIErrorCode, UIState,
+    VisualFrameDTO,
 )
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import PersistenceCallback
@@ -38,7 +40,7 @@ from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
-           RuntimeStatusDTO | PeopleOperationResultDTO)
+           RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO)
 
 
 class SessionCommandType(str, Enum):
@@ -68,6 +70,7 @@ class LiveFaceSession:
         detection_event_service: DetectionEventService | None = None,
         camera_id: str | None = None,
         administrative_status_resolver: Callable[[str], str | None] | None = None,
+        stability_tracker: StabilityTracker | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -86,6 +89,7 @@ class LiveFaceSession:
         self._detection_events = detection_event_service
         self._camera_id = camera_id
         self._administrative_status_resolver = administrative_status_resolver
+        self._stability = stability_tracker
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -133,8 +137,11 @@ class LiveFaceSession:
         return accepted
 
     def set_event_history_suspended(self, suspended: bool) -> None:
-        if suspended: self._event_history_suspended.set()
-        else: self._event_history_suspended.clear()
+        if suspended:
+            self._event_history_suspended.set()
+            self._reset_stability(emit=True)
+        else:
+            self._event_history_suspended.clear()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -236,6 +243,7 @@ class LiveFaceSession:
             self.adapter.close()
             if self.controller.enrollment.active:
                 self.controller.cancel_enrollment()
+            self._reset_stability(emit=False)
             if self._people is not None and self._additional_person_id is not None:
                 self._people.cancel_additional()
                 self._additional_person_id = None
@@ -258,6 +266,7 @@ class LiveFaceSession:
                 self._clear_thumbnail_samples()
                 self.adapter.set_thumbnail_capture(False)
                 self.adapter.new_evaluator()
+                self._reset_stability(emit=True)
                 self._event(MonitoringDTO(
                     UIState.MONITORING, "Registro cancelado", None, None,
                     "deshabilitada / NOT_EVALUATED", True,
@@ -268,6 +277,7 @@ class LiveFaceSession:
                                 "Ya existe un registro guiado activo.", True)
                     continue
                 try:
+                    self._reset_stability(emit=True)
                     plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     progress = self.controller.begin_enrollment(command.form)
                     self.adapter.new_evaluator()
@@ -303,6 +313,7 @@ class LiveFaceSession:
                                 "El administrador de personas no está disponible.", False)
                     continue
                 try:
+                    self._reset_stability(emit=True)
                     started = self._people.begin_additional(command.person_id)
                     if not started.success:
                         self._event(started)
@@ -353,6 +364,15 @@ class LiveFaceSession:
             self._event(error)
 
     def _emit_monitoring(self, dto: MonitoringDTO) -> None:
+        stability = getattr(self, "_stability", None)
+        if stability is not None:
+            face_count = (0 if dto.state is UIState.NO_FACE else
+                          2 if dto.state is UIState.MULTIPLE_FACES else 1)
+            result = stability.observe(StabilityObservation(
+                None, dto.candidate_person_id, dto.recognition_state, dto.similarity,
+                face_count, dto.quality_score, self._session_id,
+            ))
+            self._event(_stability_dto(result, stability))
         if self._detection_events is not None and not self._event_history_suspended.is_set():
             event_type = None
             if dto.state is UIState.MULTIPLE_FACES:
@@ -379,6 +399,14 @@ class LiveFaceSession:
                     status, self._session_id,
                 ))
         self._event(dto)
+
+    def _reset_stability(self, *, emit: bool) -> None:
+        stability = getattr(self, "_stability", None)
+        if stability is None:
+            return
+        result = stability.reset()
+        if emit:
+            self._event(_stability_dto(result, stability))
 
     def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
         plan = self._plan
@@ -590,3 +618,12 @@ def _dashboard_quality(guided: object) -> DashboardQualityDTO:
 
 def _offset(x: float | None, y: float | None) -> float | None:
     return None if x is None or y is None else math.hypot(x, y)
+
+
+def _stability_dto(result, tracker: StabilityTracker) -> StabilityDTO:
+    return StabilityDTO(
+        result.state.value, result.person_id, result.observations_count,
+        tracker.policy.minimum_observations, result.stable_duration_seconds,
+        tracker.policy.minimum_duration_seconds, result.current_similarity,
+        result.average_similarity, result.reason,
+    )

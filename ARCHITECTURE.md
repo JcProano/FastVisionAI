@@ -274,3 +274,11 @@ degradan de forma segura si SQLite no está disponible. No existe conexión desd
 `DetectionEventService` ni `LiveFaceSession`: `evaluate_observation()` es inocuo cuando
 la decisión automática está deshabilitada. Las conexiones SQLite son por operación,
 con SQL parametrizado, transacciones explícitas y migración versionada.
+## Stability Tracker (Fase 24)
+
+`StabilityTracker` recibe observaciones escalares ya seguras desde `LiveFaceSession`
+y produce una salida paralela `StabilityResult`. Cada instancia representa una sola
+sesión/cámara y protege su estado con `RLock`. El estado se reinicia durante formulario
+y enrollment, no se persiste y no entra en `RecognitionResult`, Gallery, events.db ni
+attendance.db. El dashboard consume exclusivamente `StabilityDTO`; el popup conserva
+su mecanismo anterior de estabilidad por frames.

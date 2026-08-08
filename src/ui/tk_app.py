@@ -21,7 +21,7 @@ from src.ui.contracts import (
     ErrorDTO,
     MonitoringDTO,
     RegistrationFormData,
-    RuntimeStatusDTO,
+    RuntimeStatusDTO, StabilityDTO,
     UIErrorCode,
     UIState,
 )
@@ -48,6 +48,26 @@ class MonitoringText:
     similarity: str
     decision: str
     quality: str
+
+
+@dataclass(frozen=True, slots=True)
+class StabilityText:
+    state: str
+    observations: str
+    duration: str
+    average_similarity: str
+
+
+def stability_text(dto: StabilityDTO | None) -> StabilityText:
+    if dto is None:
+        return StabilityText("N/D", "N/D", "N/D", "N/D")
+    average = "N/D" if dto.average_similarity is None else f"{dto.average_similarity:.4f}"
+    return StabilityText(
+        dto.state,
+        f"{dto.observations_count}/{dto.required_observations}",
+        f"{dto.stable_duration_seconds:.1f} / {dto.required_duration_seconds:.1f} s",
+        average,
+    )
 
 
 def monitoring_text(dto: MonitoringDTO) -> MonitoringText:
@@ -119,6 +139,7 @@ class LocalFaceTkApp:
         self._enrollment_active = False
         self._registration_form_open = False
         self._closing = False
+        self._stability: StabilityDTO | None = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -179,6 +200,15 @@ class LocalFaceTkApp:
         self.decision = ttk.Label(candidate_card, text="Decisión automática: deshabilitada / NOT_EVALUATED")
         self.decision.pack(anchor="w")
         self.quality = ttk.Label(candidate_card, text="Score: —"); self.quality.pack(anchor="w")
+
+        stability_card = ttk.LabelFrame(side, text="Estabilidad", padding=6)
+        stability_card.pack(fill="x", pady=6)
+        self.stability_status = ttk.Label(
+            stability_card,
+            text="Estado: N/D\nObservaciones: N/D\nDuración: N/D\nSimilitud media: N/D",
+            justify="left",
+        )
+        self.stability_status.pack(anchor="w")
 
         history_card = ttk.LabelFrame(side, text="Historial temporal", padding=6)
         history_card.pack(fill="both", expand=True, pady=6)
@@ -394,6 +424,10 @@ class LocalFaceTkApp:
             elif isinstance(event, PeopleOperationResultDTO):
                 self.status.configure(text=event.message)
 
+            elif isinstance(event, StabilityDTO):
+                self._stability = event
+                self._refresh_stability()
+
         now = time.monotonic()
         if now - self._last_dashboard_refresh >= self._metrics_refresh_seconds:
             self._refresh_dashboard()
@@ -451,6 +485,15 @@ class LocalFaceTkApp:
                 item=self._get_attendance_summary();last=item.last_event_at or "N/D"
                 self.attendance_summary.configure(text=f"Entradas: {item.total_check_ins}\nSalidas: {item.total_check_outs}\nPersonas únicas: {item.unique_people}\nÚltima marcación: {last}")
             except Exception:self.attendance_summary.configure(text="Asistencia no disponible")
+
+    def _refresh_stability(self) -> None:
+        value = stability_text(self._stability)
+        self.stability_status.configure(text=(
+            f"Estado: {value.state}\n"
+            f"Observaciones: {value.observations}\n"
+            f"Duración: {value.duration}\n"
+            f"Similitud media: {value.average_similarity}"
+        ))
 
     def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:
         """Load only when candidate identity changes, never once per video frame."""
