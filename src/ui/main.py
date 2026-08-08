@@ -29,6 +29,9 @@ from src.ui.form_validation import validate_registration_form
 from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
 from src.ui.people.controller import PeopleManagerController
 from src.ui.people.tk_window import PeopleManagerWindow
+from src.ui.dashboard.config_window import DashboardConfigurationWindow
+from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
+from src.ui.thumbnails import ThumbnailManager
 from src.validation.guided_face_capture import load_guided_profile
 
 
@@ -105,6 +108,23 @@ def build_persistence(
     )
 
 
+def build_thumbnail_manager(
+    settings: dict[str, object], project_root: Path = PROJECT_ROOT,
+) -> ThumbnailManager:
+    thumbnail = settings.get("thumbnails", {})
+    if not isinstance(thumbnail, dict):
+        raise ValueError("thumbnail configuration must be an object")
+    return ThumbnailManager(
+        project_root, Path(str(thumbnail.get("directory", "data/ui_validation/thumbnails"))),
+        enabled=bool(thumbnail.get("enabled", False)),
+        width=int(thumbnail.get("width", 224)),
+        height=int(thumbnail.get("height", 224)),
+        image_format=str(thumbnail.get("format", "jpeg")),
+        jpeg_quality=int(thumbnail.get("jpeg_quality", 90)),
+        replace_existing=bool(thumbnail.get("replace_existing", False)),
+    )
+
+
 def build_controller(
     config_path: Path, gallery: FaceGallery | None = None,
 ) -> LocalFaceUIController:
@@ -150,6 +170,27 @@ def build_controller(
     return LocalFaceUIController(ExperimentalRecognitionSession(recognition_service), workflow)
 
 
+def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
+    camera = settings["camera"]; guided = settings["guided_capture"]
+    quality = settings["quality"]; persistence = settings["persistence"]
+    recognition = settings["recognition"]
+    if not all(isinstance(item, dict) for item in (
+        camera, guided, quality, persistence, recognition,
+    )):
+        raise ValueError("dashboard configuration sections must be objects")
+    return DashboardConfigurationDTO(
+        str(camera.get("source", "N/D")), str(camera.get("resolution", "N/D")),
+        bool(guided.get("mirrored_source", False)), str(guided.get("policy_file", "N/D")),
+        str(quality.get("profile_file", "N/D")), int(guided["target_samples"]),
+        bool(persistence.get("enabled_by_default", False)),
+        bool(persistence.get("load_on_startup", False)),
+        str(recognition["policy_name"]), str(recognition["policy_version"]),
+        bool(recognition["automatic_decision_enabled"]),
+        "N/D" if recognition.get("match_threshold") is None else str(recognition["match_threshold"]),
+        "N/D" if recognition.get("ambiguity_margin") is None else str(recognition["ambiguity_margin"]),
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="UI facial local experimental")
     parser.add_argument("--config", type=Path,
@@ -171,19 +212,24 @@ def main() -> int:
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     controller = build_controller(args.config, startup.gallery)
     persistence, manifest_path, archive_path = build_persistence(settings)
+    thumbnail_manager = build_thumbnail_manager(settings)
     people_controller = PeopleManagerController(
         startup.gallery, controller.enrollment.enrollment,
         GalleryPersistence(enabled=True), manifest_path, archive_path,
     )
     try:
         import tkinter as tk
+        from tkinter import messagebox
     except ModuleNotFoundError as exc:
         raise RuntimeError(
             "Tkinter no está disponible en este entorno; no se instalaron dependencias"
         ) from exc
     cancel_event = threading.Event()
     if args.mock_camera:
-        adapter = MockUIRuntimeAdapter(delay=float(settings["worker"]["mock_frame_delay_seconds"]))
+        adapter = MockUIRuntimeAdapter(
+            delay=float(settings["worker"]["mock_frame_delay_seconds"]),
+            thumbnail_capture_enabled=thumbnail_manager.enabled,
+        )
     else:
         policy_path = Path(settings["guided_capture"]["policy_file"])
         quality_path = Path(settings["quality"]["profile_file"])
@@ -192,6 +238,7 @@ def main() -> int:
             policy=load_guided_profile(policy_path).policy,
             quality_profile_path=quality_path,
             cancel_event=cancel_event,
+            thumbnail_capture_enabled=thumbnail_manager.enabled,
         )
     session = LiveFaceSession(
         adapter, controller,
@@ -203,9 +250,11 @@ def main() -> int:
         manifest_path=manifest_path,
         archive_path=archive_path,
         people_controller=people_controller,
+        thumbnail_manager=thumbnail_manager,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}
+    configuration_window: dict[str, DashboardConfigurationWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -214,18 +263,51 @@ def main() -> int:
         window = people_window.pop("window", None)
         if window is not None and window.window.winfo_exists():
             window.close()
+        config_window = configuration_window.pop("window", None)
+        if config_window is not None and config_window.window.winfo_exists():
+            config_window.close()
         session.close()
 
     def open_people():
         current = people_window.get("window")
         if current is not None and current.window.winfo_exists():
             current.window.lift()
+            current.window.focus_force()
             return
         people_window["window"] = PeopleManagerWindow(
             root, people_controller,
             on_additional=session.start_additional_enrollment,
             on_cancel_additional=session.cancel_enrollment,
+            thumbnail_manager=thumbnail_manager,
         )
+
+    def open_configuration():
+        current = configuration_window.get("window")
+        if current is not None and current.window.winfo_exists():
+            current.focus()
+            return
+        configuration_window["window"] = DashboardConfigurationWindow(
+            root, build_dashboard_configuration(settings)
+        )
+
+    def gallery_summary() -> DashboardGalleryDTO:
+        listing = people_controller.list_people()
+        return DashboardGalleryDTO(
+            listing.total_identities, listing.total_templates, listing.state.value
+        )
+
+    def save_gallery():
+        targets_exist = manifest_path.exists() or archive_path.exists()
+        overwrite = False
+        if targets_exist:
+            overwrite = messagebox.askyesno(
+                "Sobrescribir galería",
+                "La galería local ya existe. ¿Desea sobrescribirla?",
+                parent=root,
+            )
+            if not overwrite:
+                return None
+        return people_controller.save_changes(overwrite_confirmed=overwrite)
 
     app = LocalFaceTkApp(
         root,
@@ -233,6 +315,11 @@ def main() -> int:
         on_cancel=session.cancel_enrollment,
         on_close=close,
         on_people=open_people,
+        on_configuration=open_configuration,
+        on_save_gallery=save_gallery,
+        get_gallery=gallery_summary,
+        dashboard_settings=settings.get("dashboard", {}),
+        get_thumbnail=thumbnail_manager.load,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

@@ -44,12 +44,14 @@ class ProcessingStep:
     visual: VisualFrameDTO
     face_count: int
     guided: GuidedCaptureResult
+    aligned_face_bytes: bytes | None = None
 
 
 class UIRuntimeAdapter(Protocol):
     def open(self) -> bool: ...
     def process(self, requested_pose: CapturePose) -> ProcessingStep: ...
     def new_evaluator(self) -> None: ...
+    def set_thumbnail_capture(self, enabled: bool) -> None: ...
     def status(self) -> RuntimeStatusDTO: ...
     def close(self) -> None: ...
 
@@ -60,6 +62,7 @@ class RealUIRuntimeAdapter:
     def __init__(
         self, *, source: int | str, policy: GuidedCapturePolicy,
         quality_profile_path: Path, cancel_event: threading.Event,
+        thumbnail_capture_enabled: bool = False,
     ) -> None:
         config = load_config()
         face = next(item for item in config.pipeline.plugins.plugins if item.id == "face_detector")
@@ -89,6 +92,8 @@ class RealUIRuntimeAdapter:
         self._preprocessor = MinimalPreprocessor()
         self._run_id = f"ui-{uuid.uuid4()}"
         self._closed = False
+        self._thumbnail_capture_configured = thumbnail_capture_enabled
+        self._thumbnail_capture_active = False
 
     def open(self) -> bool:
         self._runtime.prepare()
@@ -96,6 +101,9 @@ class RealUIRuntimeAdapter:
 
     def new_evaluator(self) -> None:
         self._evaluator = FaceCaptureQualityEvaluator(self._policy)
+
+    def set_thumbnail_capture(self, enabled: bool) -> None:
+        self._thumbnail_capture_active = self._thumbnail_capture_configured and enabled
 
     def process(self, requested_pose: CapturePose) -> ProcessingStep:
         read = self._camera.read()
@@ -137,7 +145,12 @@ class RealUIRuntimeAdapter:
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         visual = VisualFrameDTO(frame.width, frame.height, rgb.tobytes(order="C"), frame.sequence_id)
-        return ProcessingStep(visual, len(inference.detections), guided)
+        thumbnail_bytes = None
+        if self._thumbnail_capture_active and guided.accepted and len(aligned) == 1:
+            encoded, payload = cv2.imencode(".png", aligned[0].image)
+            if encoded:
+                thumbnail_bytes = payload.tobytes()
+        return ProcessingStep(visual, len(inference.detections), guided, thumbnail_bytes)
 
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO(

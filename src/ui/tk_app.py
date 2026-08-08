@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import time
 from typing import Any
 
 try:  # Tk is an optional OS component and is not required by headless tests.
@@ -27,6 +28,10 @@ from src.ui.form_validation import (
     validate_registration_form,
 )
 from src.ui.people.contracts import PeopleOperationResultDTO
+from src.ui.dashboard.contracts import DashboardGalleryDTO
+from src.ui.dashboard.state import DashboardStateStore
+from src.ui.thumbnails import ThumbnailDTO
+from src.ui.thumbnails.presentation import thumbnail_to_ppm
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +72,11 @@ class LocalFaceTkApp:
         on_cancel: Callable[[], None],
         on_close: Callable[[], None],
         on_people: Callable[[], None] | None = None,
+        on_configuration: Callable[[], None] | None = None,
+        on_save_gallery: Callable[[], object] | None = None,
+        get_gallery: Callable[[], DashboardGalleryDTO] | None = None,
+        dashboard_settings: dict[str, object] | None = None,
+        get_thumbnail: Callable[[str], ThumbnailDTO] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -79,124 +89,98 @@ class LocalFaceTkApp:
         self._on_cancel = on_cancel
         self._on_close = on_close
         self._on_people = on_people
+        self._on_configuration = on_configuration
+        self._on_save_gallery = on_save_gallery
+        self._get_gallery = get_gallery
+        self._get_thumbnail = get_thumbnail
+        self._thumbnail_person_id: str | None = None
+        self._thumbnail_photo: tk.PhotoImage | None = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
+        settings = dashboard_settings or {}
+        self._dashboard = DashboardStateStore(
+            int(settings.get("history_limit", 100)),
+            float(settings.get("event_debounce_seconds", 2.0)),
+        )
+        self._history_rendered: tuple[object, ...] = ()
+        self._diagnostic_visible = False
+        self._metrics_refresh_seconds = float(settings.get("metrics_refresh_ms", 250)) / 1000.0
+        self._last_dashboard_refresh = float("-inf")
 
-        root.title("FastVisionAI — validación facial experimental")
+        root.title("FastVisionAI — Dashboard local experimental")
+        root.geometry(
+            f"{int(settings.get('initial_width', 1100))}x"
+            f"{int(settings.get('initial_height', 720))}"
+        )
+        root.minsize(
+            int(settings.get("minimum_width", 820)),
+            int(settings.get("minimum_height", 600)),
+        )
         root.protocol("WM_DELETE_WINDOW", self.close)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(1, weight=1)
+        header = ttk.Frame(root, padding=(12, 8)); header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+        ttk.Label(header, text="FASTVISION AI", style="Title.TLabel").grid(row=0, column=0, sticky="w")
+        self.header_state = ttk.Label(header, text="Cámara ●  Runtime ●")
+        self.header_state.grid(row=0, column=1, sticky="e")
 
-        self.video = ttk.Label(root, text="Vista local sin frame")
-        self.video.grid(
-            row=0,
-            column=0,
-            columnspan=2,
-            padx=12,
-            pady=12,
-        )
+        body = ttk.Frame(root, padding=(10, 4)); body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=3); body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+        video_card = ttk.LabelFrame(body, text="VIDEO EN VIVO", padding=6)
+        video_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        video_card.columnconfigure(0, weight=1); video_card.rowconfigure(0, weight=1)
+        self.video = ttk.Label(video_card, text="Vista local sin frame", anchor="center")
+        self.video.grid(row=0, column=0, sticky="nsew")
 
-        self.status = ttk.Label(root, text="Iniciando…")
-        self.status.grid(
-            row=1,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            padx=12,
-        )
+        side = ttk.Frame(body); side.grid(row=0, column=1, sticky="nsew")
+        system_card = ttk.LabelFrame(side, text="Estado del sistema", padding=8)
+        system_card.pack(fill="x", pady=(0, 6))
+        self.runtime_status = ttk.Label(system_card, text="Cámara: N/D\nRuntime: N/D\nYuNet: N/D\nArcFace: N/D")
+        self.runtime_status.pack(anchor="w")
+        self.gallery_status = ttk.Label(system_card, text="Personas: 0\nTemplates: 0")
+        self.gallery_status.pack(anchor="w", pady=(6, 0))
 
-        self.candidate = ttk.Label(
-            root,
-            text="Sin candidatos registrados",
+        candidate_card = ttk.LabelFrame(side, text="Candidato experimental", padding=8)
+        candidate_card.pack(fill="x", pady=6)
+        self.candidate_thumbnail = ttk.Label(
+            candidate_card, text="Sin foto registrada", anchor="center",
         )
-        self.candidate.grid(
-            row=2,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            padx=12,
-        )
+        self.candidate_thumbnail.pack(anchor="center", pady=(0, 5))
+        self.status = ttk.Label(candidate_card, text="Iniciando…"); self.status.pack(anchor="w")
+        self.candidate = ttk.Label(candidate_card, text="Sin candidatos registrados"); self.candidate.pack(anchor="w")
+        self.similarity = ttk.Label(candidate_card, text="Similitud: —"); self.similarity.pack(anchor="w")
+        self.decision = ttk.Label(candidate_card, text="Decisión automática: deshabilitada / NOT_EVALUATED")
+        self.decision.pack(anchor="w")
+        self.quality = ttk.Label(candidate_card, text="Score: —"); self.quality.pack(anchor="w")
 
-        self.similarity = ttk.Label(
-            root,
-            text="Similitud: —",
-        )
-        self.similarity.grid(
-            row=3,
-            column=0,
-            sticky="w",
-            padx=12,
-        )
+        history_card = ttk.LabelFrame(side, text="Historial temporal", padding=6)
+        history_card.pack(fill="both", expand=True, pady=6)
+        self.history = tk.Listbox(history_card, height=6, activestyle="none")
+        self.history.pack(fill="both", expand=True)
 
-        self.decision = ttk.Label(
-            root,
-            text="Decisión automática: deshabilitada / NOT_EVALUATED",
-        )
-        self.decision.grid(
-            row=4,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            padx=12,
-        )
+        self.diagnostic_card = ttk.LabelFrame(root, text="Diagnóstico de calidad", padding=6)
+        self.diagnostic_values = ttk.Label(self.diagnostic_card, text="N/D")
+        self.diagnostic_values.pack(anchor="w")
 
-        self.quality = ttk.Label(
-            root,
-            text="Calidad: —",
-        )
-        self.quality.grid(
-            row=5,
-            column=0,
-            sticky="w",
-            padx=12,
-        )
+        metrics_card = ttk.LabelFrame(root, text="Métricas de sesión", padding=6)
+        metrics_card.grid(row=3, column=0, sticky="ew", padx=10, pady=4)
+        self.metrics = ttk.Label(metrics_card, text="Captura FPS: N/D | Pipeline FPS: N/D | Latencia inferencia: N/D")
+        self.metrics.pack(anchor="w")
 
-        self.runtime_status = ttk.Label(
-            root,
-            text="Cámara: iniciando | Runtime: iniciando",
-        )
-        self.runtime_status.grid(
-            row=6,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            padx=12,
-        )
-
-        self.register_button = ttk.Button(
-            root,
-            text="Registrar rostro",
-            command=self.open_form,
-        )
-        self.register_button.grid(
-            row=7,
-            column=0,
-            padx=12,
-            pady=12,
-            sticky="w",
-        )
-
-        self.cancel_button = ttk.Button(
-            root,
-            text="Cancelar",
-            command=self._cancel,
-            state="disabled",
-        )
-        self.cancel_button.grid(
-            row=7,
-            column=1,
-            padx=12,
-            pady=12,
-            sticky="e",
-        )
-
-        self.people_button = ttk.Button(
-            root,
-            text="Personas registradas",
-            command=on_people if on_people is not None else lambda: None,
-        )
-        self.people_button.grid(
-            row=8, column=0, columnspan=2, padx=12, pady=6,
-        )
+        actions = ttk.Frame(root, padding=(10, 6)); actions.grid(row=4, column=0, sticky="ew")
+        self.register_button = ttk.Button(actions, text="Registrar rostro", command=self.open_form)
+        self.register_button.pack(side="left", padx=3)
+        self.people_button = ttk.Button(actions, text="Personas registradas", command=on_people or (lambda: None))
+        self.people_button.pack(side="left", padx=3)
+        ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
+        ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)
+        ttk.Button(actions, text="Guardar galería", command=self._save_gallery).pack(side="left", padx=3)
+        self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._cancel, state="disabled")
+        self.cancel_button.pack(side="left", padx=3)
+        ttk.Button(actions, text="Salir", command=self.close).pack(side="right", padx=3)
 
     def show_monitoring(self, dto: MonitoringDTO) -> None:
         view = monitoring_text(dto)
@@ -272,11 +256,14 @@ class LocalFaceTkApp:
     ) -> None:
         self.runtime_status.configure(
             text=(
-                f"Cámara: {dto.camera_state} | "
-                f"Runtime: {dto.runtime_state} | "
-                f"YuNet: {dto.detector_model_state} | "
+                f"Cámara: {dto.camera_state}\n"
+                f"Runtime: {dto.runtime_state}\n"
+                f"YuNet: {dto.detector_model_state}\n"
                 f"ArcFace: {dto.embedding_model_state}"
             )
+        )
+        self.header_state.configure(
+            text=f"Cámara ● {dto.camera_state}   Runtime ● {dto.runtime_state}"
         )
 
     def poll_session(
@@ -296,7 +283,17 @@ class LocalFaceTkApp:
             )
             del visual
 
+        metrics, quality = session.dashboard_telemetry()
+        self._dashboard.update_metrics(metrics)
+        self._dashboard.update_quality(quality)
+        if self._get_gallery is not None:
+            try:
+                self._dashboard.update_gallery(self._get_gallery())
+            except Exception:
+                pass
+
         for event in session.drain_events():
+            self._dashboard.consume(event)
 
             if isinstance(event, MonitoringDTO):
                 self.show_monitoring(event)
@@ -325,6 +322,11 @@ class LocalFaceTkApp:
             elif isinstance(event, PeopleOperationResultDTO):
                 self.status.configure(text=event.message)
 
+        now = time.monotonic()
+        if now - self._last_dashboard_refresh >= self._metrics_refresh_seconds:
+            self._refresh_dashboard()
+            self._last_dashboard_refresh = now
+
         if self.root.winfo_exists():
             self.root.after(
                 interval_ms,
@@ -332,6 +334,66 @@ class LocalFaceTkApp:
                 session,
                 interval_ms,
             )
+
+    def _refresh_dashboard(self) -> None:
+        metrics = self._dashboard.metrics
+        self.metrics.configure(text=(
+            f"Captura efectiva FPS: {_number(metrics.effective_capture_fps)} | "
+            f"Pipeline FPS: {_number(metrics.effective_processing_fps)} | "
+            f"Latencia inferencia: {_number(metrics.inference_latency_ms, ' ms')} | "
+            f"Frames: {metrics.frames_received}/{metrics.frames_processed} | "
+            f"Descartados: {metrics.visual_frames_dropped} | "
+            f"Rostros: {metrics.faces_detected_current} ({metrics.faces_detected_total}) | "
+            f"Embeddings: {metrics.embeddings_generated} | Uptime: {metrics.uptime_seconds:.1f}s"
+        ))
+        gallery = self._dashboard.gallery
+        self.gallery_status.configure(
+            text=f"Personas: {gallery.identities}\nTemplates: {gallery.templates}"
+        )
+        self._refresh_candidate_thumbnail(self._dashboard.recognition.person_id)
+        quality = self._dashboard.quality
+        self.diagnostic_values.configure(text="\n".join(
+            f"{item.name}: {_value(item.value)} — {item.state.value}"
+            for item in quality.metrics
+        ) or "N/D")
+        current_history = self._dashboard.history
+        if current_history != self._history_rendered:
+            self.history.delete(0, "end")
+            for item in current_history:
+                suffix = f" — {item.display_name}" if item.display_name else ""
+                self.history.insert("end", f"{item.timestamp:%H:%M:%S} {item.message}{suffix}")
+            self._history_rendered = current_history
+
+    def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:
+        """Load only when candidate identity changes, never once per video frame."""
+        if person_id != self._thumbnail_person_id:
+            self._thumbnail_person_id = person_id
+            self._thumbnail_photo = None
+            self.candidate_thumbnail.configure(image="", text="Sin foto registrada")
+            if person_id is not None and self._get_thumbnail is not None:
+                try:
+                    payload = thumbnail_to_ppm(self._get_thumbnail(person_id))
+                    if payload is not None:
+                        photo = tk.PhotoImage(data=payload, format="PPM")
+                        self.candidate_thumbnail.configure(image=photo, text="")
+                        self._thumbnail_photo = photo
+                except Exception:
+                    self.candidate_thumbnail.configure(image="", text="Sin foto registrada")
+
+    def toggle_diagnostic(self) -> None:
+        if self._diagnostic_visible:
+            self.diagnostic_card.grid_remove()
+        else:
+            self.diagnostic_card.grid(row=2, column=0, sticky="ew", padx=10, pady=4)
+        self._diagnostic_visible = not self._diagnostic_visible
+
+    def _save_gallery(self) -> None:
+        if self._on_save_gallery is None:
+            return
+        result = self._on_save_gallery()
+        message = getattr(result, "message", None)
+        if message:
+            self.status.configure(text=message)
 
     def show_rgb_frame(
         self,
@@ -596,3 +658,13 @@ class LocalFaceTkApp:
 
         if self.root.winfo_exists():
             self.root.destroy()
+
+
+def _number(value: float | None, suffix: str = "") -> str:
+    return "N/D" if value is None else f"{value:.1f}{suffix}"
+
+
+def _value(value: float | str | None) -> str:
+    if value is None:
+        return "N/D"
+    return f"{value:.3f}" if isinstance(value, float) else str(value)

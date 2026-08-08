@@ -20,7 +20,8 @@ from src.ui.runtime_adapter import CameraAdapterError, InferenceAdapterError, Pr
 class MockUIRuntimeAdapter:
     def __init__(self, *, fail_camera_at: set[int] | None = None,
                  fail_inference_at: set[int] | None = None, delay: float = .01,
-                 multiple_at: set[int] | None = None) -> None:
+                 multiple_at: set[int] | None = None,
+                 thumbnail_capture_enabled: bool = False) -> None:
         self.fail_camera_at = fail_camera_at or set()
         self.fail_inference_at = fail_inference_at or set()
         self.multiple_at = multiple_at or set()
@@ -28,6 +29,8 @@ class MockUIRuntimeAdapter:
         self.sequence = 0
         self.closed = False
         self.opened = False
+        self.thumbnail_capture_enabled = thumbnail_capture_enabled
+        self.thumbnail_capture_active = False
 
     def open(self) -> bool:
         self.opened = True
@@ -35,6 +38,9 @@ class MockUIRuntimeAdapter:
 
     def new_evaluator(self) -> None:
         pass
+
+    def set_thumbnail_capture(self, enabled: bool) -> None:
+        self.thumbnail_capture_active = self.thumbnail_capture_enabled and enabled
 
     def process(self, requested_pose: CapturePose) -> ProcessingStep:
         time.sleep(self.delay)
@@ -77,7 +83,14 @@ class MockUIRuntimeAdapter:
                 True, True, True, metrics, requested_pose, requested_pose, 0,
                 "mock-run", datetime.now(timezone.utc), embedding, score,
             )
-        return ProcessingStep(visual, count, guided)
+        thumbnail_bytes = None
+        if self.thumbnail_capture_active and guided.accepted:
+            import cv2
+            aligned = np.full((112, 112, 3), 80 + self.sequence % 80, np.uint8)
+            encoded, payload = cv2.imencode(".png", aligned)
+            if encoded:
+                thumbnail_bytes = payload.tobytes()
+        return ProcessingStep(visual, count, guided, thumbnail_bytes)
 
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO("connected" if self.opened else "disconnected",

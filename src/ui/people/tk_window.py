@@ -13,18 +13,23 @@ except ModuleNotFoundError:  # pragma: no cover
 
 from src.ui.people.controller import PeopleManagerController
 from src.ui.people.contracts import PeopleManagerState, PersonSummaryDTO
+from src.ui.thumbnails import ThumbnailError, ThumbnailManager
+from src.ui.thumbnails.presentation import thumbnail_to_ppm
 
 
 class PeopleManagerWindow:
     def __init__(
         self, root: Any, controller: PeopleManagerController, *,
         on_additional: Callable[[str], bool], on_cancel_additional: Callable[[], bool],
+        thumbnail_manager: ThumbnailManager | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError("Tkinter no está disponible")
         self.controller = controller
         self._on_additional = on_additional
         self._on_cancel_additional = on_cancel_additional
+        self._thumbnails = thumbnail_manager
+        self._thumbnail_photo: Any | None = None
         self.window = tk.Toplevel(root)
         self.window.title("Personas registradas")
         self.window.protocol("WM_DELETE_WINDOW", self.close)
@@ -43,6 +48,7 @@ class PeopleManagerWindow:
         )):
             self.table.heading(key, text=label)
         self.table.grid(row=2, column=0, columnspan=7, sticky="nsew", padx=8, pady=8)
+        self.table.bind("<<TreeviewSelect>>", lambda _event: self._show_thumbnail())
         actions = (
             ("Editar", self.edit), ("Eliminar", self.delete),
             ("Agregar muestras", self.add_samples), ("Refrescar", self.refresh),
@@ -61,6 +67,16 @@ class PeopleManagerWindow:
         self.cancel_additional_button.grid(row=4, column=6, padx=4, pady=4)
         self.status = ttk.Label(self.window, text="IDLE")
         self.status.grid(row=4, column=0, columnspan=6, sticky="w", padx=8)
+        self.thumbnail = ttk.Label(self.window, text="Sin foto registrada", anchor="center")
+        self.thumbnail.grid(row=5, column=0, columnspan=5, sticky="w", padx=8, pady=6)
+        self.update_thumbnail_button = ttk.Button(
+            self.window, text="Actualizar foto", command=self.update_thumbnail,
+        )
+        self.update_thumbnail_button.grid(row=5, column=5, padx=4)
+        self.delete_thumbnail_button = ttk.Button(
+            self.window, text="Eliminar foto", command=self.delete_thumbnail,
+        )
+        self.delete_thumbnail_button.grid(row=5, column=6, padx=4)
         self.window.rowconfigure(2, weight=1)
         self.window.columnconfigure(1, weight=1)
         self.refresh()
@@ -82,6 +98,59 @@ class PeopleManagerWindow:
     def selected(self) -> PersonSummaryDTO | None:
         selection = self.table.selection()
         return self.controller.details(selection[0]).summary if selection else None
+
+    def _show_thumbnail(self) -> None:
+        person = self.selected()
+        self._thumbnail_photo = None
+        self.thumbnail.configure(image="", text="Sin foto registrada")
+        if person is None or self._thumbnails is None:
+            return
+        try:
+            dto = self._thumbnails.load(person.person_id)
+            if not dto.available:
+                return
+            self._thumbnail_photo = tk.PhotoImage(data=thumbnail_to_ppm(dto), format="PPM")
+            self.thumbnail.configure(image=self._thumbnail_photo, text="")
+        except Exception:
+            self.status.configure(text="No se pudo cargar la foto visual.")
+
+    def update_thumbnail(self) -> None:
+        person = self.selected()
+        if person is None or self._thumbnails is None:
+            return
+        selected = filedialog.askopenfilename(
+            parent=self.window,
+            filetypes=[("Imágenes", "*.jpg *.jpeg *.png"), ("Todos", "*")],
+        )
+        if not selected:
+            return
+        replace = self._thumbnails.exists(person.person_id)
+        if replace and not messagebox.askyesno(
+            "Reemplazar foto", "¿Reemplazar la foto visual registrada?", parent=self.window,
+        ):
+            return
+        try:
+            payload = Path(selected).read_bytes()
+            self._thumbnails.save(person.person_id, payload, replace=replace)
+            self.status.configure(text="Foto visual actualizada.")
+            self._show_thumbnail()
+        except (OSError, ThumbnailError, ValueError):
+            self.status.configure(text="La imagen seleccionada no es válida o no pudo guardarse.")
+
+    def delete_thumbnail(self) -> None:
+        person = self.selected()
+        if person is None or self._thumbnails is None:
+            return
+        if not messagebox.askyesno(
+            "Eliminar foto", "¿Eliminar únicamente la foto visual?", parent=self.window,
+        ):
+            return
+        try:
+            deleted = self._thumbnails.delete(person.person_id)
+            self.status.configure(text="Foto eliminada." if deleted else "Sin foto registrada")
+            self._show_thumbnail()
+        except ThumbnailError:
+            self.status.configure(text="No se pudo eliminar la foto visual.")
 
     def edit(self) -> None:
         person = self.selected()
@@ -184,6 +253,8 @@ class PeopleManagerWindow:
         for button in self.buttons:
             button.configure(state="disabled" if busy else "normal")
         self.cancel_additional_button.configure(state="normal" if busy else "disabled")
+        self.update_thumbnail_button.configure(state="disabled" if busy else "normal")
+        self.delete_thumbnail_button.configure(state="disabled" if busy else "normal")
         self.window.after(200, self._poll_state)
 
     def close(self) -> None:

@@ -28,6 +28,7 @@ class UIErrorCode(str, Enum):
     MATCHER_ERROR = "matcher_error"
     ENROLLMENT_ERROR = "enrollment_error"
     PERSISTENCE_ERROR = "persistence_error"
+    THUMBNAIL_ERROR = "thumbnail_error"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +76,7 @@ class MonitoringDTO:
     quality_score: float | None = None
     quality_band: str | None = None
     recognition_state: str = "NOT_EVALUATED"
+    candidate_person_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

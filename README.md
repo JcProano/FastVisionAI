@@ -1,5 +1,9 @@
 # FastVisionAI
 
+Las miniaturas opcionales de la UI son archivos visuales sensibles separados de
+la galería biométrica. No se usan para comparar rostros ni tomar decisiones y no
+se incluyen al importar o exportar JSON+NPZ.
+
 FastVisionAI is a modular computer-vision platform. Phase 1 contains only the
 headless Camera Engine and supports USB cameras, RTSP/IP streams and video
 files through OpenCV.
@@ -271,3 +275,18 @@ solo DTO seguros. En el perfil actual, `NO_GALLERY`, `INCOMPATIBLE` y
 identidad. Durante enrollment principal o adicional no se ejecutan consultas de
 reconocimiento, y la misma galería compartida vuelve a estar disponible al
 regresar a monitorización.
+
+### Dashboard local
+
+La ventana principal organiza video, sistema, candidato experimental, calidad,
+galería, métricas, historial temporal y acciones administrativas en un dashboard
+`ttk` adaptable. El historial está limitado, vive solo en memoria y aplica
+debounce. “Pipeline FPS” representa el throughput efectivo completo, no FPS puro
+del modelo; la latencia de inferencia se muestra como `N/D` mientras no exista una
+medición segura. Configuración es solo lectura y RecognitionService permanece sin
+threshold, margen ni decisión automática.
+
+```bash
+venv/bin/python -m src.ui.main \
+  --config config/local_face_validation.dev.json --mock-camera
+```

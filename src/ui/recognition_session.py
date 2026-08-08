@@ -53,6 +53,7 @@ class ExperimentalRecognitionSession:
             True, None if score is None else score.total_score,
             None if score is None else score.quality_band.value,
             RecognitionState.NOT_EVALUATED.name,
+            best.person_id,
         ), None
 
     @staticmethod

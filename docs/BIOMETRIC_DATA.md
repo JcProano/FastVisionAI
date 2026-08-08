@@ -69,3 +69,14 @@ enrollment válido. Los DTO públicos no transportan vectores biométricos. La
 persistencia JSON+NPZ sigue siendo una facilidad de desarrollo sin cifrado y no
 es adecuada para producción; requiere controles futuros de acceso, auditoría,
 retención, borrado verificable y gestión de claves.
+# Miniaturas faciales de presentación
+
+Las miniaturas faciales son datos faciales sensibles. FastVisionAI las mantiene
+separadas de embeddings, templates y archivos JSON/NPZ de la galería. Su uso es
+exclusivamente visual: no participan en reconocimiento, matching, calidad ni
+decisiones automáticas. Se crean solo tras consentimiento y enrollment exitoso,
+y su actualización o borrado es una acción explícita e independiente.
+
+El almacenamiento visual local actual no ofrece cifrado y no es apto para un
+despliegue sensible de producción sin cifrado, control de acceso, auditoría,
+retención, borrado verificable y gestión de claves.

@@ -1,5 +1,13 @@
 # FastVisionAI Architecture
 
+## Face Thumbnail Manager
+
+`src/ui/thumbnails/` es una dependencia exclusiva de presentación. Recibe de la
+capa UI candidatos temporales de rostros alineados ya aceptados, elige de forma
+determinista la mejor pose frontal y escribe únicamente después de `ENROLLED` y
+consentimiento. `person_id` es la única asociación; ninguna ruta ni imagen entra
+en contratos biométricos, `RecognitionResult`, Gallery JSON o Gallery NPZ.
+
 ## Design principles
 
 FastVisionAI separates capture, inference orchestration and domain features.
@@ -173,6 +181,14 @@ The experimental UI composes `ExperimentalRecognitionSession` with
 recognition state. The UI composition root rejects automatic decisions and any
 configured match threshold or ambiguity margin. Enrollment routes frames away
 from the service until monitoring resumes.
+
+The Phase 17 dashboard remains a presentation projection over safe UI DTOs.
+`DashboardStateStore` is bounded, ephemeral and never authoritative for gallery,
+recognition, enrollment, runtime or configuration. `LiveFaceSession` exposes a
+scalar telemetry snapshot reset per session; effective capture and pipeline FPS
+are explicitly distinguished from pure model FPS, and inference latency remains
+unavailable until a safe measurement exists. Tk widgets consume only DTOs and a
+single transient visual buffer, while history stays memory-only and debounced.
 
 ## Runtime and events
 

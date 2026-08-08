@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import math
 import queue
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -21,6 +23,12 @@ from src.ui.runtime_adapter import (
 )
 from src.ui.people.contracts import PeopleOperationResultDTO
 from src.ui.people.controller import PeopleManagerController
+from src.ui.thumbnails import ThumbnailManager, select_thumbnail
+from src.ui.thumbnails.contracts import ThumbnailSample
+from src.ui.dashboard.contracts import (
+    DashboardMetricState, DashboardMetricsDTO, DashboardQualityDTO,
+    DashboardQualityMetricDTO,
+)
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
@@ -50,6 +58,7 @@ class LiveFaceSession:
         persistence: PersistenceCallback | None = None,
         manifest_path: Path | None = None, archive_path: Path | None = None,
         people_controller: PeopleManagerController | None = None,
+        thumbnail_manager: ThumbnailManager | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -64,12 +73,25 @@ class LiveFaceSession:
         self._manifest_path = manifest_path
         self._archive_path = archive_path
         self._people = people_controller
+        self._thumbnails = thumbnail_manager
+        self._thumbnail_samples: list[ThumbnailSample] = []
+        self._thumbnail_consent = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._plan: GuidedCapturePlan | None = None
         self._last_single_valid = False
         self._additional_person_id: str | None = None
         self._additional_samples: list[tuple[object, object]] = []
+        # Session telemetry is reset for every LiveFaceSession instance.
+        self._metrics_lock = threading.Lock()
+        self._started_at = time.monotonic()
+        self._frames_received = 0
+        self._frames_processed = 0
+        self._visual_frames_dropped = 0
+        self._faces_detected_total = 0
+        self._faces_detected_current = 0
+        self._embeddings_generated = 0
+        self._dashboard_quality = DashboardQualityDTO()
 
     @property
     def alive(self) -> bool:
@@ -105,6 +127,7 @@ class LiveFaceSession:
         self.adapter.close()
         if self.controller.enrollment.active:
             self.controller.cancel_enrollment()
+        self._clear_thumbnail_samples()
         return not self.alive
 
     def drain_events(self) -> tuple[UIEvent, ...]:
@@ -113,6 +136,18 @@ class LiveFaceSession:
     def take_latest_visual(self) -> VisualFrameDTO | None:
         items = _drain(self.visual_queue)
         return items[-1] if items else None
+
+    def dashboard_telemetry(self) -> tuple[DashboardMetricsDTO, DashboardQualityDTO]:
+        """Return a scalar-only snapshot; unavailable inference latency remains None."""
+        with self._metrics_lock:
+            uptime = max(0.0, time.monotonic() - self._started_at)
+            capture_fps = self._frames_received / uptime if uptime > 0 else None
+            processing_fps = self._frames_processed / uptime if uptime > 0 else None
+            return DashboardMetricsDTO(
+                self._frames_received, self._frames_processed, self._visual_frames_dropped,
+                self._faces_detected_total, self._faces_detected_current,
+                self._embeddings_generated, capture_fps, processing_fps, uptime, None,
+            ), self._dashboard_quality
 
     def _command(self, command: SessionCommand) -> bool:
         try:
@@ -159,12 +194,20 @@ class LiveFaceSession:
                     self._error(UIErrorCode.INFERENCE_ERROR,
                                 "Error interno de inferencia; la sesión continúa.", True)
                     continue
-                _put_recent(self.visual_queue, step.visual)
+                dropped = _put_recent(self.visual_queue, step.visual)
+                with self._metrics_lock:
+                    self._frames_received += 1
+                    self._frames_processed += 1
+                    self._visual_frames_dropped += int(dropped)
+                    self._faces_detected_total += step.face_count
+                    self._faces_detected_current = step.face_count
+                    self._embeddings_generated += int(step.guided.embedding is not None)
+                    self._dashboard_quality = _dashboard_quality(step.guided)
                 self._last_single_valid = (
                     step.face_count == 1 and step.guided.visual_quality_passed
                 )
                 if self._plan is not None:
-                    self._enrollment_step(step.guided)
+                    self._enrollment_step(step.guided, step.aligned_face_bytes)
                 else:
                     self._monitoring_step(step.face_count, step.guided)
         finally:
@@ -175,6 +218,7 @@ class LiveFaceSession:
                 self._people.cancel_additional()
                 self._additional_person_id = None
                 self._additional_samples.clear()
+            self._clear_thumbnail_samples()
             self._event(self.adapter.status())
 
     def _commands(self) -> None:
@@ -189,6 +233,8 @@ class LiveFaceSession:
                     self._event(self._people.cancel_additional())
                 self._additional_person_id = None
                 self._additional_samples.clear()
+                self._clear_thumbnail_samples()
+                self.adapter.set_thumbnail_capture(False)
                 self.adapter.new_evaluator()
                 self._event(MonitoringDTO(
                     UIState.MONITORING, "Registro cancelado", None, None,
@@ -203,6 +249,9 @@ class LiveFaceSession:
                     plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     progress = self.controller.begin_enrollment(command.form)
                     self.adapter.new_evaluator()
+                    self._thumbnail_consent = command.form.consent_confirmed
+                    self._thumbnail_samples.clear()
+                    self.adapter.set_thumbnail_capture(True)
                     self._plan = plan
                     self._event(progress)
                 except Exception:
@@ -215,6 +264,8 @@ class LiveFaceSession:
                     if self.controller.enrollment.active:
                         self.controller.cancel_enrollment()
                     self._plan = None
+                    self._clear_thumbnail_samples()
+                    self.adapter.set_thumbnail_capture(False)
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "No se pudo iniciar el registro guiado.", False)
             elif (command.kind is SessionCommandType.START_ADDITIONAL_ENROLLMENT and
@@ -237,6 +288,7 @@ class LiveFaceSession:
                     self._plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     self._additional_person_id = command.person_id
                     self._additional_samples.clear()
+                    self.adapter.set_thumbnail_capture(False)
                     self.adapter.new_evaluator()
                     self._event(started)
                     self._event(EnrollmentProgressDTO(
@@ -278,12 +330,24 @@ class LiveFaceSession:
         if error is not None:
             self._event(error)
 
-    def _enrollment_step(self, guided) -> None:
+    def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
         plan = self._plan
         if plan is None:
             return
         score = guided.face_quality_score
         if guided.accepted and guided.embedding is not None:
+            sample_index = plan.accepted_count
+            requested_pose = plan.current.requested_pose
+            if (
+                self._additional_person_id is None
+                and self._thumbnails is not None and self._thumbnails.enabled
+                and aligned_face_bytes is not None
+            ):
+                self._thumbnail_samples.append(ThumbnailSample(
+                    sample_index, requested_pose.value,
+                    0.0 if score is None else score.total_score,
+                    bytes(aligned_face_bytes),
+                ))
             plan.accept()
             if self._additional_person_id is not None:
                 self._additional_samples.append((guided.embedding, score))
@@ -335,6 +399,25 @@ class LiveFaceSession:
                 archive_path=self._archive_path,
             )
             self._event(result)
+            if (
+                result.enrollment_status.casefold() == "enrolled"
+                and self._thumbnail_consent
+                and self._thumbnails is not None and self._thumbnails.enabled
+            ):
+                selected = select_thumbnail(self._thumbnail_samples)
+                if selected is not None:
+                    try:
+                        self._thumbnails.save(result.person_id, selected.image_bytes)
+                    except Exception:
+                        LOGGER.exception(
+                            "Thumbnail save failed after successful enrollment; "
+                            "visual and biometric payloads omitted"
+                        )
+                        self._error(
+                            UIErrorCode.THUMBNAIL_ERROR,
+                            "Registro en memoria correcto; la miniatura visual no pudo guardarse.",
+                            True,
+                        )
             if result.persistence_requested and result.persistence_succeeded is False:
                 self._error(UIErrorCode.PERSISTENCE_ERROR,
                             "Registro en memoria correcto; la persistencia local falló.", True)
@@ -346,7 +429,13 @@ class LiveFaceSession:
                         "El registro no pudo completarse.", False)
         finally:
             self._plan = None
+            self._clear_thumbnail_samples()
+            self.adapter.set_thumbnail_capture(False)
             self.adapter.new_evaluator()
+
+    def _clear_thumbnail_samples(self) -> None:
+        self._thumbnail_samples.clear()
+        self._thumbnail_consent = False
 
     def _event(self, event: UIEvent) -> None:
         _put_recent(self.event_queue, event)
@@ -356,10 +445,12 @@ class LiveFaceSession:
         self._event(ErrorDTO(UIState.ERROR, code, message, recoverable))
 
 
-def _put_recent(target: queue.Queue, item: object) -> None:
+def _put_recent(target: queue.Queue, item: object) -> bool:
+    dropped = False
     try:
         target.put_nowait(item)
     except queue.Full:
+        dropped = True
         try:
             target.get_nowait()
         except queue.Empty:
@@ -368,6 +459,7 @@ def _put_recent(target: queue.Queue, item: object) -> None:
             target.put_nowait(item)
         except queue.Full:
             pass
+    return dropped
 
 
 def _drain(target: queue.Queue) -> tuple:
@@ -393,3 +485,42 @@ def operator_instruction(step: CapturePlanStep, mirrored_source: bool) -> str:
     if step.requested_pose is CapturePose.SLIGHT_RIGHT:
         return "Gire ligeramente a la izquierda"
     return step.instruction
+
+
+def _dashboard_quality(guided: object) -> DashboardQualityDTO:
+    metrics = getattr(guided, "quality_metrics", None)
+    score = getattr(guided, "face_quality_score", None)
+    if metrics is None:
+        return DashboardQualityDTO()
+    reasons = {getattr(item, "value", str(item)) for item in getattr(guided, "reasons", ())}
+    values: tuple[tuple[str, float | str | None, set[str]], ...] = (
+        ("detección", metrics.detection_confidence, {"low_detection_confidence"}),
+        ("tamaño", metrics.relative_face_size, {"face_too_small"}),
+        ("interocular", metrics.normalized_interocular_distance,
+         {"low_interocular_distance"}),
+        ("visibilidad", metrics.visible_box_ratio, {"partially_visible"}),
+        ("centrado", _offset(metrics.center_offset_x, metrics.center_offset_y),
+         {"face_off_center"}),
+        ("iluminación", metrics.mean_illumination, {"too_dark", "too_bright"}),
+        ("contraste", metrics.contrast, {"low_contrast"}),
+        ("nitidez", metrics.blur_variance, {"blurry"}),
+        ("pose", getattr(getattr(guided, "estimated_pose", None), "value", None),
+         {"pose_not_requested"}),
+    )
+    projected = tuple(
+        DashboardQualityMetricDTO(
+            name, value,
+            DashboardMetricState.NOT_AVAILABLE if value is None else
+            DashboardMetricState.REJECTED if rejected & reasons else
+            DashboardMetricState.OK,
+        ) for name, value, rejected in values
+    )
+    return DashboardQualityDTO(
+        None if score is None else score.total_score,
+        None if score is None else score.quality_band.value,
+        projected,
+    )
+
+
+def _offset(x: float | None, y: float | None) -> float | None:
+    return None if x is None or y is None else math.hypot(x, y)
