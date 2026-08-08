@@ -38,6 +38,11 @@ class IdentificationPresentationController:
         self._suspended = False
         self._reset_stability()
 
+    def unknown_dismissed(self) -> None:
+        """Start unknown cooldown only after its presentation has closed."""
+        self._unknown_last = self._monotonic()
+        self._reset_stability()
+
     def observe(self, event: MonitoringDTO) -> IdentificationPopupDTO:
         if not self.policy.enabled or self._suspended:
             return self._suppressed(event, "Presentación suspendida")
@@ -91,7 +96,6 @@ class IdentificationPresentationController:
 
         if now - self._unknown_last < self.policy.unknown_cooldown_seconds:
             return self._suppressed(event, "Cooldown activo")
-        self._unknown_last = now
         return IdentificationPopupDTO(
             IdentificationPopupType.UNREGISTERED, None, None, None, None,
             event.recognition_state, False,

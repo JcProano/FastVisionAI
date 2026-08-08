@@ -22,6 +22,7 @@ from src.ui.contracts import (
     MonitoringDTO,
     RegistrationFormData,
     RuntimeStatusDTO,
+    UIErrorCode,
     UIState,
 )
 from src.ui.form_validation import (
@@ -105,6 +106,8 @@ class LocalFaceTkApp:
         self._identification = identification_controller
         self._identification_popup = identification_popup
         self._enrollment_active = False
+        self._registration_form_open = False
+        self._closing = False
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -210,12 +213,23 @@ class LocalFaceTkApp:
             if dto.registration_enabled
             else "disabled"
         )
-        self._enrollment_active = False
+        if self._registration_form_open:
+            self.register_button.configure(state="disabled")
+            return
+        if self._enrollment_active:
+            if dto.state is not UIState.MONITORING:
+                self.register_button.configure(state="disabled")
+                return
+            self._enrollment_active = False
+            if self._identification is not None:
+                self._identification.resume()
         if self._identification is not None and self._identification_popup is not None:
             popup = self._identification.observe(dto)
             if (
                 popup.popup_type is IdentificationPopupType.SUPPRESSED
                 and dto.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}
+                and self._identification_popup.popup_type
+                    is IdentificationPopupType.REGISTERED_CANDIDATE
             ):
                 self._identification_popup.dismiss()
             self._identification_popup.show(popup)
@@ -253,6 +267,7 @@ class LocalFaceTkApp:
         dto: EnrollmentResultDTO,
     ) -> None:
         self._enrollment_active = False
+        self._registration_form_open = False
         if self._identification is not None:
             self._identification.resume()
         self.status.configure(text=dto.message)
@@ -271,6 +286,12 @@ class LocalFaceTkApp:
         dto: ErrorDTO,
     ) -> None:
         self.status.configure(text=dto.message)
+
+        if dto.operation is UIErrorCode.ENROLLMENT_ERROR and not dto.recoverable:
+            self._enrollment_active = False
+            self._registration_form_open = False
+            if self._identification is not None and not self._closing:
+                self._identification.resume()
 
         if not dto.recoverable:
             self.register_button.configure(
@@ -466,7 +487,13 @@ class LocalFaceTkApp:
             self._form.focus_force()
             return
 
-        form = tk.Toplevel(self.root)
+        self._enter_registration_form_state()
+
+        try:
+            form = tk.Toplevel(self.root)
+        except Exception:
+            self._leave_registration_form_state(resume=True)
+            raise
         self._form = form
 
         form.title("Registrar rostro")
@@ -571,7 +598,7 @@ class LocalFaceTkApp:
             pady=4,
         )
 
-        def close_form() -> None:
+        def close_form(*, enrollment_started: bool = False) -> None:
             """
             Close the form and clear its reference.
             """
@@ -586,6 +613,11 @@ class LocalFaceTkApp:
 
             if form.winfo_exists():
                 form.destroy()
+            if enrollment_started:
+                self._registration_form_open = False
+                self._enrollment_active = True
+            else:
+                self._leave_registration_form_state(resume=not self._closing)
 
         def submit() -> None:
             """
@@ -619,9 +651,8 @@ class LocalFaceTkApp:
 
                 return
 
-            self._on_register(data)
-
-            close_form()
+            accepted = self._on_register(data)
+            close_form(enrollment_started=accepted is not False)
 
         ttk.Button(
             form,
@@ -657,19 +688,33 @@ class LocalFaceTkApp:
             weight=1,
         )
 
+    def _enter_registration_form_state(self) -> None:
+        self._registration_form_open = True
+        if self._identification is not None:
+            self._identification.suspend()
+        if self._identification_popup is not None:
+            self._identification_popup.dismiss()
+        self.register_button.configure(state="disabled")
+
+    def _leave_registration_form_state(self, *, resume: bool) -> None:
+        self._registration_form_open = False
+        if resume:
+            self._enrollment_active = False
+            if self._identification is not None:
+                self._identification.resume()
+            self.register_button.configure(state="normal")
+
     def _cancel(self) -> None:
         """
         Cancel an active enrollment workflow.
         """
 
         self._on_cancel()
-        self._enrollment_active = False
+        self._enrollment_active = True
         if self._identification is not None:
-            self._identification.resume()
+            self._identification.suspend()
 
-        self.register_button.configure(
-            state="normal"
-        )
+        self.register_button.configure(state="disabled")
 
         self.cancel_button.configure(
             state="disabled"
@@ -679,6 +724,7 @@ class LocalFaceTkApp:
         """
         Close UI and request resource cleanup.
         """
+        self._closing = True
         if self._identification_popup is not None:
             self._identification_popup.close()
 

@@ -93,6 +93,19 @@ class IdentificationControllerTests(unittest.TestCase):
                 result = controller.observe(monitoring(state=state))
                 self.assertEqual(result.popup_type, IdentificationPopupType.UNREGISTERED)
 
+    def test_unknown_cooldown_starts_on_close_and_is_independent_from_timeout(self):
+        controller = IdentificationPresentationController(
+            IdentificationPopupPolicy(True, 0, 10, 1, 60), self.provider,
+            monotonic=lambda: self.clock[0],
+        )
+        event = monitoring(state="NO_GALLERY")
+        self.assertEqual(controller.observe(event).popup_type, IdentificationPopupType.UNREGISTERED)
+        self.clock[0] = 60
+        controller.unknown_dismissed()
+        self.assertEqual(controller.observe(event).popup_type, IdentificationPopupType.SUPPRESSED)
+        self.clock[0] = 70
+        self.assertEqual(controller.observe(event).popup_type, IdentificationPopupType.UNREGISTERED)
+
     def test_multiple_faces_and_enrollment_are_suppressed(self):
         multiple = monitoring(ui_state=UIState.MULTIPLE_FACES)
         self.assertEqual(self.stable(multiple).popup_type, IdentificationPopupType.SUPPRESSED)

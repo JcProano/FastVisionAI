@@ -60,6 +60,7 @@
     "enabled": true,
     "registered_cooldown_seconds": 10.0,
     "unknown_cooldown_seconds": 10.0,
+    "unknown_popup_timeout_seconds": 60.0,
     "candidate_stability_frames": 3
   },
   "person_database": {

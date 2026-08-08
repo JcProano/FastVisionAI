@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import math
+import time
 from typing import Any
 
 try:
@@ -20,18 +22,33 @@ class IdentificationPopupWindow:
     def __init__(
         self, root: Any, provider: IdentityInfoProvider, *,
         on_view_person: Callable[[str], None], on_register: Callable[[], None],
+        unknown_timeout_seconds: float = 60.0,
+        on_unknown_closed: Callable[[], None] | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
+        if unknown_timeout_seconds <= 0:
+            raise ValueError("unknown_timeout_seconds must be positive")
         self.root = root
         self.provider = provider
         self._on_view_person = on_view_person
         self._on_register = on_register
+        self._unknown_timeout_seconds = unknown_timeout_seconds
+        self._on_unknown_closed = on_unknown_closed
+        self._monotonic = monotonic
         self.window: Any | None = None
         self._photo: Any | None = None
         self._person_id: str | None = None
+        self._popup_type: IdentificationPopupType | None = None
+        self._timer_id: Any | None = None
+        self._unknown_deadline: float | None = None
 
     @property
     def active(self) -> bool:
         return self.window is not None and bool(self.window.winfo_exists())
+
+    @property
+    def popup_type(self) -> IdentificationPopupType | None:
+        return self._popup_type
 
     def show(self, dto: IdentificationPopupDTO) -> None:
         if dto.popup_type is IdentificationPopupType.SUPPRESSED:
@@ -42,6 +59,9 @@ class IdentificationPopupWindow:
             self._build()
         else:
             self.window.lift()
+            if (dto.popup_type is IdentificationPopupType.UNREGISTERED
+                    and self._popup_type is IdentificationPopupType.UNREGISTERED):
+                return
         self._render(dto)
 
     def _build(self) -> None:
@@ -54,6 +74,8 @@ class IdentificationPopupWindow:
         self.thumbnail.pack(padx=16, pady=6)
         self.details = ttk.Label(self.window, justify="left")
         self.details.pack(padx=16, pady=8, anchor="w")
+        self.countdown = ttk.Label(self.window, justify="center")
+        self.countdown.pack(padx=16, pady=4)
         self.actions = ttk.Frame(self.window); self.actions.pack(padx=12, pady=12)
         self.primary = ttk.Button(self.actions)
         self.primary.pack(side="left", padx=4)
@@ -61,9 +83,17 @@ class IdentificationPopupWindow:
         self.secondary.pack(side="left", padx=4)
 
     def _render(self, dto: IdentificationPopupDTO) -> None:
+        previous_type = self._popup_type
+        self._cancel_timer(notify=False)
+        if (previous_type is IdentificationPopupType.UNREGISTERED
+                and dto.popup_type is not IdentificationPopupType.UNREGISTERED
+                and self._on_unknown_closed is not None):
+            self._on_unknown_closed()
+        self._popup_type = dto.popup_type
         self._photo = None
         self.thumbnail.configure(image="", text="Sin foto registrada")
         if dto.popup_type is IdentificationPopupType.REGISTERED_CANDIDATE:
+            self.countdown.configure(text="")
             self.title.configure(text="PERSONA REGISTRADA EN LA GALERÍA LOCAL")
             identifier = dto.external_identifier or "N/D"
             similarity = "N/D" if dto.similarity is None else f"{dto.similarity:.4f}"
@@ -87,7 +117,23 @@ class IdentificationPopupWindow:
             self.details.configure(text=dto.message)
             self._person_id = None
             self.primary.configure(text="Registrar persona", command=self._register)
-            self.secondary.configure(text="Ignorar")
+            self.secondary.configure(text="Ignorar", command=self.dismiss)
+            self._unknown_deadline = self._monotonic() + self._unknown_timeout_seconds
+            self._update_countdown()
+
+    def _update_countdown(self) -> None:
+        if (not self.active or self._popup_type is not IdentificationPopupType.UNREGISTERED
+                or self._unknown_deadline is None):
+            return
+        remaining = max(0, math.ceil(self._unknown_deadline - self._monotonic()))
+        minutes, seconds = divmod(remaining, 60)
+        self.countdown.configure(
+            text=f"Tiempo restante para decidir: {minutes:02d}:{seconds:02d}"
+        )
+        if remaining == 0:
+            self.dismiss()
+            return
+        self._timer_id = self.root.after(1000, self._update_countdown)
 
     def _view(self) -> None:
         if self._person_id is not None:
@@ -98,11 +144,27 @@ class IdentificationPopupWindow:
         self._on_register()
 
     def dismiss(self) -> None:
+        was_unknown = self._popup_type is IdentificationPopupType.UNREGISTERED
+        self._cancel_timer(notify=False)
         self._photo = None
         self._person_id = None
         if self.active:
             self.window.destroy()
         self.window = None
+        self._popup_type = None
+        if was_unknown and self._on_unknown_closed is not None:
+            self._on_unknown_closed()
+
+    def _cancel_timer(self, *, notify: bool) -> None:
+        if self._timer_id is not None:
+            try:
+                self.root.after_cancel(self._timer_id)
+            except Exception:
+                pass
+            self._timer_id = None
+        self._unknown_deadline = None
+        if notify and self._on_unknown_closed is not None:
+            self._on_unknown_closed()
 
     def close(self) -> None:
         self.dismiss()

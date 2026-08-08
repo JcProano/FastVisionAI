@@ -283,6 +283,9 @@ def main() -> int:
             candidate_stability_frames=int(
                 popup_settings.get("candidate_stability_frames", 3)
             ),
+            unknown_popup_timeout_seconds=float(
+                popup_settings.get("unknown_popup_timeout_seconds", 60.0)
+            ),
         ),
         identity_provider,
     )
@@ -328,6 +331,8 @@ def main() -> int:
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
+            return False
+        return True
 
     def close():
         window = people_window.pop("window", None)
@@ -409,6 +414,8 @@ def main() -> int:
         root, identity_provider,
         on_view_person=open_profile,
         on_register=lambda: app.open_form(),
+        unknown_timeout_seconds=identification_controller.policy.unknown_popup_timeout_seconds,
+        on_unknown_closed=identification_controller.unknown_dismissed,
     )
 
     app = LocalFaceTkApp(

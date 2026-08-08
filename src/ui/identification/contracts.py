@@ -22,12 +22,15 @@ class IdentificationPopupPolicy:
     registered_cooldown_seconds: float = 10.0
     unknown_cooldown_seconds: float = 10.0
     candidate_stability_frames: int = 3
+    unknown_popup_timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if self.registered_cooldown_seconds < 0 or self.unknown_cooldown_seconds < 0:
             raise ValueError("identification popup cooldowns must be non-negative")
         if self.candidate_stability_frames <= 0:
             raise ValueError("candidate_stability_frames must be positive")
+        if self.unknown_popup_timeout_seconds <= 0:
+            raise ValueError("unknown_popup_timeout_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
