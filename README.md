@@ -286,6 +286,15 @@ cédula, pero esta última nunca se usa como identificador biométrico. Distingu
 `ACTIVE`, `DISABLED`, `PENDING_BIOMETRIC`, registros heredados y ausencias sin
 inventar datos. Solo `ACTIVE` habilita muestras adicionales.
 
+### Historial de eventos de detección
+
+`DetectionEventService` registra observaciones relevantes —candidato experimental,
+persona no registrada, incompatibilidad y múltiples rostros— en una base SQLite
+independiente. No registra `NO_FACE`, decisiones de identidad, imágenes ni
+embeddings. El cooldown es monotónico y agregado por cámara para eventos sin
+`person_id`; sin tracking no se intenta distinguir desconocidos diferentes.
+RecognitionService continúa en `NOT_EVALUATED`.
+
 ### Administrador local de personas
 
 La acción **Personas registradas** administra exclusivamente la galería en

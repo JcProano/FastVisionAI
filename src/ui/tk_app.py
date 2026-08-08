@@ -38,6 +38,7 @@ from src.ui.identification import (
     IdentificationPopupType, IdentificationPresentationController,
 )
 from src.ui.identification.tk_popup import IdentificationPopupWindow
+from src.core.detection_events import DetectionEventDTO
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +86,9 @@ class LocalFaceTkApp:
         get_thumbnail: Callable[[str], ThumbnailDTO] | None = None,
         identification_controller: IdentificationPresentationController | None = None,
         identification_popup: IdentificationPopupWindow | None = None,
+        on_registration_form_state: Callable[[bool], None] | None = None,
+        get_detection_events: Callable[[], tuple[DetectionEventDTO, ...]] | None = None,
+        on_detection_history: Callable[[], None] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -105,6 +109,10 @@ class LocalFaceTkApp:
         self._thumbnail_photo: tk.PhotoImage | None = None
         self._identification = identification_controller
         self._identification_popup = identification_popup
+        self._on_registration_form_state = on_registration_form_state or (lambda _value: None)
+        self._get_detection_events = get_detection_events
+        self._on_detection_history = on_detection_history
+        self._detection_events_rendered: tuple[DetectionEventDTO, ...] = ()
         self._enrollment_active = False
         self._registration_form_open = False
         self._closing = False
@@ -174,6 +182,13 @@ class LocalFaceTkApp:
         self.history = tk.Listbox(history_card, height=6, activestyle="none")
         self.history.pack(fill="both", expand=True)
 
+        events_card = ttk.LabelFrame(side, text="Últimos eventos", padding=6)
+        events_card.pack(fill="both", expand=True, pady=6)
+        self.detection_events = tk.Listbox(events_card, height=5, activestyle="none")
+        self.detection_events.pack(fill="both", expand=True)
+        ttk.Button(events_card, text="Abrir historial", command=on_detection_history or
+                   (lambda: None)).pack(anchor="e", pady=(4, 0))
+
         self.diagnostic_card = ttk.LabelFrame(root, text="Diagnóstico de calidad", padding=6)
         self.diagnostic_values = ttk.Label(self.diagnostic_card, text="N/D")
         self.diagnostic_values.pack(anchor="w")
@@ -221,6 +236,7 @@ class LocalFaceTkApp:
                 self.register_button.configure(state="disabled")
                 return
             self._enrollment_active = False
+            self._on_registration_form_state(False)
             if self._identification is not None:
                 self._identification.resume()
         if self._identification is not None and self._identification_popup is not None:
@@ -268,6 +284,7 @@ class LocalFaceTkApp:
     ) -> None:
         self._enrollment_active = False
         self._registration_form_open = False
+        self._on_registration_form_state(False)
         if self._identification is not None:
             self._identification.resume()
         self.status.configure(text=dto.message)
@@ -290,6 +307,7 @@ class LocalFaceTkApp:
         if dto.operation is UIErrorCode.ENROLLMENT_ERROR and not dto.recoverable:
             self._enrollment_active = False
             self._registration_form_open = False
+            self._on_registration_form_state(False)
             if self._identification is not None and not self._closing:
                 self._identification.resume()
 
@@ -411,6 +429,17 @@ class LocalFaceTkApp:
                 suffix = f" — {item.display_name}" if item.display_name else ""
                 self.history.insert("end", f"{item.timestamp:%H:%M:%S} {item.message}{suffix}")
             self._history_rendered = current_history
+        if self._get_detection_events is not None:
+            try: recent_events = self._get_detection_events()
+            except Exception: recent_events = ()
+            if recent_events != self._detection_events_rendered:
+                self.detection_events.delete(0, "end")
+                for item in recent_events:
+                    person = item.display_name or "No registrada"
+                    self.detection_events.insert(
+                        "end", f"{item.timestamp:%H:%M:%S} {person} — {item.event_type}"
+                    )
+                self._detection_events_rendered = recent_events
 
     def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:
         """Load only when candidate identity changes, never once per video frame."""
@@ -690,6 +719,7 @@ class LocalFaceTkApp:
 
     def _enter_registration_form_state(self) -> None:
         self._registration_form_open = True
+        self._on_registration_form_state(True)
         if self._identification is not None:
             self._identification.suspend()
         if self._identification_popup is not None:
@@ -698,6 +728,8 @@ class LocalFaceTkApp:
 
     def _leave_registration_form_state(self, *, resume: bool) -> None:
         self._registration_form_open = False
+        if resume:
+            self._on_registration_form_state(False)
         if resume:
             self._enrollment_active = False
             if self._identification is not None:

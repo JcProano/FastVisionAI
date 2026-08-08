@@ -102,3 +102,10 @@ La ficha de persona expone únicamente agregados biométricos seguros y una
 miniatura visual autorizada. No transporta embeddings, templates, landmarks,
 procedencia del modelo ni rutas físicas. La cédula sirve solo para resolver el
 registro civil y nunca participa en matching o reconocimiento.
+
+El historial de detección guarda únicamente observaciones escalares. No contiene
+cédula completa, domicilio, teléfono, email, notas, imágenes, thumbnails,
+embeddings ni templates. `display_name_snapshot` es informativo y `person_id`
+sigue siendo la referencia interna. Una cédula se resuelve al leer desde Person
+Database y se presenta enmascarada. Debe definirse una política futura de
+retención; esta fase no realiza borrado automático.

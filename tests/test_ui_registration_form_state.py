@@ -33,6 +33,7 @@ class RegistrationFormPresentationTests(unittest.TestCase):
         app = LocalFaceTkApp.__new__(LocalFaceTkApp)
         app._identification = _Identification(); app._identification_popup = _Popup()
         app._registration_form_open = False; app._enrollment_active = False; app._closing = False
+        app._on_registration_form_state = lambda _value: None
         for name in ("status", "candidate", "similarity", "decision", "quality",
                      "register_button", "cancel_button"):
             setattr(app, name, _Widget())

@@ -7,6 +7,7 @@ import math
 import queue
 import threading
 import time
+import uuid
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -29,6 +30,11 @@ from src.ui.dashboard.contracts import (
     DashboardMetricState, DashboardMetricsDTO, DashboardQualityDTO,
     DashboardQualityMetricDTO,
 )
+from src.core.detection_events import (
+    DetectionEventInput, DetectionEventService, DetectionEventType,
+)
+from datetime import datetime, timezone
+from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
@@ -59,6 +65,9 @@ class LiveFaceSession:
         manifest_path: Path | None = None, archive_path: Path | None = None,
         people_controller: PeopleManagerController | None = None,
         thumbnail_manager: ThumbnailManager | None = None,
+        detection_event_service: DetectionEventService | None = None,
+        camera_id: str | None = None,
+        administrative_status_resolver: Callable[[str], str | None] | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -74,6 +83,11 @@ class LiveFaceSession:
         self._archive_path = archive_path
         self._people = people_controller
         self._thumbnails = thumbnail_manager
+        self._detection_events = detection_event_service
+        self._camera_id = camera_id
+        self._administrative_status_resolver = administrative_status_resolver
+        self._event_history_suspended = threading.Event()
+        self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
         self._thumbnail_consent = False
         self._stop = threading.Event()
@@ -104,15 +118,23 @@ class LiveFaceSession:
         self._thread.start()
 
     def start_enrollment(self, form: RegistrationFormData) -> bool:
-        return self._command(SessionCommand(SessionCommandType.START_ENROLLMENT, form))
+        accepted = self._command(SessionCommand(SessionCommandType.START_ENROLLMENT, form))
+        if accepted: self.set_event_history_suspended(True)
+        return accepted
 
     def cancel_enrollment(self) -> bool:
         return self._command(SessionCommand(SessionCommandType.CANCEL_ENROLLMENT))
 
     def start_additional_enrollment(self, person_id: str) -> bool:
-        return self._command(SessionCommand(
+        accepted = self._command(SessionCommand(
             SessionCommandType.START_ADDITIONAL_ENROLLMENT, person_id=person_id
         ))
+        if accepted: self.set_event_history_suspended(True)
+        return accepted
+
+    def set_event_history_suspended(self, suspended: bool) -> None:
+        if suspended: self._event_history_suspended.set()
+        else: self._event_history_suspended.clear()
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -305,20 +327,20 @@ class LiveFaceSession:
 
     def _monitoring_step(self, face_count: int, guided) -> None:
         if face_count == 0:
-            self._event(MonitoringDTO(
+            self._emit_monitoring(MonitoringDTO(
                 UIState.NO_FACE, "No se detectó un rostro", None, None,
                 "deshabilitada / NOT_EVALUATED", True,
             ))
             return
         if face_count > 1:
-            self._event(MonitoringDTO(
+            self._emit_monitoring(MonitoringDTO(
                 UIState.MULTIPLE_FACES, "MULTIPLE_FACES", None, None,
                 "deshabilitada / NOT_EVALUATED", True,
             ))
             return
         score = guided.face_quality_score
         if guided.embedding is None:
-            self._event(MonitoringDTO(
+            self._emit_monitoring(MonitoringDTO(
                 UIState.MONITORING, guided.primary_state.value, None, None,
                 "deshabilitada / NOT_EVALUATED", True,
                 None if score is None else score.total_score,
@@ -326,9 +348,37 @@ class LiveFaceSession:
             ))
             return
         dto, error = self.controller.monitor(guided.embedding, score)
-        self._event(dto)
+        self._emit_monitoring(dto)
         if error is not None:
             self._event(error)
+
+    def _emit_monitoring(self, dto: MonitoringDTO) -> None:
+        if self._detection_events is not None and not self._event_history_suspended.is_set():
+            event_type = None
+            if dto.state is UIState.MULTIPLE_FACES:
+                event_type = DetectionEventType.MULTIPLE_FACES
+            elif dto.recognition_state == "INCOMPATIBLE":
+                event_type = DetectionEventType.INCOMPATIBLE
+            elif dto.candidate_person_id is not None:
+                event_type = DetectionEventType.REGISTERED_CANDIDATE
+            elif dto.state is not UIState.NO_FACE and dto.recognition_state in {
+                "NO_GALLERY", "NOT_EVALUATED",
+            }:
+                event_type = DetectionEventType.UNREGISTERED
+            if event_type is not None:
+                status = None
+                if (dto.candidate_person_id is not None
+                        and self._administrative_status_resolver is not None):
+                    try: status = self._administrative_status_resolver(dto.candidate_person_id)
+                    except Exception: status = None
+                self._detection_events.observe(DetectionEventInput(
+                    event_type, dto.candidate_person_id, datetime.now(timezone.utc),
+                    self._camera_id, dto.candidate_display_name, dto.similarity,
+                    dto.quality_score, "NOT_EVALUATED" if event_type is
+                    DetectionEventType.REGISTERED_CANDIDATE else dto.recognition_state,
+                    status, self._session_id,
+                ))
+        self._event(dto)
 
     def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
         plan = self._plan

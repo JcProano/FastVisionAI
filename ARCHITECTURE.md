@@ -220,6 +220,13 @@ provenance remain internal, while only counts, optional quality aggregates and
 template date bounds cross the presentation boundary. Cedula lookup resolves to
 the immutable internal `person_id` before profile composition.
 
+The detection-event database is an independent observation log downstream of
+safe monitoring DTOs. `DetectionEventService` owns in-memory monotonic cooldowns
+and a bounded thread-safe presentation cache; SQLite remains authoritative.
+LiveFaceSession performs writes from its worker and suppresses them from form
+opening through enrollment and rollback. Unknown and multiple-face observations
+are aggregate per camera because this phase deliberately has no tracking.
+
 The Phase 17 dashboard remains a presentation projection over safe UI DTOs.
 `DashboardStateStore` is bounded, ephemeral and never authoritative for gallery,
 recognition, enrollment, runtime or configuration. `LiveFaceSession` exposes a

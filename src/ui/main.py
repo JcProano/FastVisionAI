@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,7 +46,12 @@ from src.core.person_database import (
 from src.ui.person_enrollment import PersonEnrollmentCoordinator
 from src.ui.person_profile import PersonProfileController
 from src.ui.person_profile.tk_window import PersonProfileWindow
+from src.core.detection_events import DetectionEventRepository, DetectionEventService
+from src.ui.detection_history import DetectionHistoryController
+from src.ui.detection_history.tk_window import DetectionHistoryWindow
 from src.validation.guided_face_capture import load_guided_profile
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +216,34 @@ def build_person_repository(
     return repository
 
 
+def build_detection_event_service(
+    settings: dict[str, object], project_root: Path = PROJECT_ROOT,
+) -> DetectionEventService | None:
+    configuration = settings.get("event_history", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("event_history configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    configured = Path(str(configuration.get("database_path", "data/fastvision/events.db")))
+    if configured.is_absolute():
+        raise ValueError("event history database path must be relative")
+    root = project_root.resolve(); resolved = (root / configured).resolve()
+    if root not in resolved.parents:
+        raise ValueError("event history database path escapes project root")
+    repository = DetectionEventRepository(resolved)
+    try:
+        repository.initialize()
+    except Exception:
+        LOGGER.warning("Event history initialization failed; history remains disabled")
+        return None
+    return DetectionEventService(
+        repository,
+        registered_cooldown_seconds=float(configuration.get("registered_cooldown_seconds", 60)),
+        unregistered_cooldown_seconds=float(configuration.get("unregistered_cooldown_seconds", 60)),
+        cache_limit=int(configuration.get("history_limit", 500)),
+    )
+
+
 def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
     camera = settings["camera"]; guided = settings["guided_capture"]
     quality = settings["quality"]; persistence = settings["persistence"]
@@ -251,6 +285,7 @@ def main() -> int:
     settings = json.loads(args.config.read_text(encoding="utf-8"))
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
+    detection_event_service = build_detection_event_service(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -323,11 +358,19 @@ def main() -> int:
         archive_path=archive_path,
         people_controller=people_controller,
         thumbnail_manager=thumbnail_manager,
+        detection_event_service=detection_event_service,
+        camera_id=str(settings["camera"].get("source", "camera")),
+        administrative_status_resolver=(None if person_repository is None else
+            lambda person_id: (
+                record.status.value if (record := person_repository.get_by_person_id(person_id))
+                is not None else None
+            )),
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, DashboardConfigurationWindow] = {}
     profile_windows: dict[str, PersonProfileWindow] = {}
+    history_window: dict[str, DetectionHistoryWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -345,11 +388,27 @@ def main() -> int:
             if profile.window.winfo_exists():
                 profile.close()
         profile_windows.clear()
+        event_window = history_window.pop("window", None)
+        if event_window is not None and event_window.window.winfo_exists():
+            event_window.close()
         session.close()
 
     profile_controller = None if person_repository is None else PersonProfileController(
         person_repository, people_controller, people_controller.biometrics, thumbnail_manager,
     )
+    history_controller = (None if detection_event_service is None else
+        DetectionHistoryController(
+            detection_event_service.repository, person_repository, detection_event_service,
+        ))
+
+    def open_detection_history() -> None:
+        if history_controller is None: return
+        current = history_window.get("window")
+        if current is not None and current.window.winfo_exists():
+            current.focus(); return
+        history_window["window"] = DetectionHistoryWindow(
+            root, history_controller, on_close=lambda: history_window.pop("window", None),
+        )
 
     def close_profile(person_id: str) -> None:
         profile_windows.pop(person_id, None)
@@ -431,6 +490,10 @@ def main() -> int:
         get_thumbnail=thumbnail_manager.load,
         identification_controller=identification_controller,
         identification_popup=identification_popup,
+        on_registration_form_state=session.set_event_history_suspended,
+        get_detection_events=(None if history_controller is None else
+                              lambda: history_controller.recent(10)),
+        on_detection_history=open_detection_history,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

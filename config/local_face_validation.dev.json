@@ -67,5 +67,12 @@
     "enabled": true,
     "path": "data/fastvision/people.db",
     "timeout_seconds": 5.0
+  },
+  "event_history": {
+    "enabled": true,
+    "database_path": "data/fastvision/events.db",
+    "registered_cooldown_seconds": 60.0,
+    "unregistered_cooldown_seconds": 60.0,
+    "history_limit": 500
   }
 }
