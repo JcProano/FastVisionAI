@@ -265,3 +265,12 @@ conservar estado reciente. `RealUIRuntimeAdapter` es la única frontera que cono
 CameraManager, Runtime, plugins, alineación, calidad y embedding. Los errores se
 reducen a códigos seguros y el cierre solicita STOP, espera un timeout configurable
 y ejecuta liberación idempotente.
+## Attendance Service (Fase 23)
+
+`AttendanceRepository` y su `attendance.db` independiente constituyen la fuente de
+verdad. `AttendanceService` valida política y estado civil `ACTIVE` antes de escribir.
+Dashboard, ficha de persona y ventana de historial son proyecciones de lectura y se
+degradan de forma segura si SQLite no está disponible. No existe conexión desde
+`DetectionEventService` ni `LiveFaceSession`: `evaluate_observation()` es inocuo cuando
+la decisión automática está deshabilitada. Las conexiones SQLite son por operación,
+con SQL parametrizado, transacciones explícitas y migración versionada.

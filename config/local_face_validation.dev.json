@@ -74,5 +74,18 @@
     "registered_cooldown_seconds": 60.0,
     "unregistered_cooldown_seconds": 60.0,
     "history_limit": 500
+  },
+  "attendance": {
+    "enabled": true,
+    "database_path": "data/fastvision/attendance.db",
+    "timeout_seconds": 5.0,
+    "automatic_attendance_enabled": false,
+    "minimum_stable_observations": 3,
+    "minimum_observation_seconds": 2.0,
+    "duplicate_event_cooldown_seconds": 60.0,
+    "minimum_time_between_check_in_out_seconds": 60.0,
+    "allow_manual_events": true,
+    "policy_name": "attendance_manual_validation",
+    "policy_version": "1.0"
   }
 }

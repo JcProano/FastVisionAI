@@ -89,6 +89,8 @@ class LocalFaceTkApp:
         on_registration_form_state: Callable[[bool], None] | None = None,
         get_detection_events: Callable[[], tuple[DetectionEventDTO, ...]] | None = None,
         on_detection_history: Callable[[], None] | None = None,
+        get_attendance_summary: Callable[[], object] | None = None,
+        on_attendance_history: Callable[[], None] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -112,6 +114,7 @@ class LocalFaceTkApp:
         self._on_registration_form_state = on_registration_form_state or (lambda _value: None)
         self._get_detection_events = get_detection_events
         self._on_detection_history = on_detection_history
+        self._get_attendance_summary=get_attendance_summary
         self._detection_events_rendered: tuple[DetectionEventDTO, ...] = ()
         self._enrollment_active = False
         self._registration_form_open = False
@@ -188,6 +191,9 @@ class LocalFaceTkApp:
         self.detection_events.pack(fill="both", expand=True)
         ttk.Button(events_card, text="Abrir historial", command=on_detection_history or
                    (lambda: None)).pack(anchor="e", pady=(4, 0))
+        attendance_card=ttk.LabelFrame(side,text="Asistencia hoy",padding=6);attendance_card.pack(fill="x",pady=6)
+        self.attendance_summary=ttk.Label(attendance_card,text="Entradas: N/D\nSalidas: N/D\nPersonas únicas: N/D\nÚltima marcación: N/D");self.attendance_summary.pack(anchor="w")
+        ttk.Button(attendance_card,text="Abrir asistencia",command=on_attendance_history or (lambda:None)).pack(anchor="e")
 
         self.diagnostic_card = ttk.LabelFrame(root, text="Diagnóstico de calidad", padding=6)
         self.diagnostic_values = ttk.Label(self.diagnostic_card, text="N/D")
@@ -440,6 +446,11 @@ class LocalFaceTkApp:
                         "end", f"{item.timestamp:%H:%M:%S} {person} — {item.event_type}"
                     )
                 self._detection_events_rendered = recent_events
+        if self._get_attendance_summary is not None:
+            try:
+                item=self._get_attendance_summary();last=item.last_event_at or "N/D"
+                self.attendance_summary.configure(text=f"Entradas: {item.total_check_ins}\nSalidas: {item.total_check_outs}\nPersonas únicas: {item.unique_people}\nÚltima marcación: {last}")
+            except Exception:self.attendance_summary.configure(text="Asistencia no disponible")
 
     def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:
         """Load only when candidate identity changes, never once per video frame."""

@@ -49,6 +49,9 @@ from src.ui.person_profile.tk_window import PersonProfileWindow
 from src.core.detection_events import DetectionEventRepository, DetectionEventService
 from src.ui.detection_history import DetectionHistoryController
 from src.ui.detection_history.tk_window import DetectionHistoryWindow
+from src.core.attendance import AttendancePolicy, AttendanceRepository, AttendanceService
+from src.ui.attendance import AttendanceUIController
+from src.ui.attendance.tk_window import AttendanceHistoryWindow
 from src.validation.guided_face_capture import load_guided_profile
 
 LOGGER = logging.getLogger(__name__)
@@ -243,6 +246,57 @@ def build_detection_event_service(
         cache_limit=int(configuration.get("history_limit", 500)),
     )
 
+def build_attendance(
+    settings: dict[str, object], people: PersonRepository | None,
+    project_root: Path = PROJECT_ROOT,
+) -> AttendanceUIController | None:
+    configuration = settings.get("attendance", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("attendance configuration must be an object")
+    # Return before even resolving a path: disabled mode must not access the database.
+    if not bool(configuration.get("enabled", False)) or people is None:
+        return None
+    configured = Path(str(
+        configuration.get("database_path", "data/fastvision/attendance.db")
+    ))
+    if configured.is_absolute():
+        raise ValueError("attendance database path must be relative")
+    root = project_root.resolve()
+    resolved = (root / configured).resolve()
+    if root not in resolved.parents:
+        raise ValueError("attendance database path escapes project root")
+    repository = AttendanceRepository(
+        resolved, timeout=float(configuration.get("timeout_seconds", 5.0)),
+    )
+    try:
+        repository.initialize()
+    except Exception:
+        LOGGER.warning("Attendance initialization failed; attendance remains disabled")
+        return None
+    policy = AttendancePolicy(
+        enabled=True,
+        automatic_attendance_enabled=bool(
+            configuration.get("automatic_attendance_enabled", False)
+        ),
+        minimum_stable_observations=int(
+            configuration.get("minimum_stable_observations", 3)
+        ),
+        minimum_observation_seconds=float(
+            configuration.get("minimum_observation_seconds", 2)
+        ),
+        duplicate_event_cooldown_seconds=float(
+            configuration.get("duplicate_event_cooldown_seconds", 60)
+        ),
+        minimum_time_between_check_in_out_seconds=float(
+            configuration.get("minimum_time_between_check_in_out_seconds", 60)
+        ),
+        allow_manual_events=bool(configuration.get("allow_manual_events", True)),
+        policy_name=str(configuration.get("policy_name", "attendance_manual_validation")),
+        policy_version=str(configuration.get("policy_version", "1.0")),
+    )
+    service = AttendanceService(repository, people, policy)
+    return AttendanceUIController(service, repository, people)
+
 
 def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
     camera = settings["camera"]; guided = settings["guided_capture"]
@@ -286,6 +340,7 @@ def main() -> int:
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
     detection_event_service = build_detection_event_service(settings)
+    attendance_controller = build_attendance(settings,person_repository)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -371,6 +426,7 @@ def main() -> int:
     configuration_window: dict[str, DashboardConfigurationWindow] = {}
     profile_windows: dict[str, PersonProfileWindow] = {}
     history_window: dict[str, DetectionHistoryWindow] = {}
+    attendance_window: dict[str, AttendanceHistoryWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -391,10 +447,13 @@ def main() -> int:
         event_window = history_window.pop("window", None)
         if event_window is not None and event_window.window.winfo_exists():
             event_window.close()
+        attendance_view=attendance_window.pop("window",None)
+        if attendance_view is not None and attendance_view.window.winfo_exists():attendance_view.close()
         session.close()
 
     profile_controller = None if person_repository is None else PersonProfileController(
         person_repository, people_controller, people_controller.biometrics, thumbnail_manager,
+        attendance_controller,
     )
     history_controller = (None if detection_event_service is None else
         DetectionHistoryController(
@@ -409,6 +468,12 @@ def main() -> int:
         history_window["window"] = DetectionHistoryWindow(
             root, history_controller, on_close=lambda: history_window.pop("window", None),
         )
+
+    def open_attendance_history():
+        if attendance_controller is None:return
+        current=attendance_window.get("window")
+        if current is not None and current.window.winfo_exists():current.focus();return
+        attendance_window["window"]=AttendanceHistoryWindow(root,attendance_controller,on_close=lambda:attendance_window.pop("window",None))
 
     def close_profile(person_id: str) -> None:
         profile_windows.pop(person_id, None)
@@ -494,6 +559,9 @@ def main() -> int:
         get_detection_events=(None if history_controller is None else
                               lambda: history_controller.recent(10)),
         on_detection_history=open_detection_history,
+        get_attendance_summary=(None if attendance_controller is None else
+                                attendance_controller.daily_summary),
+        on_attendance_history=open_attendance_history,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

@@ -338,3 +338,12 @@ threshold, margen ni decisión automática.
 venv/bin/python -m src.ui.main \
   --config config/local_face_validation.dev.json --mock-camera
 ```
+### Attendance Service (Fase 23)
+
+La asistencia administrativa usa una base SQLite independiente como fuente de verdad.
+La configuración de desarrollo permite marcaciones manuales para personas `ACTIVE`,
+pero mantiene `automatic_attendance_enabled=false`; una detección nunca genera una
+marcación en esta fase. `MANUAL_CHECK_IN`/`MANUAL_CHECK_OUT` permanecen diferenciados
+de los futuros eventos automáticos. El cooldown de duplicados se aplica a acciones
+manuales; el intervalo mínimo entre entrada/salida está reservado para la política
+automática explícita. Los CSV omiten cédula completa, datos civiles y biometría.

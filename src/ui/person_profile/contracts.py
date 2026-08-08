@@ -42,6 +42,9 @@ class PersonProfileDTO:
     last_template_at: datetime | None
     legacy_biometric_record: bool
     profile_message: str
+    last_check_in: datetime | None = None
+    last_check_out: datetime | None = None
+    attendance_events_today: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,4 +53,3 @@ class PersonProfileOperationDTO:
     operation: str
     message: str
     profile: PersonProfileDTO | None = None
-

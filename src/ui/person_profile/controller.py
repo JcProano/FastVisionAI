@@ -8,6 +8,7 @@ from src.ui.people.database_controller import DatabasePeopleManagerController
 from src.ui.thumbnails import ThumbnailManager
 
 from .contracts import PersonProfileDTO, PersonProfileOperationDTO, PersonProfileStatus
+from src.ui.attendance import AttendanceUIController
 
 
 _MESSAGES = {
@@ -25,11 +26,13 @@ class PersonProfileController:
         self, repository: PersonRepository,
         administration: DatabasePeopleManagerController,
         biometrics: PeopleManagerController, thumbnails: ThumbnailManager,
+        attendance: AttendanceUIController | None = None,
     ) -> None:
         self._repository = repository
         self._administration = administration
         self._biometrics = biometrics
         self._thumbnails = thumbnails
+        self._attendance = attendance
 
     def get_by_cedula(self, cedula: str) -> PersonProfileDTO:
         record = self._repository.get_by_cedula(cedula)
@@ -58,6 +61,13 @@ class PersonProfileController:
             thumbnail = self._thumbnails.load(person_id)
         except Exception:
             thumbnail = None
+        attendance = None
+        if self._attendance is not None and record is not None:
+            try:
+                attendance = self._attendance.person_summary(person_id)
+            except Exception:
+                # Attendance is an optional projection; profile data remains available.
+                attendance = None
         return PersonProfileDTO(
             person_id,
             None if record is None else record.cedula,
@@ -82,6 +92,9 @@ class PersonProfileController:
             None if summary is None else summary.maximum_quality,
             min(dates) if dates else None, max(dates) if dates else None,
             record is None, _MESSAGES[status],
+            None if attendance is None else attendance.last_check_in,
+            None if attendance is None else attendance.last_check_out,
+            0 if attendance is None else attendance.events_today,
         )
 
     def update_person(
@@ -113,6 +126,12 @@ class PersonProfileController:
         return PersonProfileOperationDTO(
             True, "additional_start", "Captura adicional disponible.", profile,
         )
+
+    def manual_attendance(self, person_id: str, *, check_in: bool):
+        if self._attendance is None:
+            return None
+        return (self._attendance.manual_check_in(person_id) if check_in
+                else self._attendance.manual_check_out(person_id))
 
     def _not_found(self, person_id: str | None) -> PersonProfileDTO:
         return PersonProfileDTO(

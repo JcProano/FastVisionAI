@@ -43,16 +43,24 @@ class PersonProfileWindow:
         self.details.grid(row=1, column=1, padx=12, pady=8, sticky="nw")
         self.summary = ttk.Label(self.window, justify="left")
         self.summary.grid(row=2, column=0, columnspan=2, padx=12, pady=8, sticky="w")
-        actions = ttk.Frame(self.window); actions.grid(row=3, column=0, columnspan=2, pady=10)
+        self.attendance = ttk.Label(self.window, justify="left")
+        self.attendance.grid(row=3, column=0, columnspan=2, padx=12, pady=8, sticky="w")
+        actions = ttk.Frame(self.window); actions.grid(row=4, column=0, columnspan=2, pady=10)
         self.edit_button = ttk.Button(actions, text="Editar datos", command=self.edit)
         self.edit_button.pack(side="left", padx=4)
         self.additional_button = ttk.Button(actions, text="Agregar muestras", command=self.add_samples)
         self.additional_button.pack(side="left", padx=4)
         self.photo_button = ttk.Button(actions, text="Actualizar foto", command=self.update_photo)
         self.photo_button.pack(side="left", padx=4)
+        self.check_in_button = ttk.Button(actions, text="Registrar entrada manual",
+                                          command=lambda: self.manual_attendance(True))
+        self.check_in_button.pack(side="left", padx=4)
+        self.check_out_button = ttk.Button(actions, text="Registrar salida manual",
+                                           command=lambda: self.manual_attendance(False))
+        self.check_out_button.pack(side="left", padx=4)
         ttk.Button(actions, text="Cerrar", command=self.close).pack(side="left", padx=4)
         self.status = ttk.Label(self.window)
-        self.status.grid(row=4, column=0, columnspan=2, padx=12, pady=6, sticky="w")
+        self.status.grid(row=5, column=0, columnspan=2, padx=12, pady=6, sticky="w")
         self.refresh()
 
     def focus(self) -> None:
@@ -81,6 +89,12 @@ class PersonProfileWindow:
             f"Primer template: {value(profile.first_template_at)}\n"
             f"Último template: {value(profile.last_template_at)}"
         ))
+        self.attendance.configure(text=(
+            "ASISTENCIA RECIENTE\n"
+            f"Última entrada: {value(profile.last_check_in)}\n"
+            f"Última salida: {value(profile.last_check_out)}\n"
+            f"Eventos de hoy: {profile.attendance_events_today}"
+        ))
         self.status.configure(text=profile.profile_message)
         editable = profile.administrative_status in {
             PersonProfileStatus.ACTIVE, PersonProfileStatus.DISABLED,
@@ -89,6 +103,8 @@ class PersonProfileWindow:
         active = profile.administrative_status is PersonProfileStatus.ACTIVE
         self.edit_button.configure(state="normal" if editable else "disabled")
         self.additional_button.configure(state="normal" if active else "disabled")
+        self.check_in_button.configure(state="normal" if active else "disabled")
+        self.check_out_button.configure(state="normal" if active else "disabled")
         self._photo = None
         self.thumbnail.configure(image="", text="Sin foto registrada")
         if profile.thumbnail_available and profile.thumbnail_bytes:
@@ -126,6 +142,18 @@ class PersonProfileWindow:
         self.status.configure(text=result.message)
         if result.success and not self._on_additional(self.person_id):
             self.status.configure(text="No se pudo iniciar la captura adicional.")
+
+    def manual_attendance(self, check_in: bool) -> None:
+        label = "entrada" if check_in else "salida"
+        if not messagebox.askyesno(
+            "Confirmar marcación",
+            f"Registrar {label} manual para {self._profile.display_name}?\nHora aproximada: ahora",
+            parent=self.window,
+        ):
+            return
+        result = self.controller.manual_attendance(self.person_id, check_in=check_in)
+        self.status.configure(text=("Asistencia no disponible" if result is None else result.message))
+        if result is not None and result.success: self.refresh()
 
     def update_photo(self) -> None:
         selected = filedialog.askopenfilename(parent=self.window, filetypes=[("Imágenes", "*.jpg *.jpeg *.png")])
