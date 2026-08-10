@@ -443,3 +443,11 @@ La UI usa páginas de 25, 50 o 100 filas, debounce cancelable y fechas presentad
 en `America/Guayaquil`. La cédula se muestra enmascarada y cada fila consulta solo
 sus estadísticas biométricas y un indicador de foto. No se añadieron índices ni
 migraciones sin métricas reales que los justifiquen.
+# Seguridad administrativa local (Fase 35)
+
+FastVisionAI separa estrictamente los operadores administrativos de las personas
+civiles y biométricas. Las cuentas viven en `users.db`; nunca en `people.db` ni en
+`FaceGallery`. El primer arranque solicita crear un ADMIN sin credenciales por
+defecto. Las contraseñas se derivan exclusivamente con `hashlib.scrypt`, salt
+aleatorio y comparación constante. La autorización RBAC es obligatoria salvo que
+`security.enabled=false` se configure explícitamente para desarrollo.

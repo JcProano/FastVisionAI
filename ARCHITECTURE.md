@@ -376,3 +376,15 @@ constructor de filtros parametrizados. El orden usa una whitelist y `person_id`
 como desempate estable. Las transiciones administrativas continúan pasando por
 `DatabasePeopleManagerController` y se limitan a ACTIVE/ DISABLED. El modo legacy
 de la ventana permanece disponible cuando no se inyecta el controlador avanzado.
+# Fase 35 — autenticación local y RBAC
+
+`users.db → UserRepository → AuthenticationService → AuthenticatedSessionManager
+→ AuthorizationEngine → AuthorizationController → UI administrativa`.
+
+`users.db` es un dominio independiente: no contiene embeddings, templates,
+imágenes ni datos civiles. El repositorio usa una conexión SQLite por operación y
+protege al último ADMIN activo dentro de la misma transacción que cambia rol o
+estado. La UI aplica permisos y los controladores vuelven a validarlos. Un timeout
+durante enrollment queda pendiente hasta que el flujo termine o complete rollback.
+Los eventos de seguridad admiten un callback seguro opcional; no se crea otra base
+de auditoría ni se modifica ApplicationEventBus.

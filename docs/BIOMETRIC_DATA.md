@@ -109,3 +109,9 @@ embeddings ni templates. `display_name_snapshot` es informativo y `person_id`
 sigue siendo la referencia interna. Una cédula se resuelve al leer desde Person
 Database y se presenta enmascarada. Debe definirse una política futura de
 retención; esta fase no realiza borrado automático.
+# Separación de cuentas administrativas
+
+La base local `users.db` de la Fase 35 no es almacenamiento biométrico y no se
+relaciona con `FaceGallery` ni con `PersonRepository`. No contiene rostros,
+embeddings, templates o imágenes. Una persona registrada no se convierte en
+operador y el inicio de sesión nunca utiliza reconocimiento facial.

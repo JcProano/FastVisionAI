@@ -187,6 +187,7 @@ class LocalFaceTkApp:
         on_reports: Callable[[], None] | None = None,
         get_daily_report: Callable[[], object] | None = None,
         report_refresh_seconds: float = 30.0,
+        can: Callable[[str], bool] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -227,6 +228,7 @@ class LocalFaceTkApp:
         self._identification_policy: IdentificationPolicyDTO | None = None
         self._decision_orchestrator: DecisionOrchestratorDTO | None = None
         self._action_executor: ActionExecutorDTO | None = None
+        self._can = can or (lambda _permission: True)
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -337,10 +339,10 @@ class LocalFaceTkApp:
         self.detection_events = tk.Listbox(events_card, height=5, activestyle="none")
         self.detection_events.pack(fill="both", expand=True)
         ttk.Button(events_card, text="Abrir historial", command=on_detection_history or
-                   (lambda: None)).pack(anchor="e", pady=(4, 0))
+                   (lambda: None), state="normal" if self._can("VIEW_DETECTION_HISTORY") else "disabled").pack(anchor="e", pady=(4, 0))
         attendance_card=ttk.LabelFrame(side,text="Asistencia hoy",padding=6);attendance_card.pack(fill="x",pady=6)
         self.attendance_summary=ttk.Label(attendance_card,text="Entradas: N/D\nSalidas: N/D\nPersonas únicas: N/D\nÚltima marcación: N/D");self.attendance_summary.pack(anchor="w")
-        ttk.Button(attendance_card,text="Abrir asistencia",command=on_attendance_history or (lambda:None)).pack(anchor="e")
+        ttk.Button(attendance_card,text="Abrir asistencia",command=on_attendance_history or (lambda:None),state="normal" if self._can("VIEW_ATTENDANCE") else "disabled").pack(anchor="e")
         reports_card = ttk.LabelFrame(side, text="Hoy", padding=6); reports_card.pack(fill="x", pady=6)
         self.report_summary = ttk.Label(
             reports_card,
@@ -349,7 +351,7 @@ class LocalFaceTkApp:
         self.report_summary.pack(anchor="w")
         self.reports_button = ttk.Button(
             reports_card, text="Ver reportes", command=on_reports or (lambda: None),
-            state="normal" if get_daily_report is not None else "disabled",
+            state="normal" if get_daily_report is not None and self._can("VIEW_REPORTS") else "disabled",
         )
         self.reports_button.pack(anchor="e")
         if self._get_daily_report is not None:
@@ -365,9 +367,9 @@ class LocalFaceTkApp:
         self.metrics.pack(anchor="w")
 
         actions = ttk.Frame(root, padding=(10, 6)); actions.grid(row=4, column=0, sticky="ew")
-        self.register_button = ttk.Button(actions, text="Registrar rostro", command=self.open_form)
+        self.register_button = ttk.Button(actions, text="Registrar rostro", command=self.open_form,state="normal" if self._can("ENROLL_PERSON") else "disabled")
         self.register_button.pack(side="left", padx=3)
-        self.people_button = ttk.Button(actions, text="Personas registradas", command=on_people or (lambda: None))
+        self.people_button = ttk.Button(actions, text="Personas registradas", command=on_people or (lambda: None),state="normal" if self._can("VIEW_PEOPLE") else "disabled")
         self.people_button.pack(side="left", padx=3)
         ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
         ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)

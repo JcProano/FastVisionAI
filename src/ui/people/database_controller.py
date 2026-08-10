@@ -15,9 +15,17 @@ from .controller import PeopleManagerController
 
 
 class DatabasePeopleManagerController:
-    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController) -> None:
+    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController, authorization=None) -> None:
         self.repository = repository
         self.biometrics = biometrics
+        self.authorization = authorization
+
+    def _require(self, permission: str) -> None:
+        if self.authorization is None:
+            return
+        from src.core.security import AuthorizationPermission
+        if not self.authorization.can(AuthorizationPermission(permission)):
+            raise PermissionError("operation is not authorized")
 
     @property
     def state(self): return self.biometrics.state
@@ -27,6 +35,7 @@ class DatabasePeopleManagerController:
     def archive_path(self): return self.biometrics.archive_path
 
     def list_people(self, query: str = "") -> PeopleListDTO:
+        self._require("VIEW_PEOPLE")
         normalized = " ".join(query.casefold().split())
         records = self.repository.list(limit=1_000)
         people = tuple(
@@ -59,6 +68,7 @@ class DatabasePeopleManagerController:
         birth_date: str | None = None, sex: str | None = None,
         notes: str | None = None,
     ) -> PeopleOperationResultDTO:
+        self._require("EDIT_PERSON")
         record = self.repository.get_by_person_id(person_id)
         if record is None:
             return self._fail("edit", "La persona no existe.", person_id)
@@ -90,6 +100,7 @@ class DatabasePeopleManagerController:
         )
 
     def begin_additional(self, person_id: str) -> PeopleOperationResultDTO:
+        self._require("ENROLL_PERSON")
         record = self.repository.get_by_person_id(person_id)
         if record is None or record.status is not PersonStatus.ACTIVE:
             return self._fail(
@@ -101,6 +112,7 @@ class DatabasePeopleManagerController:
     def set_administrative_status(
         self, person_id: str, target: PersonStatus, *, confirmed: bool,
     ) -> PeopleOperationResultDTO:
+        self._require("CHANGE_PERSON_STATUS")
         moment = datetime.now(timezone.utc)
         if not confirmed:
             return PeopleOperationResultDTO(

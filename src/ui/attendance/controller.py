@@ -17,16 +17,19 @@ from .contracts import AttendanceListDTO, AttendanceUIResult, PersonAttendanceSu
 class AttendanceUIController:
     def __init__(
         self, service: AttendanceService, repository: AttendanceRepository,
-        people: PersonRepository,
+        people: PersonRepository, authorization=None,
     ) -> None:
         self.service = service
         self.repository = repository
         self.people = people
+        self.authorization = authorization
 
     def manual_check_in(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
+        self._require("MANUAL_ATTENDANCE")
         return self._result(self.service.manual_check_in(person_id, **kwargs))
 
     def manual_check_out(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
+        self._require("MANUAL_ATTENDANCE")
         return self._result(self.service.manual_check_out(person_id, **kwargs))
 
     def list(
@@ -34,6 +37,7 @@ class AttendanceUIController:
         person_id: str | None = None, name: str | None = None,
         event_type: AttendanceEventType | None = None, limit: int = 100,
     ) -> AttendanceListDTO:
+        self._require("VIEW_ATTENDANCE")
         if name:
             needle = name.casefold()
             matches = [
@@ -75,6 +79,7 @@ class AttendanceUIController:
         )
 
     def export_csv(self, path: Path, limit: int = 500) -> AttendanceUIResult:
+        self._require("VIEW_ATTENDANCE")
         try:
             count = self.repository.export_csv(path, AttendanceQuery(limit=limit))
             return AttendanceUIResult(True, f"{count} eventos exportados")
@@ -98,3 +103,9 @@ class AttendanceUIController:
             "Marcación registrada" if result.success else result.reason,
             result.record.attendance_id if result.record else None,
         )
+
+    def _require(self, permission: str) -> None:
+        if self.authorization is not None:
+            from src.core.security import AuthorizationPermission
+            if not self.authorization.can(AuthorizationPermission(permission)):
+                raise PermissionError("operation is not authorized")

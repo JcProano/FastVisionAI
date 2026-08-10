@@ -12,14 +12,16 @@ class ReportController:
         "Resumen de detecciones", "Resumen del sistema",
     )
 
-    def __init__(self, service, exporter: ReportExporter | None = None) -> None:
+    def __init__(self, service, exporter: ReportExporter | None = None, authorization=None) -> None:
         self.service = service; self.exporter = exporter or ReportExporter()
+        self.authorization = authorization
         self.last_report = None
 
     def generate(
         self, report_type: str, date_from: str, date_to: str,
         person_id: str | None = None,
     ):
+        self._require("VIEW_REPORTS")
         try:
             start = date.fromisoformat(date_from)
             end = date.fromisoformat(date_to)
@@ -44,8 +46,15 @@ class ReportController:
         return start.isoformat(), end.isoformat()
 
     def export_csv(self, destination: Path, *, overwrite: bool = False):
+        self._require("EXPORT_REPORTS")
         if self.last_report is None: raise ReportValidationError("generate a report first")
         return self.exporter.export_csv(self.last_report, destination, overwrite=overwrite)
 
     @property
     def excel_available(self) -> bool: return self.exporter.excel_available()
+
+    def _require(self, permission: str) -> None:
+        if self.authorization is not None:
+            from src.core.security import AuthorizationPermission
+            if not self.authorization.can(AuthorizationPermission(permission)):
+                raise PermissionError("operation is not authorized")

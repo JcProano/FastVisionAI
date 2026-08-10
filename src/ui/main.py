@@ -74,8 +74,55 @@ from src.ui.reports import ReportController, ReportWindow
 from src.ui.people.search_controller import (
     AdvancedPeopleSearchController, PeopleSearchPolicy,
 )
+from src.core.security import (
+    AuthenticationPolicy, AuthenticationService, AuthenticatedSessionManager,
+    AuthorizationEngine, AuthorizationPermission, PasswordHasher, PasswordPolicy, UserRepository,
+)
+from src.ui.security import AuthorizationController, LoginWindow, SecurityController
 
 LOGGER = logging.getLogger(__name__)
+
+
+def build_security(
+    settings: dict[str, object], project_root: Path = PROJECT_ROOT,
+) -> SecurityController:
+    """Build fail-closed operator security with a project-relative users.db."""
+    configuration = settings.get("security", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("security configuration must be an object")
+    enabled = bool(configuration.get("enabled", True))
+    sessions = AuthenticatedSessionManager(
+        float(configuration.get("session_idle_timeout_seconds", 1800))
+    )
+    engine = AuthorizationEngine(enabled=enabled)
+    authorization = AuthorizationController(engine, sessions, enabled=enabled)
+    if not enabled:
+        # This is the sole explicit authorization bypass. No database is touched.
+        repository = UserRepository(project_root / ".security-disabled-unused.db")
+        hasher = PasswordHasher(PasswordPolicy())
+        authentication = AuthenticationService(repository, hasher)
+        return SecurityController(authentication, sessions, authorization, enabled=False)
+    configured = Path(str(configuration.get("database_path", "data/fastvision/users.db")))
+    if configured.is_absolute() or ".." in configured.parts:
+        raise ValueError("security database path must be project-relative and safe")
+    root = project_root.resolve(); database = (root / configured).resolve()
+    if root not in database.parents:
+        raise ValueError("security database path escapes project root")
+    repository = UserRepository(database)
+    repository.initialize()  # failure deliberately aborts administrative startup
+    password_policy = PasswordPolicy(
+        int(configuration.get("minimum_password_length", 10)),
+        int(configuration.get("maximum_password_length", 128)),
+    )
+    hasher = PasswordHasher(password_policy)
+    authentication = AuthenticationService(repository, hasher, AuthenticationPolicy(
+        int(configuration.get("max_failed_attempts", 5)),
+        int(configuration.get("lockout_seconds", 300)),
+    ))
+    return SecurityController(
+        authentication, sessions, authorization, enabled=True,
+        bootstrap_enabled=bool(configuration.get("bootstrap_admin_enabled", True)),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,7 +316,7 @@ def build_detection_event_service(
 
 def build_attendance(
     settings: dict[str, object], people: PersonRepository | None,
-    project_root: Path = PROJECT_ROOT,
+    project_root: Path = PROJECT_ROOT, authorization=None,
 ) -> AttendanceUIController | None:
     configuration = settings.get("attendance", {})
     if not isinstance(configuration, dict):
@@ -316,7 +363,7 @@ def build_attendance(
         policy_version=str(configuration.get("policy_version", "1.0")),
     )
     service = AttendanceService(repository, people, policy)
-    return AttendanceUIController(service, repository, people)
+    return AttendanceUIController(service, repository, people, authorization)
 
 
 def build_stability_tracker(settings: dict[str, object]) -> StabilityTracker | None:
@@ -489,7 +536,7 @@ def build_application_events(
     return bus, diagnostics
 
 
-def build_reports(settings, people, detections, attendance):
+def build_reports(settings, people, detections, attendance, authorization=None):
     configuration = settings.get("reports", {})
     if not isinstance(configuration, dict):
         raise ValueError("reports configuration must be an object")
@@ -504,7 +551,7 @@ def build_reports(settings, people, detections, attendance):
             configuration.get("presentation_timezone", "America/Guayaquil")
         ),
     )
-    return ReportController(ReportService(people, detections, attendance, policy))
+    return ReportController(ReportService(people, detections, attendance, policy), authorization=authorization)
 
 
 def build_people_search(settings, controller, thumbnail_manager):
@@ -633,15 +680,19 @@ def main() -> int:
     if args.mock_duration is not None and args.mock_duration <= 0:
         parser.error("--mock-duration must be positive")
     settings = json.loads(args.config.read_text(encoding="utf-8"))
+    security = build_security(settings)
     application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
     detection_event_service = build_detection_event_service(settings)
-    attendance_controller = build_attendance(settings,person_repository)
+    attendance_controller = build_attendance(
+        settings, person_repository, authorization=security.authorization,
+    )
     report_controller = build_reports(
         settings, person_repository,
         None if detection_event_service is None else detection_event_service.repository,
         None if attendance_controller is None else attendance_controller.repository,
+        security.authorization,
     )
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
@@ -655,7 +706,7 @@ def main() -> int:
     )
     if person_repository is not None:
         people_controller = DatabasePeopleManagerController(  # type: ignore[assignment]
-            person_repository, people_controller,
+            person_repository, people_controller, security.authorization,
         )
     people_search_controller = build_people_search(
         settings, people_controller, thumbnail_manager,
@@ -750,6 +801,12 @@ def main() -> int:
         application_event_bus=application_events,
     )
     root = tk.Tk()
+    if security.enabled:
+        root.withdraw()
+        if not LoginWindow(root, security).run():
+            root.destroy()
+            return 0
+        root.deiconify()
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, DashboardConfigurationWindow] = {}
     profile_windows: dict[str, PersonProfileWindow] = {}
@@ -782,6 +839,7 @@ def main() -> int:
         reports_view = report_window.pop("window", None)
         if reports_view is not None and reports_view.window.winfo_exists(): reports_view.close()
         session.close()
+        security.logout()
 
     profile_controller = None if person_repository is None else PersonProfileController(
         person_repository, people_controller, people_controller.biometrics, thumbnail_manager,
@@ -919,6 +977,7 @@ def main() -> int:
         report_refresh_seconds=float(
             settings.get("reports", {}).get("dashboard_refresh_seconds", 30)
         ),
+        can=lambda permission: security.authorization.can(AuthorizationPermission(permission)),
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)
