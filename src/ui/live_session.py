@@ -15,6 +15,7 @@ from pathlib import Path
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
 from src.engine.action_executor import (
     ActionExecutionInput, ActionExecutionResult, ActionExecutionState, ActionExecutor,
+    DetectionEventActionData,
 )
 from src.engine.decision_orchestrator import (
     DecisionOrchestrator, DecisionOrchestratorInput, DecisionOrchestratorResult,
@@ -89,6 +90,7 @@ class LiveFaceSession:
         identification_policy_engine: IdentificationPolicyEngine | None = None,
         decision_orchestrator: DecisionOrchestrator | None = None,
         action_executor: ActionExecutor | None = None,
+        detection_event_logging_via_executor: bool = False,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -111,6 +113,11 @@ class LiveFaceSession:
         self._identification_policy = identification_policy_engine
         self._decision_orchestrator = decision_orchestrator
         self._action_executor = action_executor
+        if detection_event_logging_via_executor and (
+            action_executor is None or not action_executor.has_detection_event_adapter
+        ):
+            raise ValueError("action-executor event mode requires a configured adapter")
+        self._detection_event_logging_via_executor = detection_event_logging_via_executor
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -403,8 +410,10 @@ class LiveFaceSession:
             dto, stability_result, identification, face_count,
         )
         self._event(orchestration)
-        self._event(self._evaluate_action_executor(orchestration))
-        if self._detection_events is not None and not self._event_history_suspended.is_set():
+        self._event(self._evaluate_action_executor(orchestration, dto, face_count))
+        if (not getattr(self, "_detection_event_logging_via_executor", False)
+                and self._detection_events is not None
+                and not self._event_history_suspended.is_set()):
             event_type = None
             if dto.state is UIState.MULTIPLE_FACES:
                 event_type = DetectionEventType.MULTIPLE_FACES
@@ -508,15 +517,21 @@ class LiveFaceSession:
 
     def _evaluate_action_executor(
         self, orchestration: DecisionOrchestratorDTO,
+        monitoring: MonitoringDTO | None = None, face_count: int = 0,
     ) -> ActionExecutorDTO:
         executor = getattr(self, "_action_executor", None)
-        if executor is None:
+        suspension = getattr(self, "_event_history_suspended", None)
+        if executor is None or (suspension is not None and suspension.is_set()):
             return self._action_not_evaluated_dto()
+        event_data = None if monitoring is None else DetectionEventActionData(
+            monitoring.recognition_state, monitoring.candidate_display_name,
+            monitoring.similarity, monitoring.quality_score, self._camera_id, face_count,
+        )
         result = executor.execute(ActionExecutionInput(
             orchestration.proposed_actions, orchestration.blocked_actions,
             orchestration.state, orchestration.automatic_actions_enabled,
             orchestration.person_id, self._session_id, self._session_id,
-            datetime.now(timezone.utc),
+            datetime.now(timezone.utc), event_data,
         ))
         return _action_executor_dto(result)
 

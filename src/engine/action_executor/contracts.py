@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+import math
 
 
 class ActionExecutorValidationError(ValueError):
@@ -37,6 +38,7 @@ class ActionExecutionInput:
     run_id: str
     session_id: str
     timestamp: datetime
+    detection_event: DetectionEventActionData | None = None
 
     def __post_init__(self) -> None:
         if not self.orchestrator_state.strip():
@@ -47,6 +49,27 @@ class ActionExecutionInput:
             raise ActionExecutorValidationError("run_id and session_id are required")
         if self.timestamp.tzinfo is None:
             raise ActionExecutorValidationError("timestamp must be timezone-aware")
+
+
+@dataclass(frozen=True, slots=True)
+class DetectionEventActionData:
+    """Minimum scalar observation payload visible only to the event adapter."""
+
+    recognition_state: str
+    display_name_snapshot: str | None = None
+    similarity: float | None = None
+    quality_score: float | None = None
+    camera_id: str | None = None
+    face_count: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.recognition_state.strip():
+            raise ActionExecutorValidationError("recognition_state is required")
+        if self.face_count < 0:
+            raise ActionExecutorValidationError("face_count cannot be negative")
+        for value in (self.similarity, self.quality_score):
+            if value is not None and not math.isfinite(value):
+                raise ActionExecutorValidationError("event metric must be finite")
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,4 +103,3 @@ class ActionExecutionResult:
             raise ActionExecutorValidationError("policy provenance is required")
         if len(set(self.executed_actions)) != len(self.executed_actions):
             raise ActionExecutorValidationError("executed actions contain duplicates")
-

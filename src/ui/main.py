@@ -60,6 +60,7 @@ from src.ui.detection_history.tk_window import DetectionHistoryWindow
 from src.core.attendance import AttendancePolicy, AttendanceRepository, AttendanceService
 from src.ui.attendance import AttendanceUIController
 from src.ui.attendance.tk_window import AttendanceHistoryWindow
+from src.ui.action_adapters import DetectionEventServiceActionAdapter
 from src.validation.guided_face_capture import load_guided_profile
 
 LOGGER = logging.getLogger(__name__)
@@ -412,14 +413,17 @@ def build_decision_orchestrator(
     ))
 
 
-def build_action_executor(settings: dict[str, object]) -> ActionExecutor | None:
-    """Build the informational executor without wiring any real side-effect adapter."""
+def build_action_executor(
+    settings: dict[str, object],
+    detection_events: DetectionEventService | None = None,
+) -> ActionExecutor | None:
+    """Build the executor; only the low-risk event adapter may be wired."""
     configuration = settings.get("action_executor", {})
     if not isinstance(configuration, dict):
         raise ValueError("action_executor configuration must be an object")
     if not bool(configuration.get("enabled", False)):
         return None
-    return ActionExecutor(ActionExecutorPolicy(
+    policy = ActionExecutorPolicy(
         enabled=True,
         automatic_execution_enabled=bool(
             configuration.get("automatic_execution_enabled", False)
@@ -443,7 +447,31 @@ def build_action_executor(settings: dict[str, object]) -> ActionExecutor | None:
             "policy_name", "action_executor_development"
         )),
         policy_version=str(configuration.get("policy_version", "1.0")),
-    ))
+    )
+    adapter = None
+    if detection_events is not None and policy.allow_detection_event_logging:
+        adapter = DetectionEventServiceActionAdapter(detection_events)
+    return ActionExecutor(policy, detection_event_adapter=adapter)
+
+
+def uses_action_executor_detection_logging(
+    executor: ActionExecutor | None,
+    orchestrator: DecisionOrchestrator | None,
+    detection_events: DetectionEventService | None,
+) -> bool:
+    """Resolve one stable logging route at composition time, never per frame."""
+    return bool(
+        detection_events is not None
+        and executor is not None
+        and executor.policy.enabled
+        and executor.has_detection_event_adapter
+        and executor.policy.automatic_execution_enabled
+        and executor.policy.allow_detection_event_logging
+        and orchestrator is not None
+        and orchestrator.policy.enabled
+        and orchestrator.policy.automatic_actions_enabled
+        and orchestrator.policy.allow_detection_event_proposal
+    )
 
 
 def _optional_float(configuration: dict[str, object], key: str) -> float | None:
@@ -502,7 +530,10 @@ def main() -> int:
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
     decision_orchestrator = build_decision_orchestrator(settings)
-    action_executor = build_action_executor(settings)
+    action_executor = build_action_executor(settings, detection_event_service)
+    detection_logging_via_executor = uses_action_executor_detection_logging(
+        action_executor, decision_orchestrator, detection_event_service,
+    )
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -586,6 +617,7 @@ def main() -> int:
         identification_policy_engine=identification_policy_engine,
         decision_orchestrator=decision_orchestrator,
         action_executor=action_executor,
+        detection_event_logging_via_executor=detection_logging_via_executor,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}

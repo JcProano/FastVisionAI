@@ -6,7 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .contracts import ActionExecutionContext
+from .contracts import ActionExecutionContext, DetectionEventActionData
 
 
 class PopupActionAdapter(Protocol):
@@ -15,7 +15,9 @@ class PopupActionAdapter(Protocol):
 
 
 class DetectionEventActionAdapter(Protocol):
-    def log_proposed_event(self, context: ActionExecutionContext) -> None: ...
+    def log_proposed_event(
+        self, context: ActionExecutionContext, event: DetectionEventActionData,
+    ) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +38,9 @@ class CallbackPopupActionAdapter:
 class CallbackDetectionEventActionAdapter:
     """Prepared callback adapter; deliberately not wired by the composition root."""
 
-    callback: Callable[[ActionExecutionContext], None]
+    callback: Callable[[ActionExecutionContext, DetectionEventActionData], None]
 
-    def log_proposed_event(self, context: ActionExecutionContext) -> None:
-        self.callback(context)
-
+    def log_proposed_event(
+        self, context: ActionExecutionContext, event: DetectionEventActionData,
+    ) -> None:
+        self.callback(context, event)

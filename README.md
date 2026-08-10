@@ -377,8 +377,17 @@ acciones de forma determinista; los fallos de un adapter se aíslan y no detiene
 acciones posteriores ni la sesión. No consulta reconocimiento, galería, estabilidad,
 modelos o datos civiles.
 
-La configuración de desarrollo mantiene `automatic_execution_enabled=false`, por lo
-que no se invoca ningún adapter y el dashboard muestra `EXECUTION_DISABLED`. Los
-adaptadores de popup y eventos existen solo como fronteras preparadas y no están
-conectados en `main.py`. Asistencia, control de acceso y apertura de puertas siguen
-bloqueados y no ejecutables.
+Con `automatic_execution_enabled=false` no se invoca ningún adapter. Asistencia,
+control de acceso y apertura de puertas siguen bloqueados y no ejecutables.
+
+### Logging controlado mediante Action Executor (Fase 28)
+
+El perfil local habilita exclusivamente `LOG_DETECTION_EVENT`: las propuestas y
+ejecución de popups están deshabilitadas, y no existe adapter de asistencia. La ruta
+se decide una vez al construir la sesión. Si todas las barreras están habilitadas,
+el evento pasa por `DetectionEventServiceActionAdapter`; ante una configuración
+incompleta se conserva la ruta heredada. Nunca se usan ambas rutas en una evaluación.
+
+`DetectionEventService` continúa siendo responsable de cooldown, caché y escritura.
+Un cooldown procesado correctamente aparece como acción `EXECUTED` aunque no genere
+otra fila. Formulario, enrollment y rollback suspenden completamente el historial.

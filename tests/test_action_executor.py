@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from src.engine.action_executor import (
     ActionExecutionInput, ActionExecutionState, ActionExecutor, ActionExecutorPolicy,
+    DetectionEventActionData,
 )
 
 
@@ -22,7 +23,7 @@ class PopupSpy:
 
 class DetectionSpy:
     def __init__(self, calls, fail=False): self.calls = calls; self.fail = fail
-    def log_proposed_event(self, context):
+    def log_proposed_event(self, context, event):
         self.calls.append(context.action.value)
         if self.fail: raise RuntimeError("safe test failure")
 
@@ -33,6 +34,7 @@ def action_input(actions=("SHOW_REGISTERED_POPUP",), **changes):
         orchestrator_state="POLICY_ELIGIBLE",
         orchestrator_automatic_actions_enabled=True, person_id="person",
         run_id="run", session_id="session", timestamp=datetime.now(timezone.utc),
+        detection_event=DetectionEventActionData("NOT_EVALUATED"),
     )
     values.update(changes)
     return ActionExecutionInput(**values)
@@ -156,4 +158,3 @@ class ActionExecutorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

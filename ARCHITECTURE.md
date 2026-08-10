@@ -253,12 +253,18 @@ names, orchestration state, safe correlation identifiers and an aware timestamp.
 Execution is deterministic: proposals are deduplicated and processed as registered
 popup, unregistered popup, then detection-event logging. Side effects can occur only
 through injected `PopupActionAdapter` or `DetectionEventActionAdapter` instances.
-With the development default `automatic_execution_enabled=false`, the executor is
-strictly side-effect free, reports `EXECUTION_DISABLED`, and invokes no adapter.
-Attendance and access actions are non-executable in Phase 27. The composition root
-deliberately creates no concrete adapter, so existing UI and event behavior remains
-unchanged. Form and enrollment transitions clear the dashboard projection to
-`NOT_EVALUATED`.
+With `automatic_execution_enabled=false`, the executor is strictly side-effect free,
+reports `EXECUTION_DISABLED`, and invokes no adapter. Attendance and access actions
+remain non-executable.
+
+Phase 28 enables one low-risk adapter in the local development profile:
+`LOG_DETECTION_EVENT`. Composition resolves a stable route once per session. When all
+orchestrator, executor, service and adapter gates are enabled, event observations flow
+exclusively through `DetectionEventServiceActionAdapter`; otherwise the legacy direct
+session route remains active. They are mutually exclusive for every evaluation.
+Cooldown, cache and persistence remain owned by `DetectionEventService`. Popup and
+attendance adapters are not connected. Form, enrollment and rollback suspend both
+routes and clear the dashboard projection to `NOT_EVALUATED`.
 # Capa UI local experimental
 
 `src/ui/` es una frontera de presentación independiente. `ExperimentalRecognitionSession`

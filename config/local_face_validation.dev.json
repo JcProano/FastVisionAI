@@ -116,9 +116,9 @@
   },
   "decision_orchestrator": {
     "enabled": true,
-    "automatic_actions_enabled": false,
-    "allow_registered_popup_proposal": true,
-    "allow_unregistered_popup_proposal": true,
+    "automatic_actions_enabled": true,
+    "allow_registered_popup_proposal": false,
+    "allow_unregistered_popup_proposal": false,
     "allow_detection_event_proposal": true,
     "allow_attendance_proposal": false,
     "require_stable_for_registered_popup": true,
@@ -129,13 +129,13 @@
   },
   "action_executor": {
     "enabled": true,
-    "automatic_execution_enabled": false,
-    "allow_registered_popup": true,
-    "allow_unregistered_popup": true,
+    "automatic_execution_enabled": true,
+    "allow_registered_popup": false,
+    "allow_unregistered_popup": false,
     "allow_detection_event_logging": true,
     "allow_attendance_execution": false,
     "require_orchestrator_actions_enabled": true,
-    "policy_name": "action_executor_development",
-    "policy_version": "1.0"
+    "policy_name": "action_executor_detection_logging",
+    "policy_version": "1.1"
   }
 }

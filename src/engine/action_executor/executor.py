@@ -7,7 +7,7 @@ import logging
 from .adapters import DetectionEventActionAdapter, PopupActionAdapter
 from .contracts import (
     ActionExecutionContext, ActionExecutionInput, ActionExecutionResult,
-    ActionExecutionState, ExecutableAction,
+    ActionExecutionState, DetectionEventActionData, ExecutableAction,
 )
 from .policy import ActionExecutorPolicy
 
@@ -37,6 +37,10 @@ class ActionExecutor:
         self.policy = policy or ActionExecutorPolicy()
         self._popup = popup_adapter
         self._detection = detection_event_adapter
+
+    @property
+    def has_detection_event_adapter(self) -> bool:
+        return self._detection is not None
 
     def execute(self, value: ActionExecutionInput) -> ActionExecutionResult:
         policy = self.policy
@@ -79,7 +83,7 @@ class ActionExecutor:
             except ValueError:
                 skipped.append(action_name); reasons.append("unknown_action")
                 continue
-            reason = self._precondition(action, value.person_id)
+            reason = self._precondition(action, value.person_id, value.detection_event)
             if reason is not None:
                 skipped.append(action_name); reasons.append(reason)
                 continue
@@ -88,7 +92,7 @@ class ActionExecutor:
                 value.orchestrator_state, value.timestamp,
             )
             try:
-                self._invoke(action, context)
+                self._invoke(action, context, value.detection_event)
                 executed.append(action_name)
             except Exception as exc:  # adapter boundary must not stop LiveFaceSession
                 LOGGER.error("Action adapter failed safely; action=%s exception_type=%s",
@@ -106,7 +110,8 @@ class ActionExecutor:
         return self._result(value, state, True, requested, tuple(executed), tuple(skipped),
                             tuple(failed), tuple(dict.fromkeys(reasons)))
 
-    def _precondition(self, action: ExecutableAction, person_id: str | None) -> str | None:
+    def _precondition(self, action: ExecutableAction, person_id: str | None,
+                      event: DetectionEventActionData | None) -> str | None:
         policy = self.policy
         if action is ExecutableAction.SHOW_REGISTERED_POPUP:
             if not policy.allow_registered_popup:
@@ -127,9 +132,12 @@ class ActionExecutor:
                 return "detection_event_logging_disabled"
             if self._detection is None:
                 return "detection_event_adapter_missing"
+            if event is None:
+                return "detection_event_data_missing"
         return None
 
-    def _invoke(self, action: ExecutableAction, context: ActionExecutionContext) -> None:
+    def _invoke(self, action: ExecutableAction, context: ActionExecutionContext,
+                event: DetectionEventActionData | None) -> None:
         if action is ExecutableAction.SHOW_REGISTERED_POPUP:
             assert self._popup is not None
             self._popup.show_registered(context)
@@ -138,7 +146,8 @@ class ActionExecutor:
             self._popup.show_unregistered(context)
         else:
             assert self._detection is not None
-            self._detection.log_proposed_event(context)
+            assert event is not None
+            self._detection.log_proposed_event(context, event)
 
     def _result(
         self, value: ActionExecutionInput, state: ActionExecutionState, evaluated: bool,
@@ -158,4 +167,3 @@ def _requested(values: tuple[str, ...]) -> tuple[str, ...]:
     ordered = [name for name in _ORDER if name in unique]
     ordered.extend(sorted(unique.difference(_ORDER)))
     return tuple(ordered)
-
