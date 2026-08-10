@@ -132,6 +132,21 @@ class DecisionOrchestratorDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class ActionExecutorDTO:
+    """Safe projection of controlled execution; contains no adapter context."""
+    state: str
+    evaluated: bool
+    requested_actions: tuple[str, ...]
+    executed_actions: tuple[str, ...]
+    skipped_actions: tuple[str, ...]
+    failed_actions: tuple[str, ...]
+    reasons: tuple[str, ...]
+    automatic_execution_enabled: bool
+    policy_name: str
+    policy_version: str
+
+
+@dataclass(frozen=True, slots=True)
 class EnrollmentProgressDTO:
     state: UIState
     instruction: str

@@ -242,6 +242,23 @@ preparation, inference and release. Typed `InternalEventBus` and
 `ExternalEventBus` boundaries currently share a synchronous `EventBus`.
 Architectural decisions are recorded under `docs/adr/`; plugin authors should
 follow `PLUGIN_API.md`.
+
+## Controlled Action Executor
+
+`ActionExecutor` is the adapter-only boundary after `DecisionOrchestrator`. It does
+not derive biometric decisions or inspect galleries, templates, images, recognition,
+stability or civil data. Its immutable input contains only proposed/blocked action
+names, orchestration state, safe correlation identifiers and an aware timestamp.
+
+Execution is deterministic: proposals are deduplicated and processed as registered
+popup, unregistered popup, then detection-event logging. Side effects can occur only
+through injected `PopupActionAdapter` or `DetectionEventActionAdapter` instances.
+With the development default `automatic_execution_enabled=false`, the executor is
+strictly side-effect free, reports `EXECUTION_DISABLED`, and invokes no adapter.
+Attendance and access actions are non-executable in Phase 27. The composition root
+deliberately creates no concrete adapter, so existing UI and event behavior remains
+unchanged. Form and enrollment transitions clear the dashboard projection to
+`NOT_EVALUATED`.
 # Capa UI local experimental
 
 `src/ui/` es una frontera de presentación independiente. `ExperimentalRecognitionSession`

@@ -16,6 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover - branch depends on Python build
     ttk = None  # type: ignore[assignment]
 
 from src.ui.contracts import (
+    ActionExecutorDTO,
     EnrollmentProgressDTO,
     EnrollmentResultDTO,
     ErrorDTO,
@@ -72,6 +73,29 @@ class DecisionOrchestratorText:
     proposals: str
     automatic_actions: str
     primary_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ActionExecutorText:
+    state: str
+    requested: str
+    executed: str
+    automation: str
+    primary_reason: str
+
+
+def action_executor_text(dto: ActionExecutorDTO | None) -> ActionExecutorText:
+    if dto is None:
+        return ActionExecutorText(
+            "NOT_EVALUATED", "N/D", "—", "Deshabilitada", "N/D",
+        )
+    return ActionExecutorText(
+        dto.state,
+        ", ".join(dto.requested_actions) if dto.requested_actions else "—",
+        ", ".join(dto.executed_actions) if dto.executed_actions else "—",
+        "Habilitada" if dto.automatic_execution_enabled else "Deshabilitada",
+        dto.reasons[0] if dto.reasons else "N/D",
+    )
 
 
 def decision_orchestrator_text(
@@ -187,6 +211,7 @@ class LocalFaceTkApp:
         self._stability: StabilityDTO | None = None
         self._identification_policy: IdentificationPolicyDTO | None = None
         self._decision_orchestrator: DecisionOrchestratorDTO | None = None
+        self._action_executor: ActionExecutorDTO | None = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -276,6 +301,16 @@ class LocalFaceTkApp:
             justify="left",
         )
         self.decision_orchestrator_status.pack(anchor="w")
+
+        executor_card = ttk.LabelFrame(side, text="Ejecución controlada", padding=6)
+        executor_card.pack(fill="x", pady=6)
+        self.action_executor_status = ttk.Label(
+            executor_card,
+            text=("Estado: NOT_EVALUATED\nSolicitadas: N/D\nEjecutadas: —\n"
+                  "Automatización: Deshabilitada\nRazón: N/D"),
+            justify="left",
+        )
+        self.action_executor_status.pack(anchor="w")
 
         history_card = ttk.LabelFrame(side, text="Historial temporal", padding=6)
         history_card.pack(fill="both", expand=True, pady=6)
@@ -503,6 +538,10 @@ class LocalFaceTkApp:
                 self._decision_orchestrator = event
                 self._refresh_decision_orchestrator()
 
+            elif isinstance(event, ActionExecutorDTO):
+                self._action_executor = event
+                self._refresh_action_executor()
+
         now = time.monotonic()
         if now - self._last_dashboard_refresh >= self._metrics_refresh_seconds:
             self._refresh_dashboard()
@@ -585,6 +624,16 @@ class LocalFaceTkApp:
             f"Estado: {value.state}\n"
             f"Propuestas: {value.proposals}\n"
             f"Acciones automáticas: {value.automatic_actions}\n"
+            f"Razón: {value.primary_reason}"
+        ))
+
+    def _refresh_action_executor(self) -> None:
+        value = action_executor_text(self._action_executor)
+        self.action_executor_status.configure(text=(
+            f"Estado: {value.state}\n"
+            f"Solicitadas: {value.requested}\n"
+            f"Ejecutadas: {value.executed}\n"
+            f"Automatización: {value.automation}\n"
             f"Razón: {value.primary_reason}"
         ))
 

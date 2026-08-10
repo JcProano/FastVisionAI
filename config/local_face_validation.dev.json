@@ -126,5 +126,16 @@
     "require_active_person_for_attendance": true,
     "policy_name": "decision_orchestrator_development",
     "policy_version": "1.0"
+  },
+  "action_executor": {
+    "enabled": true,
+    "automatic_execution_enabled": false,
+    "allow_registered_popup": true,
+    "allow_unregistered_popup": true,
+    "allow_detection_event_logging": true,
+    "allow_attendance_execution": false,
+    "require_orchestrator_actions_enabled": true,
+    "policy_name": "action_executor_development",
+    "policy_version": "1.0"
   }
 }

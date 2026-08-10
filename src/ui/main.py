@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
+from src.engine.action_executor import ActionExecutor, ActionExecutorPolicy
 from src.engine.decision_orchestrator import (
     DecisionOrchestrator, DecisionOrchestratorPolicy,
 )
@@ -411,6 +412,40 @@ def build_decision_orchestrator(
     ))
 
 
+def build_action_executor(settings: dict[str, object]) -> ActionExecutor | None:
+    """Build the informational executor without wiring any real side-effect adapter."""
+    configuration = settings.get("action_executor", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("action_executor configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    return ActionExecutor(ActionExecutorPolicy(
+        enabled=True,
+        automatic_execution_enabled=bool(
+            configuration.get("automatic_execution_enabled", False)
+        ),
+        allow_registered_popup=bool(
+            configuration.get("allow_registered_popup", True)
+        ),
+        allow_unregistered_popup=bool(
+            configuration.get("allow_unregistered_popup", True)
+        ),
+        allow_detection_event_logging=bool(
+            configuration.get("allow_detection_event_logging", True)
+        ),
+        allow_attendance_execution=bool(
+            configuration.get("allow_attendance_execution", False)
+        ),
+        require_orchestrator_actions_enabled=bool(
+            configuration.get("require_orchestrator_actions_enabled", True)
+        ),
+        policy_name=str(configuration.get(
+            "policy_name", "action_executor_development"
+        )),
+        policy_version=str(configuration.get("policy_version", "1.0")),
+    ))
+
+
 def _optional_float(configuration: dict[str, object], key: str) -> float | None:
     value = configuration.get(key)
     return None if value is None else float(value)
@@ -467,6 +502,7 @@ def main() -> int:
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
     decision_orchestrator = build_decision_orchestrator(settings)
+    action_executor = build_action_executor(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -549,6 +585,7 @@ def main() -> int:
         stability_tracker=stability_tracker,
         identification_policy_engine=identification_policy_engine,
         decision_orchestrator=decision_orchestrator,
+        action_executor=action_executor,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}

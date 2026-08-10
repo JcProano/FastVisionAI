@@ -368,3 +368,17 @@ No ejecuta acciones: no abre popups, no escribe eventos, no registra asistencia 
 modifica la galería. `PROPOSE_ATTENDANCE` es únicamente una propuesta informativa y
 permanece deshabilitada en la configuración de desarrollo. No existe un campo de
 acciones ejecutadas y las acciones automáticas están deshabilitadas por defecto.
+
+### Action Executor (Fase 27)
+
+`ActionExecutor` recibe exclusivamente propuestas del orquestador y aplica una
+política explícita antes de atravesar adaptadores de efectos. Deduplica y ordena las
+acciones de forma determinista; los fallos de un adapter se aíslan y no detienen las
+acciones posteriores ni la sesión. No consulta reconocimiento, galería, estabilidad,
+modelos o datos civiles.
+
+La configuración de desarrollo mantiene `automatic_execution_enabled=false`, por lo
+que no se invoca ningún adapter y el dashboard muestra `EXECUTION_DISABLED`. Los
+adaptadores de popup y eventos existen solo como fronteras preparadas y no están
+conectados en `main.py`. Asistencia, control de acceso y apertura de puertas siguen
+bloqueados y no ejecutables.
