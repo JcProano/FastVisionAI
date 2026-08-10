@@ -431,3 +431,15 @@ defecto. Excel queda no disponible si `openpyxl` no está instalado y PDF perman
 deshabilitado hasta adoptar una infraestructura adecuada. Ninguna exportación
 incluye embeddings, imágenes, thumbnails o PII civil detallada; la cédula solo se
 presenta enmascarada.
+### Búsqueda avanzada de personas (Fase 32)
+
+La administración civil dispone de búsqueda SQLite paginada por texto, cédula,
+nombre, apellido, teléfono, email, estado y fecha de creación. Cada término libre
+debe aparecer en al menos un campo y los términos se combinan con `AND`. Los
+valores SQL siempre se parametrizan; orden y dirección se restringen a listas
+internas.
+
+La UI usa páginas de 25, 50 o 100 filas, debounce cancelable y fechas presentadas
+en `America/Guayaquil`. La cédula se muestra enmascarada y cada fila consulta solo
+sus estadísticas biométricas y un indicador de foto. No se añadieron índices ni
+migraciones sin métricas reales que los justifiquen.

@@ -364,3 +364,15 @@ La UI de reportes depende de DTO seguros mediante `ReportController`. Su tarjeta
 diaria usa un temporizador independiente del ciclo de frames y los fallos quedan
 aislados como `N/D`. CSV es el único formato habilitado obligatoriamente; Excel es
 opcional por importación diferida y PDF permanece indisponible.
+## Fase 32 — Búsqueda civil avanzada
+
+`AdvancedPeopleSearchController` se ubica entre `DatabasePeopleManagerController`
+y `PeopleManagerWindow`. La fuente de búsqueda es exclusivamente SQLite; Gallery
+solo aporta estadísticas para las personas de la página actual. Los filtros
+locales se convierten a UTC y usan un intervalo superior exclusivo.
+
+`PersonRepository.advanced_search()` y `count_advanced()` comparten el mismo
+constructor de filtros parametrizados. El orden usa una whitelist y `person_id`
+como desempate estable. Las transiciones administrativas continúan pasando por
+`DatabasePeopleManagerController` y se limitan a ACTIVE/ DISABLED. El modo legacy
+de la ventana permanece disponible cuando no se inyecta el controlador avanzado.

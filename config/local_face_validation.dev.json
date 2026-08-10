@@ -148,5 +148,12 @@
     "dashboard_refresh_seconds": 30,
     "max_rows": 5000,
     "presentation_timezone": "America/Guayaquil"
+  },
+  "people_search": {
+    "enabled": true,
+    "default_page_size": 25,
+    "allowed_page_sizes": [25, 50, 100],
+    "debounce_ms": 400,
+    "presentation_timezone": "America/Guayaquil"
   }
 }

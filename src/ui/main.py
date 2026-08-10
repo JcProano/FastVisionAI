@@ -71,6 +71,9 @@ from src.ui.action_adapters import (
 from src.validation.guided_face_capture import load_guided_profile
 from src.core.reports import ReportPolicy, ReportService
 from src.ui.reports import ReportController, ReportWindow
+from src.ui.people.search_controller import (
+    AdvancedPeopleSearchController, PeopleSearchPolicy,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -504,6 +507,26 @@ def build_reports(settings, people, detections, attendance):
     return ReportController(ReportService(people, detections, attendance, policy))
 
 
+def build_people_search(settings, controller, thumbnail_manager):
+    configuration = settings.get("people_search", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("people_search configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    if not isinstance(controller, DatabasePeopleManagerController):
+        return None
+    policy = PeopleSearchPolicy(
+        default_page_size=int(configuration.get("default_page_size", 25)),
+        allowed_page_sizes=tuple(int(value) for value in
+                                 configuration.get("allowed_page_sizes", (25, 50, 100))),
+        debounce_ms=int(configuration.get("debounce_ms", 400)),
+        presentation_timezone=str(
+            configuration.get("presentation_timezone", "America/Guayaquil")
+        ),
+    )
+    return AdvancedPeopleSearchController(controller, thumbnail_manager, policy)
+
+
 def _popup_configuration_complete(settings: dict[str, object]) -> bool:
     action = settings.get("action_executor", {})
     decision = settings.get("decision_orchestrator", {})
@@ -634,6 +657,9 @@ def main() -> int:
         people_controller = DatabasePeopleManagerController(  # type: ignore[assignment]
             person_repository, people_controller,
         )
+    people_search_controller = build_people_search(
+        settings, people_controller, thumbnail_manager,
+    )
     popup_settings = settings.get("identification_popup", {})
     if not isinstance(popup_settings, dict):
         raise ValueError("identification_popup configuration must be an object")
@@ -818,6 +844,7 @@ def main() -> int:
             on_cancel_additional=session.cancel_enrollment,
             thumbnail_manager=thumbnail_manager,
             on_view_profile=open_profile,
+            advanced_controller=people_search_controller,
         )
 
     def open_configuration():

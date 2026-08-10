@@ -251,10 +251,70 @@ class PersonRepository:
         finally:
             connection.close()
 
+    def advanced_search(
+        self, *, text: str | None = None, cedula: str | None = None,
+        first_name: str | None = None, last_name: str | None = None,
+        phone: str | None = None, email: str | None = None,
+        status: PersonStatus | None = None, created_from: datetime | None = None,
+        created_to: datetime | None = None, limit: int = 25, offset: int = 0,
+        sort_by: str = "updated_at", sort_direction: str = "DESC",
+    ) -> tuple[PersonRecord, ...]:
+        if not 1 <= limit <= 1_000 or offset < 0:
+            raise ValueError("advanced search pagination is invalid")
+        allowed_sort = {"created_at", "updated_at", "first_name", "last_name", "status"}
+        if sort_by not in allowed_sort:
+            raise ValueError("advanced search sort field is invalid")
+        direction = sort_direction.upper()
+        if direction not in {"ASC", "DESC"}:
+            raise ValueError("advanced search sort direction is invalid")
+        where, parameters = _advanced_where(
+            text=text, cedula=cedula, first_name=first_name, last_name=last_name,
+            phone=phone, email=email, status=status, created_from=created_from,
+            created_to=created_to,
+        )
+        connection = self._connect()
+        try:
+            rows = connection.execute(
+                f"SELECT * FROM people{where} ORDER BY {sort_by} {direction}, "
+                "person_id ASC LIMIT ? OFFSET ?",
+                (*parameters, limit, offset),
+            ).fetchall()
+            return tuple(_record(row) for row in rows)
+        except Exception as exc:
+            raise PersonRepositoryError("advanced person search failed") from exc
+        finally:
+            connection.close()
+
+    def count_advanced(
+        self, *, text: str | None = None, cedula: str | None = None,
+        first_name: str | None = None, last_name: str | None = None,
+        phone: str | None = None, email: str | None = None,
+        status: PersonStatus | None = None, created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> int:
+        where, parameters = _advanced_where(
+            text=text, cedula=cedula, first_name=first_name, last_name=last_name,
+            phone=phone, email=email, status=status, created_from=created_from,
+            created_to=created_to,
+        )
+        connection = self._connect()
+        try:
+            return int(connection.execute(
+                f"SELECT COUNT(*) FROM people{where}", parameters,
+            ).fetchone()[0])
+        except Exception as exc:
+            raise PersonRepositoryError("advanced person count failed") from exc
+        finally:
+            connection.close()
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path, timeout=self.timeout)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.create_function(
+            "CASEFOLD", 1, lambda value: None if value is None else str(value).casefold(),
+            deterministic=True,
+        )
         return connection
 
     def _one(self, sql: str, parameters: tuple[object, ...]) -> PersonRecord | None:
@@ -274,6 +334,55 @@ class PersonRepository:
         if self._one("SELECT * FROM people WHERE cedula = ?", (cedula,)) is not None:
             raise DuplicateCedulaError("cedula is already registered") from error
         raise PersonRepositoryError("person constraint validation failed") from error
+
+
+def _advanced_where(
+    *, text: str | None, cedula: str | None, first_name: str | None,
+    last_name: str | None, phone: str | None, email: str | None,
+    status: PersonStatus | None, created_from: datetime | None,
+    created_to: datetime | None,
+) -> tuple[str, tuple[object, ...]]:
+    clauses: list[str] = []
+    parameters: list[object] = []
+    normalized = " ".join((text or "").split())
+    searchable = (
+        "CASEFOLD(cedula) LIKE CASEFOLD(?) ESCAPE '\\'",
+        "CASEFOLD(first_name) LIKE CASEFOLD(?) ESCAPE '\\'",
+        "CASEFOLD(last_name) LIKE CASEFOLD(?) ESCAPE '\\'",
+        "CASEFOLD(first_name || ' ' || last_name) LIKE CASEFOLD(?) ESCAPE '\\'",
+        "CASEFOLD(phone) LIKE CASEFOLD(?) ESCAPE '\\'",
+        "CASEFOLD(email) LIKE CASEFOLD(?) ESCAPE '\\'",
+    )
+    for term in normalized.split():
+        clauses.append("(" + " OR ".join(searchable) + ")")
+        parameters.extend([_like(term)] * len(searchable))
+    if cedula is not None and cedula.strip():
+        clauses.append("cedula = ?")
+        parameters.append(EcuadorianCedulaValidator.validate(cedula))
+    for column, value in (
+        ("first_name", first_name), ("last_name", last_name),
+        ("phone", phone), ("email", email),
+    ):
+        if value is not None and value.strip():
+            clauses.append(f"CASEFOLD({column}) LIKE CASEFOLD(?) ESCAPE '\\'")
+            parameters.append(_like(" ".join(value.split())))
+    if status is not None:
+        if not isinstance(status, PersonStatus): raise ValueError("status is invalid")
+        clauses.append("status = ?"); parameters.append(status.value)
+    for column, value, operator in (
+        ("created_at", created_from, ">="), ("created_at", created_to, "<"),
+    ):
+        if value is not None:
+            if value.tzinfo is None: raise ValueError("created date must be timezone-aware")
+            clauses.append(f"{column} {operator} ?"); parameters.append(value.isoformat())
+    if created_from is not None and created_to is not None and created_from >= created_to:
+        raise ValueError("created date range is invalid")
+    return (" WHERE " + " AND ".join(clauses) if clauses else "", tuple(parameters))
+
+
+def _like(value: str) -> str:
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _record(row: sqlite3.Row) -> PersonRecord:

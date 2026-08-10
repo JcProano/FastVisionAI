@@ -1,6 +1,7 @@
 """Administrative adapter combining SQLite PII with gallery biometric statistics."""
 
 from __future__ import annotations
+from datetime import datetime, timezone
 
 from src.core.person_database import (
     PersonRepository, PersonStatus, PersonUpdateRequest,
@@ -96,6 +97,44 @@ class DatabasePeopleManagerController:
                 person_id,
             )
         return self.biometrics.begin_additional(person_id)
+
+    def set_administrative_status(
+        self, person_id: str, target: PersonStatus, *, confirmed: bool,
+    ) -> PeopleOperationResultDTO:
+        moment = datetime.now(timezone.utc)
+        if not confirmed:
+            return PeopleOperationResultDTO(
+                PeopleManagerState.IDLE, False, "status_change",
+                "Cambio de estado cancelado.", person_id, timestamp=moment,
+            )
+        try:
+            current = self.repository.get_by_person_id(person_id)
+            if current is None:
+                return PeopleOperationResultDTO(
+                    PeopleManagerState.ERROR, False, "status_change",
+                    "La persona no existe.", person_id, timestamp=moment,
+                )
+            allowed = {
+                (PersonStatus.ACTIVE, PersonStatus.DISABLED),
+                (PersonStatus.DISABLED, PersonStatus.ACTIVE),
+            }
+            if (current.status, target) not in allowed:
+                return PeopleOperationResultDTO(
+                    PeopleManagerState.ERROR, False, "status_change",
+                    "La transición administrativa no está permitida.", person_id,
+                    timestamp=moment,
+                )
+            self.repository.set_status(person_id, target)
+            return PeopleOperationResultDTO(
+                PeopleManagerState.IDLE, True, "status_change",
+                "Estado administrativo actualizado.", person_id, timestamp=moment,
+            )
+        except Exception:
+            return PeopleOperationResultDTO(
+                PeopleManagerState.ERROR, False, "status_change",
+                "No se pudo actualizar el estado administrativo.", person_id,
+                timestamp=moment,
+            )
 
     def __getattr__(self, name: str):
         return getattr(self.biometrics, name)
