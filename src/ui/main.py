@@ -15,6 +15,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
+from src.engine.decision_orchestrator import (
+    DecisionOrchestrator, DecisionOrchestratorPolicy,
+)
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
 from src.engine.gallery.persistence import GalleryPersistence
 from src.engine.recognition import RecognitionPolicy, RecognitionService
@@ -367,6 +370,47 @@ def build_identification_policy_engine(
     return IdentificationPolicyEngine(policy)
 
 
+def build_decision_orchestrator(
+    settings: dict[str, object],
+) -> DecisionOrchestrator | None:
+    configuration = settings.get("decision_orchestrator", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("decision_orchestrator configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    return DecisionOrchestrator(DecisionOrchestratorPolicy(
+        enabled=True,
+        automatic_actions_enabled=bool(
+            configuration.get("automatic_actions_enabled", False)
+        ),
+        allow_registered_popup_proposal=bool(
+            configuration.get("allow_registered_popup_proposal", True)
+        ),
+        allow_unregistered_popup_proposal=bool(
+            configuration.get("allow_unregistered_popup_proposal", True)
+        ),
+        allow_detection_event_proposal=bool(
+            configuration.get("allow_detection_event_proposal", True)
+        ),
+        allow_attendance_proposal=bool(
+            configuration.get("allow_attendance_proposal", False)
+        ),
+        require_stable_for_registered_popup=bool(
+            configuration.get("require_stable_for_registered_popup", True)
+        ),
+        require_policy_eligible_for_attendance=bool(
+            configuration.get("require_policy_eligible_for_attendance", True)
+        ),
+        require_active_person_for_attendance=bool(
+            configuration.get("require_active_person_for_attendance", True)
+        ),
+        policy_name=str(configuration.get(
+            "policy_name", "decision_orchestrator_development"
+        )),
+        policy_version=str(configuration.get("policy_version", "1.0")),
+    ))
+
+
 def _optional_float(configuration: dict[str, object], key: str) -> float | None:
     value = configuration.get(key)
     return None if value is None else float(value)
@@ -422,6 +466,7 @@ def main() -> int:
     attendance_controller = build_attendance(settings,person_repository)
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
+    decision_orchestrator = build_decision_orchestrator(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -503,6 +548,7 @@ def main() -> int:
             )),
         stability_tracker=stability_tracker,
         identification_policy_engine=identification_policy_engine,
+        decision_orchestrator=decision_orchestrator,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}

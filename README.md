@@ -361,3 +361,10 @@ calidad y estado administrativo. Su evaluación es pura e informativa. `ELIGIBLE
 significa que la observación cumple la política configurada; no confirma identidad,
 no autoriza acceso y no crea eventos o asistencia. No existen umbrales predeterminados
 de calidad o similitud y las acciones automáticas permanecen deshabilitadas.
+### Decision Orchestrator (Fase 26)
+
+El orquestador convierte señales escalares ya calculadas en propuestas ordenadas.
+No ejecuta acciones: no abre popups, no escribe eventos, no registra asistencia y no
+modifica la galería. `PROPOSE_ATTENDANCE` es únicamente una propuesta informativa y
+permanece deshabilitada en la configuración de desarrollo. No existe un campo de
+acciones ejecutadas y las acciones automáticas están deshabilitadas por defecto.

@@ -21,7 +21,7 @@ from src.ui.contracts import (
     ErrorDTO,
     MonitoringDTO,
     RegistrationFormData,
-    IdentificationPolicyDTO, RuntimeStatusDTO, StabilityDTO,
+    DecisionOrchestratorDTO, IdentificationPolicyDTO, RuntimeStatusDTO, StabilityDTO,
     UIErrorCode,
     UIState,
 )
@@ -64,6 +64,29 @@ class IdentificationPolicyText:
     evaluated: str
     automatic_actions: str
     primary_reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionOrchestratorText:
+    state: str
+    proposals: str
+    automatic_actions: str
+    primary_reason: str
+
+
+def decision_orchestrator_text(
+    dto: DecisionOrchestratorDTO | None,
+) -> DecisionOrchestratorText:
+    if dto is None:
+        return DecisionOrchestratorText(
+            "NOT_EVALUATED", "N/D", "Deshabilitadas", "N/D",
+        )
+    proposals = ", ".join(dto.proposed_actions) if dto.proposed_actions else "NONE"
+    return DecisionOrchestratorText(
+        dto.state, proposals,
+        "Habilitadas" if dto.automatic_actions_enabled else "Deshabilitadas",
+        dto.reasons[0] if dto.reasons else "N/D",
+    )
 
 
 def identification_policy_text(
@@ -163,6 +186,7 @@ class LocalFaceTkApp:
         self._closing = False
         self._stability: StabilityDTO | None = None
         self._identification_policy: IdentificationPolicyDTO | None = None
+        self._decision_orchestrator: DecisionOrchestratorDTO | None = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -242,6 +266,16 @@ class LocalFaceTkApp:
             justify="left",
         )
         self.identification_policy_status.pack(anchor="w")
+
+        orchestrator_card = ttk.LabelFrame(side, text="Orquestación", padding=6)
+        orchestrator_card.pack(fill="x", pady=6)
+        self.decision_orchestrator_status = ttk.Label(
+            orchestrator_card,
+            text=("Estado: NOT_EVALUATED\nPropuestas: N/D\n"
+                  "Acciones automáticas: Deshabilitadas\nRazón: N/D"),
+            justify="left",
+        )
+        self.decision_orchestrator_status.pack(anchor="w")
 
         history_card = ttk.LabelFrame(side, text="Historial temporal", padding=6)
         history_card.pack(fill="both", expand=True, pady=6)
@@ -465,6 +499,10 @@ class LocalFaceTkApp:
                 self._identification_policy = event
                 self._refresh_identification_policy()
 
+            elif isinstance(event, DecisionOrchestratorDTO):
+                self._decision_orchestrator = event
+                self._refresh_decision_orchestrator()
+
         now = time.monotonic()
         if now - self._last_dashboard_refresh >= self._metrics_refresh_seconds:
             self._refresh_dashboard()
@@ -539,6 +577,15 @@ class LocalFaceTkApp:
             f"Evaluado: {value.evaluated}\n"
             f"Acciones automáticas: {value.automatic_actions}\n"
             f"Razón principal: {value.primary_reason}"
+        ))
+
+    def _refresh_decision_orchestrator(self) -> None:
+        value = decision_orchestrator_text(self._decision_orchestrator)
+        self.decision_orchestrator_status.configure(text=(
+            f"Estado: {value.state}\n"
+            f"Propuestas: {value.proposals}\n"
+            f"Acciones automáticas: {value.automatic_actions}\n"
+            f"Razón: {value.primary_reason}"
         ))
 
     def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:

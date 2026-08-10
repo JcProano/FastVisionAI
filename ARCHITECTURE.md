@@ -290,3 +290,10 @@ entrada segura desde `MonitoringDTO`, el resultado paralelo de estabilidad y el 
 administrativo resuelto. La salida `IdentificationPolicyDTO` se limita al dashboard;
 no controla popups, eventos, attendance ni acciones externas. Durante formulario y
 enrollment la proyección se limpia a `POLICY_NOT_EVALUATED`.
+## Decision Orchestrator (Fase 26)
+
+`DecisionOrchestrator` es stateless, thread-safe por diseño y side-effect free. Recibe
+únicamente la proyección segura de monitorización, estabilidad, política identificatoria
+y estado administrativo. Produce propuestas y bloqueos escalares para el dashboard,
+sin depender de RecognitionService, repositorios, Gallery, DetectionEventService o
+AttendanceService. Durante formulario y enrollment se limpia a `NOT_EVALUATED`.

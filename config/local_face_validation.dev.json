@@ -113,5 +113,18 @@
     "reject_ambiguous": true,
     "policy_name": "identification_policy_development",
     "policy_version": "1.0"
+  },
+  "decision_orchestrator": {
+    "enabled": true,
+    "automatic_actions_enabled": false,
+    "allow_registered_popup_proposal": true,
+    "allow_unregistered_popup_proposal": true,
+    "allow_detection_event_proposal": true,
+    "allow_attendance_proposal": false,
+    "require_stable_for_registered_popup": true,
+    "require_policy_eligible_for_attendance": true,
+    "require_active_person_for_attendance": true,
+    "policy_name": "decision_orchestrator_development",
+    "policy_version": "1.0"
   }
 }

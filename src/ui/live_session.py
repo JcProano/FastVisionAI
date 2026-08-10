@@ -13,13 +13,18 @@ from enum import Enum
 from pathlib import Path
 
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
+from src.engine.decision_orchestrator import (
+    DecisionOrchestrator, DecisionOrchestratorInput, DecisionOrchestratorResult,
+    DecisionState, ProposedAction,
+)
 from src.engine.identification_policy import (
     IdentificationPolicyEngine, IdentificationPolicyInput,
     IdentificationPolicyResult, IdentificationPolicyState,
 )
 from src.engine.stability import StabilityObservation, StabilityTracker
 from src.ui.contracts import (
-    EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, IdentificationPolicyDTO,
+    DecisionOrchestratorDTO, EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO,
+    IdentificationPolicyDTO,
     MonitoringDTO,
     RegistrationFormData, RuntimeStatusDTO, StabilityDTO, UIErrorCode, UIState,
     VisualFrameDTO,
@@ -46,7 +51,7 @@ from collections.abc import Callable
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
            RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO |
-           IdentificationPolicyDTO)
+           IdentificationPolicyDTO | DecisionOrchestratorDTO)
 
 
 class SessionCommandType(str, Enum):
@@ -78,6 +83,7 @@ class LiveFaceSession:
         administrative_status_resolver: Callable[[str], str | None] | None = None,
         stability_tracker: StabilityTracker | None = None,
         identification_policy_engine: IdentificationPolicyEngine | None = None,
+        decision_orchestrator: DecisionOrchestrator | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -98,6 +104,7 @@ class LiveFaceSession:
         self._administrative_status_resolver = administrative_status_resolver
         self._stability = stability_tracker
         self._identification_policy = identification_policy_engine
+        self._decision_orchestrator = decision_orchestrator
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -382,8 +389,12 @@ class LiveFaceSession:
                 face_count, dto.quality_score, self._session_id,
             ))
             self._event(_stability_dto(stability_result, stability))
-        self._event(self._evaluate_identification_policy(
+        identification = self._evaluate_identification_policy(
             dto, stability_result, face_count,
+        )
+        self._event(identification)
+        self._event(self._evaluate_decision_orchestrator(
+            dto, stability_result, identification, face_count,
         ))
         if self._detection_events is not None and not self._event_history_suspended.is_set():
             event_type = None
@@ -416,6 +427,7 @@ class LiveFaceSession:
         stability = getattr(self, "_stability", None)
         result = None if stability is None else stability.reset()
         if emit:
+            self._event(self._orchestration_not_evaluated_dto())
             self._event(self._policy_not_evaluated_dto())
         if emit and result is not None:
             self._event(_stability_dto(result, stability))
@@ -456,6 +468,33 @@ class LiveFaceSession:
             "N/D" if engine is None else engine.policy.policy_name,
             "N/D" if engine is None else engine.policy.policy_version,
             False if engine is None else engine.policy.automatic_actions_enabled,
+        )
+
+    def _evaluate_decision_orchestrator(
+        self, dto: MonitoringDTO, stability_result,
+        identification: IdentificationPolicyDTO, face_count: int,
+    ) -> DecisionOrchestratorDTO:
+        orchestrator = getattr(self, "_decision_orchestrator", None)
+        if orchestrator is None:
+            return self._orchestration_not_evaluated_dto()
+        result = orchestrator.evaluate(DecisionOrchestratorInput(
+            face_count, dto.candidate_person_id, dto.recognition_state, dto.similarity,
+            "NO_OBSERVATION" if stability_result is None else stability_result.state.value,
+            identification.state, identification.eligible,
+            identification.administrative_status, dto.quality_score,
+            self._session_id, self._session_id, datetime.now(timezone.utc),
+        ))
+        return _decision_orchestrator_dto(result)
+
+    def _orchestration_not_evaluated_dto(self) -> DecisionOrchestratorDTO:
+        orchestrator = getattr(self, "_decision_orchestrator", None)
+        return DecisionOrchestratorDTO(
+            DecisionState.NOT_EVALUATED.value, False, None,
+            (ProposedAction.NONE.value,), (), ("orchestrator_not_evaluated",),
+            False if orchestrator is None else
+                orchestrator.policy.automatic_actions_enabled,
+            "N/D" if orchestrator is None else orchestrator.policy.policy_name,
+            "N/D" if orchestrator is None else orchestrator.policy.policy_version,
         )
 
     def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
@@ -687,4 +726,15 @@ def _identification_policy_dto(
         result.reasons, result.similarity, result.quality_score,
         result.stability_state, result.administrative_status, result.policy_name,
         result.policy_version, engine.policy.automatic_actions_enabled,
+    )
+
+
+def _decision_orchestrator_dto(
+    result: DecisionOrchestratorResult,
+) -> DecisionOrchestratorDTO:
+    return DecisionOrchestratorDTO(
+        result.state.value, result.evaluated, result.person_id,
+        tuple(item.value for item in result.proposed_actions),
+        tuple(item.value for item in result.blocked_actions), result.reasons,
+        result.automatic_actions_enabled, result.policy_name, result.policy_version,
     )

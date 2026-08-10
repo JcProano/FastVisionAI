@@ -118,6 +118,20 @@ class IdentificationPolicyDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class DecisionOrchestratorDTO:
+    """Proposal-only UI projection; it contains no executed actions."""
+    state: str
+    evaluated: bool
+    person_id: str | None
+    proposed_actions: tuple[str, ...]
+    blocked_actions: tuple[str, ...]
+    reasons: tuple[str, ...]
+    automatic_actions_enabled: bool
+    policy_name: str
+    policy_version: str
+
+
+@dataclass(frozen=True, slots=True)
 class EnrollmentProgressDTO:
     state: UIState
     instruction: str
