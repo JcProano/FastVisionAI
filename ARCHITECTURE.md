@@ -282,3 +282,11 @@ sesión/cámara y protege su estado con `RLock`. El estado se reinicia durante f
 y enrollment, no se persiste y no entra en `RecognitionResult`, Gallery, events.db ni
 attendance.db. El dashboard consume exclusivamente `StabilityDTO`; el popup conserva
 su mecanismo anterior de estabilidad por frames.
+## Identification Policy Engine (Fase 25)
+
+`IdentificationPolicyEngine` es stateless, thread-safe por diseño y no conoce Gallery,
+Matcher, RecognitionService, repositorios ni modelos. `LiveFaceSession` construye una
+entrada segura desde `MonitoringDTO`, el resultado paralelo de estabilidad y el estado
+administrativo resuelto. La salida `IdentificationPolicyDTO` se limita al dashboard;
+no controla popups, eventos, attendance ni acciones externas. Durante formulario y
+enrollment la proyección se limpia a `POLICY_NOT_EVALUATED`.

@@ -13,9 +13,14 @@ from enum import Enum
 from pathlib import Path
 
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
+from src.engine.identification_policy import (
+    IdentificationPolicyEngine, IdentificationPolicyInput,
+    IdentificationPolicyResult, IdentificationPolicyState,
+)
 from src.engine.stability import StabilityObservation, StabilityTracker
 from src.ui.contracts import (
-    EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
+    EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, IdentificationPolicyDTO,
+    MonitoringDTO,
     RegistrationFormData, RuntimeStatusDTO, StabilityDTO, UIErrorCode, UIState,
     VisualFrameDTO,
 )
@@ -40,7 +45,8 @@ from collections.abc import Callable
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
-           RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO)
+           RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO |
+           IdentificationPolicyDTO)
 
 
 class SessionCommandType(str, Enum):
@@ -71,6 +77,7 @@ class LiveFaceSession:
         camera_id: str | None = None,
         administrative_status_resolver: Callable[[str], str | None] | None = None,
         stability_tracker: StabilityTracker | None = None,
+        identification_policy_engine: IdentificationPolicyEngine | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -90,6 +97,7 @@ class LiveFaceSession:
         self._camera_id = camera_id
         self._administrative_status_resolver = administrative_status_resolver
         self._stability = stability_tracker
+        self._identification_policy = identification_policy_engine
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -365,14 +373,18 @@ class LiveFaceSession:
 
     def _emit_monitoring(self, dto: MonitoringDTO) -> None:
         stability = getattr(self, "_stability", None)
+        stability_result = None
+        face_count = (0 if dto.state is UIState.NO_FACE else
+                      2 if dto.state is UIState.MULTIPLE_FACES else 1)
         if stability is not None:
-            face_count = (0 if dto.state is UIState.NO_FACE else
-                          2 if dto.state is UIState.MULTIPLE_FACES else 1)
-            result = stability.observe(StabilityObservation(
+            stability_result = stability.observe(StabilityObservation(
                 None, dto.candidate_person_id, dto.recognition_state, dto.similarity,
                 face_count, dto.quality_score, self._session_id,
             ))
-            self._event(_stability_dto(result, stability))
+            self._event(_stability_dto(stability_result, stability))
+        self._event(self._evaluate_identification_policy(
+            dto, stability_result, face_count,
+        ))
         if self._detection_events is not None and not self._event_history_suspended.is_set():
             event_type = None
             if dto.state is UIState.MULTIPLE_FACES:
@@ -402,11 +414,49 @@ class LiveFaceSession:
 
     def _reset_stability(self, *, emit: bool) -> None:
         stability = getattr(self, "_stability", None)
-        if stability is None:
-            return
-        result = stability.reset()
+        result = None if stability is None else stability.reset()
         if emit:
+            self._event(self._policy_not_evaluated_dto())
+        if emit and result is not None:
             self._event(_stability_dto(result, stability))
+
+    def _evaluate_identification_policy(
+        self, dto: MonitoringDTO, stability_result, face_count: int,
+    ) -> IdentificationPolicyDTO:
+        engine = getattr(self, "_identification_policy", None)
+        if engine is None:
+            return self._policy_not_evaluated_dto()
+        administrative_status = None
+        if dto.candidate_person_id is not None:
+            resolver = getattr(self, "_administrative_status_resolver", None)
+            if resolver is not None:
+                try:
+                    administrative_status = resolver(dto.candidate_person_id)
+                except Exception:
+                    LOGGER.warning(
+                        "Administrative status resolution failed during policy evaluation; "
+                        "person details omitted"
+                    )
+                    administrative_status = None
+        result = engine.evaluate(IdentificationPolicyInput(
+            dto.candidate_person_id, dto.recognition_state, dto.similarity,
+            "NO_OBSERVATION" if stability_result is None else stability_result.state.value,
+            0 if stability_result is None else stability_result.observations_count,
+            0.0 if stability_result is None else stability_result.stable_duration_seconds,
+            dto.quality_score, administrative_status, face_count, self._session_id,
+            datetime.now(timezone.utc),
+        ))
+        return _identification_policy_dto(result, engine)
+
+    def _policy_not_evaluated_dto(self) -> IdentificationPolicyDTO:
+        engine = getattr(self, "_identification_policy", None)
+        return IdentificationPolicyDTO(
+            IdentificationPolicyState.POLICY_NOT_EVALUATED.value, False, False,
+            None, ("policy_not_evaluated",), None, None, "NO_OBSERVATION", None,
+            "N/D" if engine is None else engine.policy.policy_name,
+            "N/D" if engine is None else engine.policy.policy_version,
+            False if engine is None else engine.policy.automatic_actions_enabled,
+        )
 
     def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
         plan = self._plan
@@ -626,4 +676,15 @@ def _stability_dto(result, tracker: StabilityTracker) -> StabilityDTO:
         tracker.policy.minimum_observations, result.stable_duration_seconds,
         tracker.policy.minimum_duration_seconds, result.current_similarity,
         result.average_similarity, result.reason,
+    )
+
+
+def _identification_policy_dto(
+    result: IdentificationPolicyResult, engine: IdentificationPolicyEngine,
+) -> IdentificationPolicyDTO:
+    return IdentificationPolicyDTO(
+        result.state.value, result.evaluated, result.eligible, result.person_id,
+        result.reasons, result.similarity, result.quality_score,
+        result.stability_state, result.administrative_status, result.policy_name,
+        result.policy_version, engine.policy.automatic_actions_enabled,
     )

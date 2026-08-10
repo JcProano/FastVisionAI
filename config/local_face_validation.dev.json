@@ -98,5 +98,20 @@
     "reset_on_candidate_change": true,
     "policy_name": "stability_development",
     "policy_version": "1.0"
+  },
+  "identification_policy": {
+    "enabled": true,
+    "automatic_actions_enabled": false,
+    "require_candidate": true,
+    "require_active_person": true,
+    "require_stable_observation": true,
+    "minimum_quality_score": null,
+    "minimum_similarity": null,
+    "minimum_stability_observations": null,
+    "minimum_stability_duration_seconds": null,
+    "reject_incompatible": true,
+    "reject_ambiguous": true,
+    "policy_name": "identification_policy_development",
+    "policy_version": "1.0"
   }
 }

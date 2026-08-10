@@ -354,3 +354,10 @@ si un candidato permanece continuo durante el número de observaciones y duraci�
 configurados. `STABLE` describe exclusivamente continuidad temporal: no confirma
 identidad, no autoriza acceso, no crea asistencia y no filtra eventos. La similitud
 opcional es solo un filtro de estabilidad y permanece deshabilitada por defecto.
+### Identification Policy Engine (Fase 25)
+
+El motor combina únicamente señales escalares seguras de monitorización, estabilidad,
+calidad y estado administrativo. Su evaluación es pura e informativa. `ELIGIBLE`
+significa que la observación cumple la política configurada; no confirma identidad,
+no autoriza acceso y no crea eventos o asistencia. No existen umbrales predeterminados
+de calidad o similitud y las acciones automáticas permanecen deshabilitadas.

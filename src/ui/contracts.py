@@ -101,6 +101,23 @@ class StabilityDTO:
 
 
 @dataclass(frozen=True, slots=True)
+class IdentificationPolicyDTO:
+    """Safe informational projection; never an identity or action decision."""
+    state: str
+    evaluated: bool
+    eligible: bool
+    person_id: str | None
+    reasons: tuple[str, ...]
+    similarity: float | None
+    quality_score: float | None
+    stability_state: str
+    administrative_status: str | None
+    policy_name: str
+    policy_version: str
+    automatic_actions_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class EnrollmentProgressDTO:
     state: UIState
     instruction: str

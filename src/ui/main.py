@@ -18,6 +18,9 @@ from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
 from src.engine.gallery.persistence import GalleryPersistence
 from src.engine.recognition import RecognitionPolicy, RecognitionService
+from src.engine.identification_policy import (
+    IdentificationPolicy, IdentificationPolicyEngine,
+)
 from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.core.config_manager import PROJECT_ROOT
 from src.ui.controller import LocalFaceUIController
@@ -328,6 +331,52 @@ def build_stability_tracker(settings: dict[str, object]) -> StabilityTracker | N
     return StabilityTracker(policy)
 
 
+def build_identification_policy_engine(
+    settings: dict[str, object],
+) -> IdentificationPolicyEngine | None:
+    configuration = settings.get("identification_policy", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("identification_policy configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    policy = IdentificationPolicy(
+        enabled=True,
+        automatic_actions_enabled=bool(
+            configuration.get("automatic_actions_enabled", False)
+        ),
+        require_candidate=bool(configuration.get("require_candidate", True)),
+        require_active_person=bool(configuration.get("require_active_person", True)),
+        require_stable_observation=bool(
+            configuration.get("require_stable_observation", True)
+        ),
+        minimum_quality_score=_optional_float(configuration, "minimum_quality_score"),
+        minimum_similarity=_optional_float(configuration, "minimum_similarity"),
+        minimum_stability_observations=_optional_int(
+            configuration, "minimum_stability_observations"
+        ),
+        minimum_stability_duration_seconds=_optional_float(
+            configuration, "minimum_stability_duration_seconds"
+        ),
+        reject_incompatible=bool(configuration.get("reject_incompatible", True)),
+        reject_ambiguous=bool(configuration.get("reject_ambiguous", True)),
+        policy_name=str(configuration.get(
+            "policy_name", "identification_policy_development"
+        )),
+        policy_version=str(configuration.get("policy_version", "1.0")),
+    )
+    return IdentificationPolicyEngine(policy)
+
+
+def _optional_float(configuration: dict[str, object], key: str) -> float | None:
+    value = configuration.get(key)
+    return None if value is None else float(value)
+
+
+def _optional_int(configuration: dict[str, object], key: str) -> int | None:
+    value = configuration.get(key)
+    return None if value is None else int(value)
+
+
 def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfigurationDTO:
     camera = settings["camera"]; guided = settings["guided_capture"]
     quality = settings["quality"]; persistence = settings["persistence"]
@@ -372,6 +421,7 @@ def main() -> int:
     detection_event_service = build_detection_event_service(settings)
     attendance_controller = build_attendance(settings,person_repository)
     stability_tracker = build_stability_tracker(settings)
+    identification_policy_engine = build_identification_policy_engine(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -452,6 +502,7 @@ def main() -> int:
                 is not None else None
             )),
         stability_tracker=stability_tracker,
+        identification_policy_engine=identification_policy_engine,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}

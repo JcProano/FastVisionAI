@@ -21,7 +21,7 @@ from src.ui.contracts import (
     ErrorDTO,
     MonitoringDTO,
     RegistrationFormData,
-    RuntimeStatusDTO, StabilityDTO,
+    IdentificationPolicyDTO, RuntimeStatusDTO, StabilityDTO,
     UIErrorCode,
     UIState,
 )
@@ -56,6 +56,28 @@ class StabilityText:
     observations: str
     duration: str
     average_similarity: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentificationPolicyText:
+    state: str
+    evaluated: str
+    automatic_actions: str
+    primary_reason: str
+
+
+def identification_policy_text(
+    dto: IdentificationPolicyDTO | None,
+) -> IdentificationPolicyText:
+    if dto is None:
+        return IdentificationPolicyText(
+            "POLICY_NOT_EVALUATED", "No", "Deshabilitadas", "N/D",
+        )
+    return IdentificationPolicyText(
+        dto.state, "Sí" if dto.evaluated else "No",
+        "Habilitadas" if dto.automatic_actions_enabled else "Deshabilitadas",
+        dto.reasons[0] if dto.reasons else "N/D",
+    )
 
 
 def stability_text(dto: StabilityDTO | None) -> StabilityText:
@@ -140,6 +162,7 @@ class LocalFaceTkApp:
         self._registration_form_open = False
         self._closing = False
         self._stability: StabilityDTO | None = None
+        self._identification_policy: IdentificationPolicyDTO | None = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -209,6 +232,16 @@ class LocalFaceTkApp:
             justify="left",
         )
         self.stability_status.pack(anchor="w")
+
+        policy_card = ttk.LabelFrame(side, text="Política de identificación", padding=6)
+        policy_card.pack(fill="x", pady=6)
+        self.identification_policy_status = ttk.Label(
+            policy_card,
+            text=("Estado: POLICY_NOT_EVALUATED\nEvaluado: No\n"
+                  "Acciones automáticas: Deshabilitadas\nRazón principal: N/D"),
+            justify="left",
+        )
+        self.identification_policy_status.pack(anchor="w")
 
         history_card = ttk.LabelFrame(side, text="Historial temporal", padding=6)
         history_card.pack(fill="both", expand=True, pady=6)
@@ -428,6 +461,10 @@ class LocalFaceTkApp:
                 self._stability = event
                 self._refresh_stability()
 
+            elif isinstance(event, IdentificationPolicyDTO):
+                self._identification_policy = event
+                self._refresh_identification_policy()
+
         now = time.monotonic()
         if now - self._last_dashboard_refresh >= self._metrics_refresh_seconds:
             self._refresh_dashboard()
@@ -493,6 +530,15 @@ class LocalFaceTkApp:
             f"Observaciones: {value.observations}\n"
             f"Duración: {value.duration}\n"
             f"Similitud media: {value.average_similarity}"
+        ))
+
+    def _refresh_identification_policy(self) -> None:
+        value = identification_policy_text(self._identification_policy)
+        self.identification_policy_status.configure(text=(
+            f"Estado: {value.state}\n"
+            f"Evaluado: {value.evaluated}\n"
+            f"Acciones automáticas: {value.automatic_actions}\n"
+            f"Razón principal: {value.primary_reason}"
         ))
 
     def _refresh_candidate_thumbnail(self, person_id: str | None) -> None:
