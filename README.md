@@ -418,3 +418,16 @@ Los eventos contienen correlación, timestamps UTC y DTO seguros. Nunca incluyen
 embeddings, imágenes, templates, modelos, repositorios ni formularios civiles.
 El almacén de diagnóstico conserva solamente tipo, timestamp y origen, con un
 límite configurable y sin persistencia.
+### Reportes y estadísticas locales (Fase 31)
+
+`ReportService` consolida en modo estrictamente read-only personas, eventos de
+detección y asistencia desde sus repositorios SQLite. Los filtros se interpretan
+en `America/Guayaquil`, se convierten a UTC para consultar y vuelven a hora local
+para presentación. Toda consulta está paginada y limitada; los DTO indican
+explícitamente `truncated` y `rows_considered`.
+
+CSV está disponible con UTF-8, protección contra fórmulas y sin sobrescritura por
+defecto. Excel queda no disponible si `openpyxl` no está instalado y PDF permanece
+deshabilitado hasta adoptar una infraestructura adecuada. Ninguna exportación
+incluye embeddings, imágenes, thumbnails o PII civil detallada; la cédula solo se
+presenta enmascarada.

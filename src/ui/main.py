@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
@@ -68,6 +69,8 @@ from src.ui.action_adapters import (
     DetectionEventServiceActionAdapter, IdentificationPopupActionAdapter,
 )
 from src.validation.guided_face_capture import load_guided_profile
+from src.core.reports import ReportPolicy, ReportService
+from src.ui.reports import ReportController, ReportWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -483,6 +486,24 @@ def build_application_events(
     return bus, diagnostics
 
 
+def build_reports(settings, people, detections, attendance):
+    configuration = settings.get("reports", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("reports configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None
+    if people is None or detections is None or attendance is None:
+        return None
+    policy = ReportPolicy(
+        default_range_days=int(configuration.get("default_range_days", 7)),
+        max_rows=int(configuration.get("max_rows", 5_000)),
+        presentation_timezone=str(
+            configuration.get("presentation_timezone", "America/Guayaquil")
+        ),
+    )
+    return ReportController(ReportService(people, detections, attendance, policy))
+
+
 def _popup_configuration_complete(settings: dict[str, object]) -> bool:
     action = settings.get("action_executor", {})
     decision = settings.get("decision_orchestrator", {})
@@ -594,6 +615,11 @@ def main() -> int:
     person_repository = build_person_repository(settings)
     detection_event_service = build_detection_event_service(settings)
     attendance_controller = build_attendance(settings,person_repository)
+    report_controller = build_reports(
+        settings, person_repository,
+        None if detection_event_service is None else detection_event_service.repository,
+        None if attendance_controller is None else attendance_controller.repository,
+    )
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
     decision_orchestrator = build_decision_orchestrator(settings)
@@ -703,6 +729,7 @@ def main() -> int:
     profile_windows: dict[str, PersonProfileWindow] = {}
     history_window: dict[str, DetectionHistoryWindow] = {}
     attendance_window: dict[str, AttendanceHistoryWindow] = {}
+    report_window: dict[str, ReportWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -726,6 +753,8 @@ def main() -> int:
             event_window.close()
         attendance_view=attendance_window.pop("window",None)
         if attendance_view is not None and attendance_view.window.winfo_exists():attendance_view.close()
+        reports_view = report_window.pop("window", None)
+        if reports_view is not None and reports_view.window.winfo_exists(): reports_view.close()
         session.close()
 
     profile_controller = None if person_repository is None else PersonProfileController(
@@ -751,6 +780,14 @@ def main() -> int:
         current=attendance_window.get("window")
         if current is not None and current.window.winfo_exists():current.focus();return
         attendance_window["window"]=AttendanceHistoryWindow(root,attendance_controller,on_close=lambda:attendance_window.pop("window",None))
+
+    def open_reports():
+        if report_controller is None: return
+        current = report_window.get("window")
+        if current is not None and current.window.winfo_exists(): current.focus(); return
+        report_window["window"] = ReportWindow(
+            root, report_controller, on_close=lambda: report_window.pop("window", None),
+        )
 
     def close_profile(person_id: str) -> None:
         profile_windows.pop(person_id, None)
@@ -847,6 +884,14 @@ def main() -> int:
         get_attendance_summary=(None if attendance_controller is None else
                                 attendance_controller.daily_summary),
         on_attendance_history=open_attendance_history,
+        on_reports=open_reports,
+        get_daily_report=(None if report_controller is None else
+                          lambda: report_controller.service.daily_report(
+                              date.today()
+                          )),
+        report_refresh_seconds=float(
+            settings.get("reports", {}).get("dashboard_refresh_seconds", 30)
+        ),
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

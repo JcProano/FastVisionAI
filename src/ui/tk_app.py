@@ -184,6 +184,9 @@ class LocalFaceTkApp:
         on_detection_history: Callable[[], None] | None = None,
         get_attendance_summary: Callable[[], object] | None = None,
         on_attendance_history: Callable[[], None] | None = None,
+        on_reports: Callable[[], None] | None = None,
+        get_daily_report: Callable[[], object] | None = None,
+        report_refresh_seconds: float = 30.0,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -213,6 +216,9 @@ class LocalFaceTkApp:
         self._get_detection_events = get_detection_events
         self._on_detection_history = on_detection_history
         self._get_attendance_summary=get_attendance_summary
+        self._get_daily_report = get_daily_report
+        self._report_refresh_seconds = report_refresh_seconds
+        self._report_after_id = None
         self._detection_events_rendered: tuple[DetectionEventDTO, ...] = ()
         self._enrollment_active = False
         self._registration_form_open = False
@@ -335,6 +341,19 @@ class LocalFaceTkApp:
         attendance_card=ttk.LabelFrame(side,text="Asistencia hoy",padding=6);attendance_card.pack(fill="x",pady=6)
         self.attendance_summary=ttk.Label(attendance_card,text="Entradas: N/D\nSalidas: N/D\nPersonas únicas: N/D\nÚltima marcación: N/D");self.attendance_summary.pack(anchor="w")
         ttk.Button(attendance_card,text="Abrir asistencia",command=on_attendance_history or (lambda:None)).pack(anchor="e")
+        reports_card = ttk.LabelFrame(side, text="Hoy", padding=6); reports_card.pack(fill="x", pady=6)
+        self.report_summary = ttk.Label(
+            reports_card,
+            text="Personas activas: N/D\nDetecciones: N/D\nEntradas: N/D\nSalidas: N/D\nPersonas únicas: N/D",
+        )
+        self.report_summary.pack(anchor="w")
+        self.reports_button = ttk.Button(
+            reports_card, text="Ver reportes", command=on_reports or (lambda: None),
+            state="normal" if get_daily_report is not None else "disabled",
+        )
+        self.reports_button.pack(anchor="e")
+        if self._get_daily_report is not None:
+            self._schedule_report_refresh(initial=True)
 
         self.diagnostic_card = ttk.LabelFrame(root, text="Diagnóstico de calidad", padding=6)
         self.diagnostic_values = ttk.Label(self.diagnostic_card, text="N/D")
@@ -695,6 +714,28 @@ class LocalFaceTkApp:
             self.diagnostic_card.grid(row=2, column=0, sticky="ew", padx=10, pady=4)
         self._diagnostic_visible = not self._diagnostic_visible
 
+    def _schedule_report_refresh(self, *, initial: bool = False) -> None:
+        if self._closing or self._get_daily_report is None: return
+        if not initial:
+            try:
+                report = self._get_daily_report()
+                self.report_summary.configure(text=(
+                    f"Personas activas: {report.active_people}\n"
+                    f"Detecciones: {report.detection_events}\n"
+                    f"Entradas: {report.attendance_check_ins}\n"
+                    f"Salidas: {report.attendance_check_outs}\n"
+                    f"Personas únicas: {report.unique_attendance_people}"
+                ))
+            except Exception:
+                self.report_summary.configure(text=(
+                    "Personas activas: N/D\nDetecciones: N/D\nEntradas: N/D\n"
+                    "Salidas: N/D\nPersonas únicas: N/D"
+                ))
+        self._report_after_id = self.root.after(
+            max(1, int(self._report_refresh_seconds * 1_000)),
+            self._schedule_report_refresh,
+        )
+
     def _save_gallery(self) -> None:
         if self._on_save_gallery is None:
             return
@@ -1000,6 +1041,11 @@ class LocalFaceTkApp:
         Close UI and request resource cleanup.
         """
         self._closing = True
+        report_after_id = getattr(self, "_report_after_id", None)
+        if report_after_id is not None:
+            try: self.root.after_cancel(report_after_id)
+            except Exception: pass
+            self._report_after_id = None
         self._clear_pending_popups()
         if self._identification_popup is not None:
             self._identification_popup.close()

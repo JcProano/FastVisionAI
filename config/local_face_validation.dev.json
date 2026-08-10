@@ -141,5 +141,12 @@
   "application_events": {
     "enabled": true,
     "max_diagnostic_events": 100
+  },
+  "reports": {
+    "enabled": true,
+    "default_range_days": 7,
+    "dashboard_refresh_seconds": 30,
+    "max_rows": 5000,
+    "presentation_timezone": "America/Guayaquil"
   }
 }

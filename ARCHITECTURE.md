@@ -352,3 +352,15 @@ sus solicitudes, y el cierre del popup emite una notificación sin impedir su
 limpieza. `ApplicationEventDiagnosticsStore` es una proyección temporal limitada
 que guarda solo `event_type`, `timestamp` y `source`. Ninguno de estos elementos
 es fuente de verdad ni sustituye callbacks, colas o polling existentes.
+## Fase 31 — Reportes locales
+
+`src/core/reports` es una proyección read-only sobre `PersonRepository`,
+`DetectionEventRepository` y `AttendanceRepository`. No usa ApplicationEventBus
+como fuente de verdad ni ejecuta operaciones de escritura. Los rangos locales se
+transforman a intervalos UTC `[inicio, fin)` y las consultas se paginan en bloques
+de hasta 500, con un máximo configurable.
+
+La UI de reportes depende de DTO seguros mediante `ReportController`. Su tarjeta
+diaria usa un temporizador independiente del ciclo de frames y los fallos quedan
+aislados como `N/D`. CSV es el único formato habilitado obligatoriamente; Excel es
+opcional por importación diferida y PDF permanece indisponible.
