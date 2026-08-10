@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import math
 import time
+import logging
 from typing import Any
 
 try:
@@ -17,6 +18,8 @@ from src.ui.thumbnails.presentation import thumbnail_to_ppm
 
 from .contracts import IdentificationPopupDTO, IdentificationPopupType, IdentityInfoProvider
 
+LOGGER = logging.getLogger(__name__)
+
 
 class IdentificationPopupWindow:
     def __init__(
@@ -24,6 +27,7 @@ class IdentificationPopupWindow:
         on_view_person: Callable[[str], None], on_register: Callable[[], None],
         unknown_timeout_seconds: float = 60.0,
         on_unknown_closed: Callable[[], None] | None = None,
+        on_dismissed: Callable[[str, str], None] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if unknown_timeout_seconds <= 0:
@@ -34,6 +38,7 @@ class IdentificationPopupWindow:
         self._on_register = on_register
         self._unknown_timeout_seconds = unknown_timeout_seconds
         self._on_unknown_closed = on_unknown_closed
+        self._on_dismissed = on_dismissed
         self._monotonic = monotonic
         self.window: Any | None = None
         self._photo: Any | None = None
@@ -131,7 +136,7 @@ class IdentificationPopupWindow:
             text=f"Tiempo restante para decidir: {minutes:02d}:{seconds:02d}"
         )
         if remaining == 0:
-            self.dismiss()
+            self.dismiss("timeout")
             return
         self._timer_id = self.root.after(1000, self._update_countdown)
 
@@ -143,8 +148,9 @@ class IdentificationPopupWindow:
         self.dismiss()
         self._on_register()
 
-    def dismiss(self) -> None:
+    def dismiss(self, reason: str = "user") -> None:
         was_unknown = self._popup_type is IdentificationPopupType.UNREGISTERED
+        previous_type = self._popup_type
         self._cancel_timer(notify=False)
         self._photo = None
         self._person_id = None
@@ -154,6 +160,17 @@ class IdentificationPopupWindow:
         self._popup_type = None
         if was_unknown and self._on_unknown_closed is not None:
             self._on_unknown_closed()
+        on_dismissed = getattr(self, "_on_dismissed", None)
+        if previous_type is not None and on_dismissed is not None:
+            try:
+                on_dismissed(previous_type.value, reason)
+            except Exception as exc:
+                LOGGER.error("Popup dismiss notification failed safely; exception_type=%s",
+                             type(exc).__name__)
+
+    def dismiss_with_reason(self, reason: str) -> None:
+        """Reason-aware close hook; separate method preserves legacy popup test doubles."""
+        self.dismiss(reason)
 
     def _cancel_timer(self, *, notify: bool) -> None:
         if self._timer_id is not None:
@@ -167,4 +184,4 @@ class IdentificationPopupWindow:
             self._on_unknown_closed()
 
     def close(self) -> None:
-        self.dismiss()
+        self.dismiss("application_close")

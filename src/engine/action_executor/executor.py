@@ -8,6 +8,7 @@ from .adapters import DetectionEventActionAdapter, PopupActionAdapter
 from .contracts import (
     ActionExecutionContext, ActionExecutionInput, ActionExecutionResult,
     ActionExecutionState, DetectionEventActionData, ExecutableAction,
+    PopupActionData,
 )
 from .policy import ActionExecutorPolicy
 
@@ -41,6 +42,10 @@ class ActionExecutor:
     @property
     def has_detection_event_adapter(self) -> bool:
         return self._detection is not None
+
+    @property
+    def has_popup_adapter(self) -> bool:
+        return self._popup is not None
 
     def execute(self, value: ActionExecutionInput) -> ActionExecutionResult:
         policy = self.policy
@@ -83,7 +88,9 @@ class ActionExecutor:
             except ValueError:
                 skipped.append(action_name); reasons.append("unknown_action")
                 continue
-            reason = self._precondition(action, value.person_id, value.detection_event)
+            reason = self._precondition(
+                action, value.person_id, value.detection_event, value.popup,
+            )
             if reason is not None:
                 skipped.append(action_name); reasons.append(reason)
                 continue
@@ -92,7 +99,7 @@ class ActionExecutor:
                 value.orchestrator_state, value.timestamp,
             )
             try:
-                self._invoke(action, context, value.detection_event)
+                self._invoke(action, context, value.detection_event, value.popup)
                 executed.append(action_name)
             except Exception as exc:  # adapter boundary must not stop LiveFaceSession
                 LOGGER.error("Action adapter failed safely; action=%s exception_type=%s",
@@ -111,7 +118,8 @@ class ActionExecutor:
                             tuple(failed), tuple(dict.fromkeys(reasons)))
 
     def _precondition(self, action: ExecutableAction, person_id: str | None,
-                      event: DetectionEventActionData | None) -> str | None:
+                      event: DetectionEventActionData | None,
+                      popup: PopupActionData | None) -> str | None:
         policy = self.policy
         if action is ExecutableAction.SHOW_REGISTERED_POPUP:
             if not policy.allow_registered_popup:
@@ -120,6 +128,8 @@ class ActionExecutor:
                 return "person_id_required"
             if self._popup is None:
                 return "popup_adapter_missing"
+            if popup is None:
+                return "popup_action_data_missing"
         elif action is ExecutableAction.SHOW_UNREGISTERED_POPUP:
             if not policy.allow_unregistered_popup:
                 return "unregistered_popup_disabled"
@@ -127,6 +137,8 @@ class ActionExecutor:
                 return "unregistered_popup_requires_no_person_id"
             if self._popup is None:
                 return "popup_adapter_missing"
+            if popup is None:
+                return "popup_action_data_missing"
         elif action is ExecutableAction.LOG_DETECTION_EVENT:
             if not policy.allow_detection_event_logging:
                 return "detection_event_logging_disabled"
@@ -137,13 +149,16 @@ class ActionExecutor:
         return None
 
     def _invoke(self, action: ExecutableAction, context: ActionExecutionContext,
-                event: DetectionEventActionData | None) -> None:
+                event: DetectionEventActionData | None,
+                popup: PopupActionData | None) -> None:
         if action is ExecutableAction.SHOW_REGISTERED_POPUP:
             assert self._popup is not None
-            self._popup.show_registered(context)
+            assert popup is not None
+            self._popup.show_registered(context, popup)
         elif action is ExecutableAction.SHOW_UNREGISTERED_POPUP:
             assert self._popup is not None
-            self._popup.show_unregistered(context)
+            assert popup is not None
+            self._popup.show_unregistered(context, popup)
         else:
             assert self._detection is not None
             assert event is not None

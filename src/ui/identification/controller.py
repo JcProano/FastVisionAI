@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -29,21 +30,57 @@ class IdentificationPresentationController:
         self._registered_last: dict[str, float] = {}
         self._unknown_last = float("-inf")
         self._suspended = False
+        self._lock = threading.RLock()
 
     def suspend(self) -> None:
-        self._suspended = True
-        self._reset_stability()
+        with self._lock:
+            self._suspended = True
+            self._reset_stability()
 
     def resume(self) -> None:
-        self._suspended = False
-        self._reset_stability()
+        with self._lock:
+            self._suspended = False
+            self._reset_stability()
 
     def unknown_dismissed(self) -> None:
         """Start unknown cooldown only after its presentation has closed."""
-        self._unknown_last = self._monotonic()
-        self._reset_stability()
+        with self._lock:
+            self._unknown_last = self._monotonic()
+            self._reset_stability()
 
     def observe(self, event: MonitoringDTO) -> IdentificationPopupDTO:
+        with self._lock:
+            return self._observe_locked(event)
+
+    def observe_action(
+        self, action: str, person_id: str | None, recognition_state: str,
+        similarity: float | None, message: str | None = None,
+    ) -> IdentificationPopupDTO:
+        """Consume a PII-free executor request; provider resolution stays here."""
+        if action == "SHOW_REGISTERED_POPUP":
+            if person_id is None:
+                raise ValueError("registered popup action requires person_id")
+            event = MonitoringDTO(
+                UIState.MONITORING, message or "Candidato experimental", "candidate",
+                similarity, "deshabilitada / NOT_EVALUATED", True,
+                recognition_state=recognition_state, candidate_person_id=person_id,
+            )
+        elif action == "SHOW_UNREGISTERED_POPUP":
+            if person_id is not None:
+                raise ValueError("unregistered popup action requires no person_id")
+            event = MonitoringDTO(
+                UIState.MONITORING, message or "Sin candidato registrado", None,
+                similarity, "deshabilitada / NOT_EVALUATED", True,
+                recognition_state=recognition_state,
+            )
+        else:
+            raise ValueError("unsupported popup action")
+        with self._lock:
+            return self._observe_locked(event, message)
+
+    def _observe_locked(
+        self, event: MonitoringDTO, message: str | None = None,
+    ) -> IdentificationPopupDTO:
         if not self.policy.enabled or self._suspended:
             return self._suppressed(event, "Presentación suspendida")
         if event.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}:
@@ -99,7 +136,8 @@ class IdentificationPresentationController:
         return IdentificationPopupDTO(
             IdentificationPopupType.UNREGISTERED, None, None, None, None,
             event.recognition_state, False,
-            "No existe una identidad local disponible para este rostro.", self._utcnow(),
+            message or "No existe una identidad local disponible para este rostro.",
+            self._utcnow(),
         )
 
     def _suppressed(self, event: MonitoringDTO, message: str) -> IdentificationPopupDTO:

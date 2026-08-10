@@ -36,7 +36,8 @@ from src.ui.dashboard.state import DashboardStateStore
 from src.ui.thumbnails import ThumbnailDTO
 from src.ui.thumbnails.presentation import thumbnail_to_ppm
 from src.ui.identification import (
-    IdentificationPopupType, IdentificationPresentationController,
+    IdentificationPopupDTO, IdentificationPopupType,
+    IdentificationPresentationController,
 )
 from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.core.detection_events import DetectionEventDTO
@@ -175,6 +176,9 @@ class LocalFaceTkApp:
         get_thumbnail: Callable[[str], ThumbnailDTO] | None = None,
         identification_controller: IdentificationPresentationController | None = None,
         identification_popup: IdentificationPopupWindow | None = None,
+        popup_mode: str = "legacy",
+        get_popup_requests: Callable[[], tuple[IdentificationPopupDTO, ...]] | None = None,
+        clear_popup_requests: Callable[[], None] | None = None,
         on_registration_form_state: Callable[[bool], None] | None = None,
         get_detection_events: Callable[[], tuple[DetectionEventDTO, ...]] | None = None,
         on_detection_history: Callable[[], None] | None = None,
@@ -186,6 +190,8 @@ class LocalFaceTkApp:
                 "Tkinter no está disponible en este Python; use mocks/headless o "
                 "un intérprete del sistema con soporte Tk"
             )
+        if popup_mode not in {"legacy", "action_executor"}:
+            raise ValueError("popup_mode must be legacy or action_executor")
 
         self.root = root
         self._on_register = on_register
@@ -200,6 +206,9 @@ class LocalFaceTkApp:
         self._thumbnail_photo: tk.PhotoImage | None = None
         self._identification = identification_controller
         self._identification_popup = identification_popup
+        self._popup_mode = popup_mode
+        self._get_popup_requests = get_popup_requests
+        self._clear_popup_requests = clear_popup_requests or (lambda: None)
         self._on_registration_form_state = on_registration_form_state or (lambda _value: None)
         self._get_detection_events = get_detection_events
         self._on_detection_history = on_detection_history
@@ -377,6 +386,15 @@ class LocalFaceTkApp:
             self._on_registration_form_state(False)
             if self._identification is not None:
                 self._identification.resume()
+        if getattr(self, "_popup_mode", "legacy") == "action_executor":
+            if (
+                dto.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}
+                and self._identification_popup is not None
+                and self._identification_popup.popup_type
+                    is IdentificationPopupType.REGISTERED_CANDIDATE
+            ):
+                self._dismiss_identification_popup("programmatic")
+            return
         if self._identification is not None and self._identification_popup is not None:
             popup = self._identification.observe(dto)
             if (
@@ -385,7 +403,7 @@ class LocalFaceTkApp:
                 and self._identification_popup.popup_type
                     is IdentificationPopupType.REGISTERED_CANDIDATE
             ):
-                self._identification_popup.dismiss()
+                self._dismiss_identification_popup("programmatic")
             self._identification_popup.show(popup)
 
     def show_progress(
@@ -393,10 +411,11 @@ class LocalFaceTkApp:
         dto: EnrollmentProgressDTO,
     ) -> None:
         self._enrollment_active = True
+        self._clear_pending_popups()
         if self._identification is not None:
             self._identification.suspend()
         if self._identification_popup is not None:
-            self._identification_popup.dismiss()
+            self._dismiss_identification_popup("enrollment")
         self.status.configure(
             text=(
                 f"{dto.instruction} — "
@@ -477,6 +496,7 @@ class LocalFaceTkApp:
     ) -> None:
         """Drain bounded worker queues from Tk's main thread only."""
 
+        self._drain_action_popups()
         visual = session.take_latest_visual()
 
         if visual is not None:
@@ -554,6 +574,21 @@ class LocalFaceTkApp:
                 session,
                 interval_ms,
             )
+
+    def _drain_action_popups(self) -> None:
+        if (getattr(self, "_popup_mode", "legacy") != "action_executor"
+                or getattr(self, "_get_popup_requests", None) is None):
+            return
+        for dto in self._get_popup_requests():
+            if self._closing or self._registration_form_open or self._enrollment_active:
+                continue
+            if self._identification_popup is not None:
+                self._identification_popup.show(dto)
+
+    def _clear_pending_popups(self) -> None:
+        callback = getattr(self, "_clear_popup_requests", None)
+        if callback is not None:
+            callback()
 
     def _refresh_dashboard(self) -> None:
         metrics = self._dashboard.metrics
@@ -915,14 +950,16 @@ class LocalFaceTkApp:
 
     def _enter_registration_form_state(self) -> None:
         self._registration_form_open = True
+        self._clear_pending_popups()
         self._on_registration_form_state(True)
         if self._identification is not None:
             self._identification.suspend()
         if self._identification_popup is not None:
-            self._identification_popup.dismiss()
+            self._dismiss_identification_popup("form_open")
         self.register_button.configure(state="disabled")
 
     def _leave_registration_form_state(self, *, resume: bool) -> None:
+        self._clear_pending_popups()
         self._registration_form_open = False
         if resume:
             self._on_registration_form_state(False)
@@ -932,12 +969,22 @@ class LocalFaceTkApp:
                 self._identification.resume()
             self.register_button.configure(state="normal")
 
+    def _dismiss_identification_popup(self, reason: str) -> None:
+        if self._identification_popup is None:
+            return
+        reasoned = getattr(self._identification_popup, "dismiss_with_reason", None)
+        if reasoned is not None:
+            reasoned(reason)
+        else:
+            self._identification_popup.dismiss()
+
     def _cancel(self) -> None:
         """
         Cancel an active enrollment workflow.
         """
 
         self._on_cancel()
+        self._clear_pending_popups()
         self._enrollment_active = True
         if self._identification is not None:
             self._identification.suspend()
@@ -953,6 +1000,7 @@ class LocalFaceTkApp:
         Close UI and request resource cleanup.
         """
         self._closing = True
+        self._clear_pending_popups()
         if self._identification_popup is not None:
             self._identification_popup.close()
 

@@ -27,6 +27,10 @@ from src.engine.identification_policy import (
 )
 from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.core.config_manager import PROJECT_ROOT
+from src.core.application_events import (
+    ApplicationEvent, ApplicationEventBus, ApplicationEventDiagnosticsStore,
+    PopupDismissedEvent,
+)
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 from src.ui.live_session import LiveFaceSession
@@ -60,7 +64,9 @@ from src.ui.detection_history.tk_window import DetectionHistoryWindow
 from src.core.attendance import AttendancePolicy, AttendanceRepository, AttendanceService
 from src.ui.attendance import AttendanceUIController
 from src.ui.attendance.tk_window import AttendanceHistoryWindow
-from src.ui.action_adapters import DetectionEventServiceActionAdapter
+from src.ui.action_adapters import (
+    DetectionEventServiceActionAdapter, IdentificationPopupActionAdapter,
+)
 from src.validation.guided_face_capture import load_guided_profile
 
 LOGGER = logging.getLogger(__name__)
@@ -416,6 +422,8 @@ def build_decision_orchestrator(
 def build_action_executor(
     settings: dict[str, object],
     detection_events: DetectionEventService | None = None,
+    popup_adapter: IdentificationPopupActionAdapter | None = None,
+    application_event_bus: ApplicationEventBus | None = None,
 ) -> ActionExecutor | None:
     """Build the executor; only the low-risk event adapter may be wired."""
     configuration = settings.get("action_executor", {})
@@ -450,8 +458,46 @@ def build_action_executor(
     )
     adapter = None
     if detection_events is not None and policy.allow_detection_event_logging:
-        adapter = DetectionEventServiceActionAdapter(detection_events)
-    return ActionExecutor(policy, detection_event_adapter=adapter)
+        adapter = DetectionEventServiceActionAdapter(
+            detection_events, application_event_bus,
+        )
+    configured_popup = popup_adapter if _popup_configuration_complete(settings) else None
+    return ActionExecutor(
+        policy, popup_adapter=configured_popup, detection_event_adapter=adapter,
+    )
+
+
+def build_application_events(
+    settings: dict[str, object],
+) -> tuple[ApplicationEventBus | None, ApplicationEventDiagnosticsStore | None]:
+    """Create one optional application bus and its scalar-only diagnostics store."""
+    configuration = settings.get("application_events", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("application_events configuration must be an object")
+    if not bool(configuration.get("enabled", False)):
+        return None, None
+    limit = int(configuration.get("max_diagnostic_events", 100))
+    diagnostics = ApplicationEventDiagnosticsStore(limit=limit)
+    bus = ApplicationEventBus()
+    bus.subscribe(ApplicationEvent, diagnostics.record)
+    return bus, diagnostics
+
+
+def _popup_configuration_complete(settings: dict[str, object]) -> bool:
+    action = settings.get("action_executor", {})
+    decision = settings.get("decision_orchestrator", {})
+    if not isinstance(action, dict) or not isinstance(decision, dict):
+        return False
+    return bool(
+        action.get("enabled", False)
+        and action.get("automatic_execution_enabled", False)
+        and action.get("allow_registered_popup", False)
+        and action.get("allow_unregistered_popup", False)
+        and decision.get("enabled", False)
+        and decision.get("automatic_actions_enabled", False)
+        and decision.get("allow_registered_popup_proposal", False)
+        and decision.get("allow_unregistered_popup_proposal", False)
+    )
 
 
 def uses_action_executor_detection_logging(
@@ -471,6 +517,26 @@ def uses_action_executor_detection_logging(
         and orchestrator.policy.enabled
         and orchestrator.policy.automatic_actions_enabled
         and orchestrator.policy.allow_detection_event_proposal
+    )
+
+
+def uses_action_executor_popups(
+    executor: ActionExecutor | None,
+    orchestrator: DecisionOrchestrator | None,
+    controller: IdentificationPresentationController | None,
+) -> bool:
+    """Resolve the popup route independently from detection logging."""
+    return bool(
+        executor is not None and executor.policy.enabled
+        and executor.policy.automatic_execution_enabled
+        and executor.has_popup_adapter
+        and executor.policy.allow_registered_popup
+        and executor.policy.allow_unregistered_popup
+        and orchestrator is not None and orchestrator.policy.enabled
+        and orchestrator.policy.automatic_actions_enabled
+        and orchestrator.policy.allow_registered_popup_proposal
+        and orchestrator.policy.allow_unregistered_popup_proposal
+        and controller is not None and controller.policy.enabled
     )
 
 
@@ -523,6 +589,7 @@ def main() -> int:
     if args.mock_duration is not None and args.mock_duration <= 0:
         parser.error("--mock-duration must be positive")
     settings = json.loads(args.config.read_text(encoding="utf-8"))
+    application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
     detection_event_service = build_detection_event_service(settings)
@@ -530,10 +597,6 @@ def main() -> int:
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
     decision_orchestrator = build_decision_orchestrator(settings)
-    action_executor = build_action_executor(settings, detection_event_service)
-    detection_logging_via_executor = uses_action_executor_detection_logging(
-        action_executor, decision_orchestrator, detection_event_service,
-    )
     controller = build_controller(args.config, startup.gallery, person_repository)
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
@@ -571,6 +634,20 @@ def main() -> int:
             ),
         ),
         identity_provider,
+    )
+    popup_action_adapter = IdentificationPopupActionAdapter(
+        identification_controller,
+        queue_size=int(settings["queues"].get("event_size", 16)),
+        application_event_bus=application_events,
+    )
+    action_executor = build_action_executor(
+        settings, detection_event_service, popup_action_adapter, application_events,
+    )
+    detection_logging_via_executor = uses_action_executor_detection_logging(
+        action_executor, decision_orchestrator, detection_event_service,
+    )
+    popups_via_executor = uses_action_executor_popups(
+        action_executor, decision_orchestrator, identification_controller,
     )
     try:
         import tkinter as tk
@@ -618,6 +695,7 @@ def main() -> int:
         decision_orchestrator=decision_orchestrator,
         action_executor=action_executor,
         detection_event_logging_via_executor=detection_logging_via_executor,
+        application_event_bus=application_events,
     )
     root = tk.Tk()
     people_window: dict[str, PeopleManagerWindow] = {}
@@ -632,6 +710,7 @@ def main() -> int:
         return True
 
     def close():
+        popup_action_adapter.close()
         window = people_window.pop("window", None)
         if window is not None and window.window.winfo_exists():
             window.close()
@@ -738,6 +817,11 @@ def main() -> int:
         on_register=lambda: app.open_form(),
         unknown_timeout_seconds=identification_controller.policy.unknown_popup_timeout_seconds,
         on_unknown_closed=identification_controller.unknown_dismissed,
+        on_dismissed=(None if application_events is None else lambda popup_type, reason:
+            application_events.publish(PopupDismissedEvent(
+                source="identification_popup", session_id=session.session_id,
+                run_id=session.session_id, popup_type=popup_type, reason=reason,
+            ))),
     )
 
     app = LocalFaceTkApp(
@@ -753,6 +837,9 @@ def main() -> int:
         get_thumbnail=thumbnail_manager.load,
         identification_controller=identification_controller,
         identification_popup=identification_popup,
+        popup_mode="action_executor" if popups_via_executor else "legacy",
+        get_popup_requests=popup_action_adapter.drain,
+        clear_popup_requests=popup_action_adapter.clear,
         on_registration_form_state=session.set_event_history_suspended,
         get_detection_events=(None if history_controller is None else
                               lambda: history_controller.recent(10)),

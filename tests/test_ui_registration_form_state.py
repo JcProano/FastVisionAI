@@ -34,6 +34,10 @@ class RegistrationFormPresentationTests(unittest.TestCase):
         app._identification = _Identification(); app._identification_popup = _Popup()
         app._registration_form_open = False; app._enrollment_active = False; app._closing = False
         app._on_registration_form_state = lambda _value: None
+        app._popup_mode = "action_executor"; app._get_popup_requests = lambda: ()
+        app.popup_clears = 0
+        def clear(): app.popup_clears += 1
+        app._clear_popup_requests = clear
         for name in ("status", "candidate", "similarity", "decision", "quality",
                      "register_button", "cancel_button"):
             setattr(app, name, _Widget())
@@ -57,12 +61,14 @@ class RegistrationFormPresentationTests(unittest.TestCase):
         app.show_monitoring(self.monitoring())  # already queued before FORM_OPEN is harmless
         self.assertEqual(app._identification.observed, 0)
         self.assertEqual(app._identification_popup.shown, 0)
+        self.assertGreaterEqual(app.popup_clears, 1)
 
     def test_form_cancel_or_window_close_reactivates_without_reservation_callback(self):
         app = self.app(); app._enter_registration_form_state()
         app._leave_registration_form_state(resume=True)
         self.assertFalse(app._registration_form_open)
         self.assertEqual(app._identification.resumed, 1)
+        self.assertGreaterEqual(app.popup_clears, 2)
         source = inspect.getsource(LocalFaceTkApp.open_form)
         self.assertIn('form.protocol(', source)
         self.assertIn('"WM_DELETE_WINDOW"', source)
@@ -96,6 +102,18 @@ class RegistrationFormPresentationTests(unittest.TestCase):
         guard = source.index("self._form.winfo_exists()")
         creation = source.index("tk.Toplevel")
         self.assertLess(guard, creation)
+
+    def test_queued_popup_is_discarded_during_form_and_not_revived(self):
+        app = self.app()
+        queued = [type("PopupDTO", (), {"popup_type": IdentificationPopupType.UNREGISTERED})()]
+        app._get_popup_requests = lambda: tuple(queued)
+        app._enter_registration_form_state()
+        app._drain_action_popups()
+        self.assertEqual(app._identification_popup.shown, 0)
+        queued.clear()
+        app._leave_registration_form_state(resume=True)
+        app._drain_action_popups()
+        self.assertEqual(app._identification_popup.shown, 0)
 
 
 if __name__ == "__main__":

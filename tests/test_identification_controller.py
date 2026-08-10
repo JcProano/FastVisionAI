@@ -1,5 +1,6 @@
 import dataclasses
 import unittest
+import threading
 from datetime import datetime, timezone
 
 import numpy as np
@@ -122,6 +123,23 @@ class IdentificationControllerTests(unittest.TestCase):
         names = {field.name.casefold() for field in dataclasses.fields(result)}
         self.assertTrue(names.isdisjoint(forbidden))
         self.assertNotIn(np.ndarray, {type(value) for value in dataclasses.astuple(result)})
+
+    def test_action_requests_share_thread_safe_stability_and_provider_path(self):
+        errors = []
+        def worker():
+            try:
+                for _ in range(20):
+                    self.controller.observe_action(
+                        "SHOW_REGISTERED_POPUP", "person_a", "NOT_EVALUATED", .8,
+                    )
+            except Exception as exc:  # pragma: no cover - asserted empty
+                errors.append(type(exc).__name__)
+        thread = threading.Thread(target=worker)
+        thread.start()
+        for _ in range(20):
+            self.controller.suspend(); self.controller.resume()
+        thread.join()
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__": unittest.main()

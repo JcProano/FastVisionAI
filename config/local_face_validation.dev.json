@@ -117,25 +117,29 @@
   "decision_orchestrator": {
     "enabled": true,
     "automatic_actions_enabled": true,
-    "allow_registered_popup_proposal": false,
-    "allow_unregistered_popup_proposal": false,
+    "allow_registered_popup_proposal": true,
+    "allow_unregistered_popup_proposal": true,
     "allow_detection_event_proposal": true,
     "allow_attendance_proposal": false,
     "require_stable_for_registered_popup": true,
     "require_policy_eligible_for_attendance": true,
     "require_active_person_for_attendance": true,
     "policy_name": "decision_orchestrator_development",
-    "policy_version": "1.0"
+    "policy_version": "1.1"
   },
   "action_executor": {
     "enabled": true,
     "automatic_execution_enabled": true,
-    "allow_registered_popup": false,
-    "allow_unregistered_popup": false,
+    "allow_registered_popup": true,
+    "allow_unregistered_popup": true,
     "allow_detection_event_logging": true,
     "allow_attendance_execution": false,
     "require_orchestrator_actions_enabled": true,
-    "policy_name": "action_executor_detection_logging",
+    "policy_name": "action_executor_popup_detection",
     "policy_version": "1.1"
+  },
+  "application_events": {
+    "enabled": true,
+    "max_diagnostic_events": 100
   }
 }

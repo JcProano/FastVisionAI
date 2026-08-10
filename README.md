@@ -391,3 +391,30 @@ incompleta se conserva la ruta heredada. Nunca se usan ambas rutas en una evalua
 `DetectionEventService` continúa siendo responsable de cooldown, caché y escritura.
 Un cooldown procesado correctamente aparece como acción `EXECUTED` aunque no genere
 otra fila. Formulario, enrollment y rollback suspenden completamente el historial.
+
+### Popups controlados mediante Action Executor (Fase 29)
+
+Los popups registrado y no registrado pueden seguir una ruta independiente del modo
+de logging. La configuración local habilita ambos mediante `PopupActionAdapter`; una
+configuración parcial conserva el camino heredado y nunca usa los dos en el mismo
+frame. `candidate_stability_frames`, cooldowns, singleton y el timeout desconocido de
+60 segundos continúan perteneciendo a la capa de presentación.
+
+El worker no llama Tkinter. El adapter entrega DTO seguros a una cola limitada y Tk
+los consume en el hilo principal. Nombres, datos civiles y disponibilidad de thumbnail
+se resuelven posteriormente mediante `IdentityInfoProvider`; `PopupActionData` no
+transporta PII. Formulario, enrollment, rollback y cierre limpian solicitudes
+pendientes. Attendance y control de acceso permanecen desconectados.
+### Application Event Bus interno (Fase 30)
+
+`src/core/application_events/` ofrece un bus síncrono, en memoria y thread-safe
+para publicar proyecciones seguras de cambios de la aplicación. Se crea una sola
+instancia por ejecución cuando `application_events.enabled=true`. La integración
+es paralela: las colas limitadas, callbacks, polling del dashboard y el EventBus
+del Runtime continúan siendo los mecanismos vigentes; esta fase no migra
+consumidores ni convierte el bus en fuente de verdad.
+
+Los eventos contienen correlación, timestamps UTC y DTO seguros. Nunca incluyen
+embeddings, imágenes, templates, modelos, repositorios ni formularios civiles.
+El almacén de diagnóstico conserva solamente tipo, timestamp y origen, con un
+límite configurable y sin persistencia.

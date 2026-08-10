@@ -15,7 +15,7 @@ from pathlib import Path
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
 from src.engine.action_executor import (
     ActionExecutionInput, ActionExecutionResult, ActionExecutionState, ActionExecutor,
-    DetectionEventActionData,
+    DetectionEventActionData, PopupActionData,
 )
 from src.engine.decision_orchestrator import (
     DecisionOrchestrator, DecisionOrchestratorInput, DecisionOrchestratorResult,
@@ -49,6 +49,11 @@ from src.ui.dashboard.contracts import (
 )
 from src.core.detection_events import (
     DetectionEventInput, DetectionEventService, DetectionEventType,
+)
+from src.core.application_events import (
+    ActionExecutionUpdatedEvent, ApplicationEventBus, DecisionUpdatedEvent,
+    EnrollmentCancelledEvent, EnrollmentFinishedEvent, EnrollmentStartedEvent,
+    IdentificationPolicyUpdatedEvent, MonitoringUpdatedEvent, StabilityUpdatedEvent,
 )
 from datetime import datetime, timezone
 from collections.abc import Callable
@@ -91,6 +96,7 @@ class LiveFaceSession:
         decision_orchestrator: DecisionOrchestrator | None = None,
         action_executor: ActionExecutor | None = None,
         detection_event_logging_via_executor: bool = False,
+        application_event_bus: ApplicationEventBus | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -118,6 +124,7 @@ class LiveFaceSession:
         ):
             raise ValueError("action-executor event mode requires a configured adapter")
         self._detection_event_logging_via_executor = detection_event_logging_via_executor
+        self._application_events = application_event_bus
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -142,6 +149,11 @@ class LiveFaceSession:
     @property
     def alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def session_id(self) -> str:
+        """Safe correlation identifier for application-level UI events."""
+        return self._session_id
 
     def start(self) -> None:
         if self.alive:
@@ -284,6 +296,11 @@ class LiveFaceSession:
             if command.kind is SessionCommandType.STOP:
                 self._stop.set()
             elif command.kind is SessionCommandType.CANCEL_ENROLLMENT:
+                cancelled_person_id = self._additional_person_id
+                was_active = bool(
+                    self.controller.enrollment.active or self._plan is not None
+                    or self._additional_person_id is not None
+                )
                 if self.controller.enrollment.active:
                     self.controller.cancel_enrollment()
                 self._plan = None
@@ -299,6 +316,12 @@ class LiveFaceSession:
                     UIState.MONITORING, "Registro cancelado", None, None,
                     "deshabilitada / NOT_EVALUATED", True,
                 ))
+                if was_active:
+                    self._publish_application(EnrollmentCancelledEvent(
+                        source="live_face_session", session_id=self._session_id,
+                        run_id=self._session_id, person_id=cancelled_person_id,
+                        state="CANCELLED", message="enrollment_cancelled",
+                    ))
             elif command.kind is SessionCommandType.START_ENROLLMENT and command.form is not None:
                 if self._plan is not None or self.controller.enrollment.active:
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
@@ -314,6 +337,11 @@ class LiveFaceSession:
                     self.adapter.set_thumbnail_capture(True)
                     self._plan = plan
                     self._event(progress)
+                    self._publish_application(EnrollmentStartedEvent(
+                        source="live_face_session", session_id=self._session_id,
+                        run_id=self._session_id, person_id=command.form.person_id,
+                        state="ENROLLING", message="primary_enrollment_started",
+                    ))
                 except Exception:
                     LOGGER.exception(
                         "Enrollment start failed before biometric sample collection; "
@@ -355,6 +383,11 @@ class LiveFaceSession:
                     self._event(EnrollmentProgressDTO(
                         UIState.ENROLLING, "Mire al frente", 0, self._plan.target_samples,
                         (), None, None, True,
+                    ))
+                    self._publish_application(EnrollmentStartedEvent(
+                        source="live_face_session", session_id=self._session_id,
+                        run_id=self._session_id, person_id=command.person_id,
+                        state="ENROLLING", message="additional_enrollment_started",
                     ))
                 except Exception:
                     LOGGER.exception("Additional enrollment start failed; biometric data omitted")
@@ -527,11 +560,14 @@ class LiveFaceSession:
             monitoring.recognition_state, monitoring.candidate_display_name,
             monitoring.similarity, monitoring.quality_score, self._camera_id, face_count,
         )
+        popup_data = None if monitoring is None else PopupActionData(
+            monitoring.recognition_state, monitoring.similarity, monitoring.message,
+        )
         result = executor.execute(ActionExecutionInput(
             orchestration.proposed_actions, orchestration.blocked_actions,
             orchestration.state, orchestration.automatic_actions_enabled,
             orchestration.person_id, self._session_id, self._session_id,
-            datetime.now(timezone.utc), event_data,
+            datetime.now(timezone.utc), event_data, popup_data,
         ))
         return _action_executor_dto(result)
 
@@ -600,6 +636,12 @@ class LiveFaceSession:
                     person_id, tuple(self._additional_samples)  # type: ignore[arg-type]
                 )
                 self._event(result)
+                self._publish_application(EnrollmentFinishedEvent(
+                    source="live_face_session", session_id=self._session_id,
+                    run_id=self._session_id, person_id=person_id,
+                    state="COMPLETED" if result.success else "REJECTED",
+                    message=result.message,
+                ))
                 if not result.success:
                     self._error(UIErrorCode.ENROLLMENT_ERROR, result.message, True)
             finally:
@@ -652,6 +694,11 @@ class LiveFaceSession:
                 self._error(UIErrorCode.PERSISTENCE_ERROR,
                             "Registro en memoria correcto; la persistencia local falló.", True)
             self._event(result)
+            self._publish_application(EnrollmentFinishedEvent(
+                source="live_face_session", session_id=self._session_id,
+                run_id=self._session_id, person_id=result.person_id,
+                state=result.enrollment_status, message=result.message,
+            ))
         except Exception:
             LOGGER.exception(
                 "Enrollment finalization failed; temporary biometric payload omitted from log"
@@ -670,6 +717,42 @@ class LiveFaceSession:
 
     def _event(self, event: UIEvent) -> None:
         _put_recent(self.event_queue, event)
+        self._publish_dto_event(event)
+
+    def _publish_dto_event(self, value: UIEvent) -> None:
+        if getattr(self, "_application_events", None) is None:
+            return
+        common = {
+            "source": "live_face_session", "session_id": self._session_id,
+            "run_id": self._session_id,
+        }
+        event = (
+            MonitoringUpdatedEvent(monitoring=value, **common)
+            if isinstance(value, MonitoringDTO) else
+            StabilityUpdatedEvent(stability=value, **common)
+            if isinstance(value, StabilityDTO) else
+            IdentificationPolicyUpdatedEvent(policy=value, **common)
+            if isinstance(value, IdentificationPolicyDTO) else
+            DecisionUpdatedEvent(decision=value, **common)
+            if isinstance(value, DecisionOrchestratorDTO) else
+            ActionExecutionUpdatedEvent(execution=value, **common)
+            if isinstance(value, ActionExecutorDTO) else None
+        )
+        if event is not None:
+            self._publish_application(event)
+
+    def _publish_application(self, event) -> None:
+        bus = getattr(self, "_application_events", None)
+        if bus is None:
+            return
+        try:
+            bus.publish(event)
+        except Exception as exc:
+            LOGGER.error(
+                "Application event publication failed safely; event_type=%s "
+                "exception_type=%s", getattr(event, "event_type", "unknown"),
+                type(exc).__name__,
+            )
 
     def _error(self, code: UIErrorCode, message: str, recoverable: bool) -> None:
         LOGGER.warning("Safe UI error: %s", code.value)

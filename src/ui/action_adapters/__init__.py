@@ -3,5 +3,9 @@
 from .detection_event_adapter import (
     DetectionEventActionAdapterError, DetectionEventServiceActionAdapter,
 )
+from .popup_adapter import IdentificationPopupActionAdapter
 
-__all__ = ["DetectionEventActionAdapterError", "DetectionEventServiceActionAdapter"]
+__all__ = [
+    "DetectionEventActionAdapterError", "DetectionEventServiceActionAdapter",
+    "IdentificationPopupActionAdapter",
+]

@@ -6,12 +6,16 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from .contracts import ActionExecutionContext, DetectionEventActionData
+from .contracts import ActionExecutionContext, DetectionEventActionData, PopupActionData
 
 
 class PopupActionAdapter(Protocol):
-    def show_registered(self, context: ActionExecutionContext) -> None: ...
-    def show_unregistered(self, context: ActionExecutionContext) -> None: ...
+    def show_registered(
+        self, context: ActionExecutionContext, popup: PopupActionData,
+    ) -> None: ...
+    def show_unregistered(
+        self, context: ActionExecutionContext, popup: PopupActionData,
+    ) -> None: ...
 
 
 class DetectionEventActionAdapter(Protocol):
@@ -24,14 +28,18 @@ class DetectionEventActionAdapter(Protocol):
 class CallbackPopupActionAdapter:
     """Prepared callback adapter; deliberately not wired by the composition root."""
 
-    registered_callback: Callable[[ActionExecutionContext], None]
-    unregistered_callback: Callable[[ActionExecutionContext], None]
+    registered_callback: Callable[[ActionExecutionContext, PopupActionData], None]
+    unregistered_callback: Callable[[ActionExecutionContext, PopupActionData], None]
 
-    def show_registered(self, context: ActionExecutionContext) -> None:
-        self.registered_callback(context)
+    def show_registered(
+        self, context: ActionExecutionContext, popup: PopupActionData,
+    ) -> None:
+        self.registered_callback(context, popup)
 
-    def show_unregistered(self, context: ActionExecutionContext) -> None:
-        self.unregistered_callback(context)
+    def show_unregistered(
+        self, context: ActionExecutionContext, popup: PopupActionData,
+    ) -> None:
+        self.unregistered_callback(context, popup)
 
 
 @dataclass(frozen=True, slots=True)

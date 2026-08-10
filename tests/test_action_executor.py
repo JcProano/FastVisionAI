@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from src.engine.action_executor import (
     ActionExecutionInput, ActionExecutionState, ActionExecutor, ActionExecutorPolicy,
     DetectionEventActionData,
+    PopupActionData,
 )
 
 
@@ -12,11 +13,11 @@ class PopupSpy:
         self.calls = calls; self.fail_registered = fail_registered
         self.fail_unregistered = fail_unregistered
 
-    def show_registered(self, context):
+    def show_registered(self, context, popup):
         self.calls.append(context.action.value)
         if self.fail_registered: raise RuntimeError("safe test failure")
 
-    def show_unregistered(self, context):
+    def show_unregistered(self, context, popup):
         self.calls.append(context.action.value)
         if self.fail_unregistered: raise RuntimeError("safe test failure")
 
@@ -35,6 +36,7 @@ def action_input(actions=("SHOW_REGISTERED_POPUP",), **changes):
         orchestrator_automatic_actions_enabled=True, person_id="person",
         run_id="run", session_id="session", timestamp=datetime.now(timezone.utc),
         detection_event=DetectionEventActionData("NOT_EVALUATED"),
+        popup=PopupActionData("NOT_EVALUATED"),
     )
     values.update(changes)
     return ActionExecutionInput(**values)

@@ -8,6 +8,7 @@ from .contracts import (
     ActionExecutionContext, ActionExecutionInput, ActionExecutionResult,
     ActionExecutionState, ActionExecutorValidationError, ExecutableAction,
     DetectionEventActionData,
+    PopupActionData,
 )
 from .executor import ActionExecutor
 from .policy import ActionExecutorPolicy
@@ -17,5 +18,5 @@ __all__ = [
     "ActionExecutionState", "ActionExecutor", "ActionExecutorPolicy",
     "ActionExecutorValidationError", "CallbackDetectionEventActionAdapter",
     "CallbackPopupActionAdapter", "DetectionEventActionAdapter", "ExecutableAction",
-    "PopupActionAdapter", "DetectionEventActionData",
+    "PopupActionAdapter", "DetectionEventActionData", "PopupActionData",
 ]

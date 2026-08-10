@@ -265,6 +265,22 @@ session route remains active. They are mutually exclusive for every evaluation.
 Cooldown, cache and persistence remain owned by `DetectionEventService`. Popup and
 attendance adapters are not connected. Form, enrollment and rollback suspend both
 routes and clear the dashboard projection to `NOT_EVALUATED`.
+
+Phase 29 independently migrates popup presentation through a second adapter. A
+session fixes `popup_mode` and `detection_logging_mode` separately at composition
+time. Complete popup policy gates select the executor route; any missing gate selects
+the legacy `MonitoringDTO` route. The two routes are never used for the same
+evaluation.
+
+`PopupActionData` contains only recognition state, optional similarity and a safe
+message. The worker-side adapter asks the thread-safe
+`IdentificationPresentationController` to apply presentation stability, cooldown and
+provider resolution, then places only `IdentificationPopupDTO` values in a bounded
+recent-state queue. Tk drains that queue on its main thread. Civil information remains
+behind `IdentityInfoProvider`; ActionExecutor never receives it. The 60-second unknown
+timer, singleton window and thumbnail rendering remain in the existing Tk boundary.
+Pending popup DTOs are cleared or discarded across form, enrollment, rollback and
+shutdown transitions.
 # Capa UI local experimental
 
 `src/ui/` es una frontera de presentación independiente. `ExperimentalRecognitionSession`
@@ -320,3 +336,19 @@ enrollment la proyección se limpia a `POLICY_NOT_EVALUATED`.
 y estado administrativo. Produce propuestas y bloqueos escalares para el dashboard,
 sin depender de RecognitionService, repositorios, Gallery, DetectionEventService o
 AttendanceService. Durante formulario y enrollment se limpia a `NOT_EVALUATED`.
+## Fase 30 — Application Event Bus
+
+El bus de aplicación vive en `src/core/application_events` y es deliberadamente
+distinto de `src/engine/events/EventBus`, cuyo alcance sigue siendo el Runtime.
+`ApplicationEventBus` toma un snapshot de suscripciones bajo `RLock`, libera el
+lock antes de invocar handlers y mantiene el orden global de suscripción. Los
+fallos de subscribers quedan aislados y una protección por hilo limita la
+recursión de publicaciones anidadas.
+
+`LiveFaceSession` conserva primero el DTO en su cola y publica después una
+proyección tipada. Enrollment se publica únicamente en transiciones explícitas.
+Los adaptadores de historial y popup publican después de procesar correctamente
+sus solicitudes, y el cierre del popup emite una notificación sin impedir su
+limpieza. `ApplicationEventDiagnosticsStore` es una proyección temporal limitada
+que guarda solo `event_type`, `timestamp` y `source`. Ninguno de estos elementos
+es fuente de verdad ni sustituye callbacks, colas o polling existentes.

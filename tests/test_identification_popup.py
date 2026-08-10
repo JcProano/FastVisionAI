@@ -32,6 +32,7 @@ class IdentificationPopupTests(unittest.TestCase):
         popup._on_register = lambda: registered.append(True)
         popup._unknown_timeout_seconds = 60.0
         popup._on_unknown_closed = lambda: closed.append(True)
+        popup._on_dismissed = None
         popup._monotonic = lambda: clock[0]
         popup.window = self.FakeWidget(); popup._photo = None; popup._person_id = None
         popup._popup_type = None; popup._timer_id = None; popup._unknown_deadline = None
@@ -71,6 +72,19 @@ class IdentificationPopupTests(unittest.TestCase):
                 self.assertEqual(closed, [True])
                 self.assertEqual(bool(registered), action == "register")
 
+    def test_dismiss_callback_runs_after_cleanup_and_failure_is_safe(self):
+        popup, _, root, _, _ = self.popup(); notices = []
+        popup._on_dismissed = lambda popup_type, reason: notices.append(
+            (popup_type, reason, popup.active, bool(root.callbacks))
+        )
+        popup._render(self.unknown()); popup.dismiss("programmatic")
+        self.assertEqual(notices, [("UNREGISTERED", "programmatic", False, False)])
+
+        popup, _, _, _, _ = self.popup()
+        popup._on_dismissed = lambda *_args: (_ for _ in ()).throw(RuntimeError())
+        popup._render(self.unknown()); popup.dismiss("user")
+        self.assertFalse(popup.active)
+
     def test_popup_text_actions_singleton_and_thumbnail_placeholder(self):
         source = inspect.getsource(IdentificationPopupWindow)
         for expected in (
@@ -88,11 +102,11 @@ class IdentificationPopupTests(unittest.TestCase):
         self.assertIn("self._on_view_person", popup_source)
         self.assertIn("self._on_register", popup_source)
         self.assertIn("self._identification_popup.close()", app_source)
-        self.assertIn("self._identification_popup.dismiss()", app_source)
+        self.assertIn("self._dismiss_identification_popup(", app_source)
         self.assertIn("self.open_form", app_source)
         self.assertIn("UIState.MULTIPLE_FACES", app_source)
         self.assertIn("UIState.NO_FACE", app_source)
-        self.assertIn("self._identification_popup.dismiss()", inspect.getsource(LocalFaceTkApp.show_progress))
+        self.assertIn("self._dismiss_identification_popup(", inspect.getsource(LocalFaceTkApp.show_progress))
         self.assertIn("IdentificationPopupType.REGISTERED_CANDIDATE", app_source)
 
     def test_forbidden_automatic_identity_language_is_absent(self):

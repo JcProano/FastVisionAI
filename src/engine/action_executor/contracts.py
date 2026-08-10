@@ -39,6 +39,7 @@ class ActionExecutionInput:
     session_id: str
     timestamp: datetime
     detection_event: DetectionEventActionData | None = None
+    popup: PopupActionData | None = None
 
     def __post_init__(self) -> None:
         if not self.orchestrator_state.strip():
@@ -70,6 +71,21 @@ class DetectionEventActionData:
         for value in (self.similarity, self.quality_score):
             if value is not None and not math.isfinite(value):
                 raise ActionExecutorValidationError("event metric must be finite")
+
+
+@dataclass(frozen=True, slots=True)
+class PopupActionData:
+    """PII-free scalar request for the presentation controller."""
+
+    recognition_state: str
+    similarity: float | None = None
+    message: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.recognition_state.strip():
+            raise ActionExecutorValidationError("recognition_state is required")
+        if self.similarity is not None and not math.isfinite(self.similarity):
+            raise ActionExecutorValidationError("popup similarity must be finite")
 
 
 @dataclass(frozen=True, slots=True)
