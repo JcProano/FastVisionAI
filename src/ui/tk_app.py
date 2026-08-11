@@ -188,6 +188,7 @@ class LocalFaceTkApp:
         get_daily_report: Callable[[], object] | None = None,
         report_refresh_seconds: float = 30.0,
         can: Callable[[str], bool] | None = None,
+        on_backup: Callable[[], None] | None = None,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -371,6 +372,8 @@ class LocalFaceTkApp:
         self.register_button.pack(side="left", padx=3)
         self.people_button = ttk.Button(actions, text="Personas registradas", command=on_people or (lambda: None),state="normal" if self._can("VIEW_PEOPLE") else "disabled")
         self.people_button.pack(side="left", padx=3)
+        self.backup_button = ttk.Button(actions, text="Copias de seguridad", command=on_backup or (lambda: None),state="normal" if self._can("BACKUP") or self._can("RESTORE") else "disabled")
+        self.backup_button.pack(side="left", padx=3)
         ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
         ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)
         ttk.Button(actions, text="Guardar galería", command=self._save_gallery).pack(side="left", padx=3)

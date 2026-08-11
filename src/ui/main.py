@@ -79,6 +79,11 @@ from src.core.security import (
     AuthorizationEngine, AuthorizationPermission, PasswordHasher, PasswordPolicy, UserRepository,
 )
 from src.ui.security import AuthorizationController, LoginWindow, SecurityController
+from src.core.backup import (
+    ApplicationMaintenanceCoordinator, BackupArchive, BackupService,
+    BackupSourceCatalog, RestoreService, SQLiteSnapshotProvider,
+)
+from src.ui.backup import BackupController, BackupWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -813,6 +818,7 @@ def main() -> int:
     history_window: dict[str, DetectionHistoryWindow] = {}
     attendance_window: dict[str, AttendanceHistoryWindow] = {}
     report_window: dict[str, ReportWindow] = {}
+    backup_window: dict[str, BackupWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -838,6 +844,8 @@ def main() -> int:
         if attendance_view is not None and attendance_view.window.winfo_exists():attendance_view.close()
         reports_view = report_window.pop("window", None)
         if reports_view is not None and reports_view.window.winfo_exists(): reports_view.close()
+        backup_view = backup_window.pop("window", None)
+        if backup_view is not None and backup_view.window.winfo_exists(): backup_view.close()
         session.close()
         security.logout()
 
@@ -933,6 +941,72 @@ def main() -> int:
                 return None
         return people_controller.save_changes(overwrite_confirmed=overwrite)
 
+    backup_settings = settings.get("backup", {})
+    if not isinstance(backup_settings, dict):
+        raise ValueError("backup configuration must be an object")
+    for key in ("maximum_archive_size_bytes", "maximum_file_count",
+                "operation_history_limit"):
+        if int(backup_settings.get(key, 0)) <= 0:
+            raise ValueError(f"backup {key} must be positive")
+    for key in ("restore_timeout_seconds", "sqlite_snapshot_timeout_seconds"):
+        if float(backup_settings.get(key, 0)) <= 0:
+            raise ValueError(f"backup {key} must be positive")
+    maintenance = ApplicationMaintenanceCoordinator()
+    catalog = BackupSourceCatalog(PROJECT_ROOT, settings)
+    backup_archive = BackupArchive(
+        maximum_archive_size_bytes=int(backup_settings["maximum_archive_size_bytes"]),
+        maximum_file_count=int(backup_settings["maximum_file_count"]),
+    )
+    snapshots = SQLiteSnapshotProvider(
+        float(backup_settings["sqlite_snapshot_timeout_seconds"])
+    )
+    backup_service = BackupService(catalog, backup_archive, snapshots, maintenance)
+    restore_service = RestoreService(catalog, backup_archive, snapshots, maintenance)
+
+    def quiesce_for_restore() -> None:
+        completed = threading.Event(); failure: list[BaseException] = []
+        def on_tk_thread() -> None:
+            try:
+                for mapping in (people_window, configuration_window, profile_windows,
+                                history_window, attendance_window, report_window):
+                    for item in tuple(mapping.values()):
+                        if item.window.winfo_exists(): item.close()
+                    mapping.clear()
+                maintenance.quiesce(
+                    cancel_enrollment=session.cancel_enrollment,
+                    close_session=lambda: session.close(
+                        float(backup_settings["restore_timeout_seconds"])
+                    ),
+                    close_windows=lambda: None,
+                    cancel_callbacks=lambda: None,
+                    timeout_seconds=float(backup_settings["restore_timeout_seconds"]),
+                )
+            except BaseException as exc:
+                failure.append(exc)
+            finally:
+                completed.set()
+        root.after(0, on_tk_thread)
+        if not completed.wait(float(backup_settings["restore_timeout_seconds"]) + 1):
+            raise RuntimeError("restore quiescence timeout")
+        if failure:
+            raise failure[0]
+
+    backup_controller = BackupController(
+        backup_service, restore_service, security.authorization,
+        history_limit=int(backup_settings["operation_history_limit"]),
+        prepare_for_restore=quiesce_for_restore,
+    )
+
+    def open_backup() -> None:
+        current = backup_window.get("window")
+        if current is not None and current.window.winfo_exists():
+            current.focus(); return
+        backup_window["window"] = BackupWindow(
+            root, backup_controller,
+            on_close=lambda: backup_window.pop("window", None),
+            on_restore_success=lambda _result: root.after(0, app.close),
+        )
+
     identification_popup = IdentificationPopupWindow(
         root, identity_provider,
         on_view_person=open_profile,
@@ -978,6 +1052,7 @@ def main() -> int:
             settings.get("reports", {}).get("dashboard_refresh_seconds", 30)
         ),
         can=lambda permission: security.authorization.can(AuthorizationPermission(permission)),
+        on_backup=open_backup,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

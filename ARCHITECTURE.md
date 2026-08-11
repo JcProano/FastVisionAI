@@ -388,3 +388,15 @@ estado. La UI aplica permisos y los controladores vuelven a validarlos. Un timeo
 durante enrollment queda pendiente hasta que el flujo termine o complete rollback.
 Los eventos de seguridad admiten un callback seguro opcional; no se crea otra base
 de auditoría ni se modifica ApplicationEventBus.
+# Fase 36 — Backup y restauración
+
+`BackupSourceCatalog → BackupService → SQLiteSnapshotProvider → BackupArchive →
+BackupManifest`. La dirección inversa es `BackupArchive → verificación completa →
+RestorePlan → ApplicationMaintenanceCoordinator → RestoreService`.
+
+Las bases se capturan con la API de backup SQLite y `PRAGMA integrity_check`. El
+archivo final se publica atómicamente solo después de reabrirlo y verificarlo. La
+restauración usa staging y rollback en el mismo filesystem; nunca usa
+`ZipFile.extractall()`. Los destinos están limitados al catálogo configurado. Un
+restore requiere estado `QUIESCENT`, invalida el uso en caliente y exige reinicio.
+`BACKUP` y `RESTORE` se validan tanto en UI como en `BackupController`.

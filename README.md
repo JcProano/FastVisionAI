@@ -451,3 +451,13 @@ civiles y biométricas. Las cuentas viven en `users.db`; nunca en `people.db` ni
 defecto. Las contraseñas se derivan exclusivamente con `hashlib.scrypt`, salt
 aleatorio y comparación constante. La autorización RBAC es obligatoria salvo que
 `security.enabled=false` se configure explícitamente para desarrollo.
+# Copias de seguridad seguras (Fase 36)
+
+El subsistema genera archivos `.fvbackup` ZIP con un `manifest.json` versionado,
+SHA-256 y snapshots consistentes de SQLite mediante `sqlite3.Connection.backup()`.
+La restauración valida todo el paquete antes de reemplazar destinos, exige permiso
+`RESTORE`, quiescencia completa y un nuevo arranque/login al finalizar.
+
+> El backup contiene información sensible y no está cifrado. `encryption=NONE`.
+> Debe almacenarse en un medio protegido; SHA-256 aporta integridad, no
+> confidencialidad ni autenticidad.

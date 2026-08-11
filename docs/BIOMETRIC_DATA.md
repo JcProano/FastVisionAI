@@ -115,3 +115,11 @@ La base local `users.db` de la Fase 35 no es almacenamiento biométrico y no se
 relaciona con `FaceGallery` ni con `PersonRepository`. No contiene rostros,
 embeddings, templates o imágenes. Una persona registrada no se convierte en
 operador y el inicio de sesión nunca utiliza reconocimiento facial.
+# Backups y datos sensibles
+
+Un `.fvbackup` puede contener datos civiles, hashes scrypt de operadores,
+embeddings de la galería y thumbnails. El formato actual declara
+`encryption=NONE`: no es almacenamiento cifrado. Debe protegerse con permisos del
+sistema, cifrado de disco, control de acceso, retención y borrado verificable. Los
+hashes SHA-256 del manifest solo comprueban integridad accidental; no sustituyen
+una firma ni cifrado autenticado.
