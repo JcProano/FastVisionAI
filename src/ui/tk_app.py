@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import math
 import time
 from typing import Any
 
@@ -304,6 +305,8 @@ class LocalFaceTkApp:
         self.decision = ttk.Label(candidate_card, text="Decisión automática: deshabilitada / NOT_EVALUATED")
         self.decision.pack(anchor="w")
         self.quality = ttk.Label(candidate_card, text="Score: —"); self.quality.pack(anchor="w")
+        self.recognition_pause = ttk.Label(candidate_card, text="")
+        self.recognition_pause.pack(anchor="w")
 
         stability_card = ttk.LabelFrame(side, text="Estabilidad", padding=6)
         stability_card.pack(fill="x", pady=6)
@@ -446,6 +449,14 @@ class LocalFaceTkApp:
                 self._dismiss_identification_popup("programmatic")
             return
         if self._identification is not None and self._identification_popup is not None:
+            orchestration = getattr(self, "_decision_orchestrator", None)
+            if orchestration is not None:
+                required_action = (
+                    "SHOW_REGISTERED_POPUP" if dto.candidate_person_id is not None
+                    else "SHOW_UNREGISTERED_POPUP"
+                )
+                if required_action not in orchestration.proposed_actions:
+                    return
             popup = self._identification.observe(dto)
             if (
                 popup.popup_type is IdentificationPopupType.SUPPRESSED
@@ -649,6 +660,17 @@ class LocalFaceTkApp:
             callback()
 
     def _refresh_dashboard(self) -> None:
+        remaining = (
+            0.0 if self._identification is None
+            else self._identification.registered_pause_remaining_seconds()
+        )
+        if remaining > 0:
+            seconds = max(1, math.ceil(remaining))
+            self.recognition_pause.configure(
+                text=f"Reconocimiento pausado: {seconds // 60:02d}:{seconds % 60:02d}"
+            )
+        else:
+            self.recognition_pause.configure(text="")
         metrics = self._dashboard.metrics
         self.metrics.configure(text=(
             f"Captura efectiva FPS: {_number(metrics.effective_capture_fps)} | "

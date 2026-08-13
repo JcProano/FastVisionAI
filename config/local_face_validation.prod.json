@@ -73,6 +73,7 @@
     "registered_cooldown_seconds": 10,
     "unknown_cooldown_seconds": 10,
     "unknown_popup_timeout_seconds": 60,
+    "registered_pause_seconds": 60,
     "candidate_stability_frames": 3
   },
   "person_database": {

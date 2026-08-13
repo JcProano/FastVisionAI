@@ -78,11 +78,22 @@ class IdentificationControllerTests(unittest.TestCase):
         self.assertEqual(self.stable(monitoring("person_a")).popup_type,
                          IdentificationPopupType.REGISTERED_CANDIDATE)
         self.assertEqual(self.stable(monitoring("person_b")).popup_type,
+                         IdentificationPopupType.SUPPRESSED)
+        self.clock[0] += 60
+        self.assertEqual(self.stable(monitoring("person_b")).popup_type,
                          IdentificationPopupType.REGISTERED_CANDIDATE)
+
+    def test_registered_popup_pause_survives_early_close_semantics(self):
+        shown = self.stable(monitoring("person_a"))
+        self.assertEqual(shown.popup_type,
+                         IdentificationPopupType.REGISTERED_CANDIDATE)
+        self.assertEqual(self.controller.registered_pause_remaining_seconds(), 60)
+        self.clock[0] += 59
         self.assertEqual(self.stable(monitoring("person_a")).popup_type,
                          IdentificationPopupType.SUPPRESSED)
-        self.clock[0] = 10
-        self.assertEqual(self.controller.observe(monitoring("person_a")).popup_type,
+        self.clock[0] += 1
+        self.assertEqual(self.controller.registered_pause_remaining_seconds(), 0)
+        self.assertEqual(self.stable(monitoring("person_a")).popup_type,
                          IdentificationPopupType.REGISTERED_CANDIDATE)
 
     def test_no_gallery_incompatible_and_no_candidate(self):

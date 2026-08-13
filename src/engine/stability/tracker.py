@@ -21,6 +21,7 @@ class StabilityTracker:
         self._monotonic = monotonic
         self._lock = threading.RLock()
         self._candidate: str | None = None
+        self._tracking_unknown = False
         self._count = 0
         self._first_seen: float | None = None
         self._last_seen: float | None = None
@@ -69,11 +70,34 @@ class StabilityTracker:
                 )
                 return self._result
             if observation.person_id is None:
-                state = StabilityState.LOST if self._candidate is not None else StabilityState.NO_OBSERVATION
-                person_id = self._candidate
-                self._clear_sequence()
-                self._result = self._empty(
-                    "candidate_unavailable", state=state, person_id=person_id,
+                if observation.recognition_state not in {
+                    "UNKNOWN", "NO_GALLERY", "NOT_EVALUATED",
+                }:
+                    state = (StabilityState.LOST if self._candidate is not None
+                             else StabilityState.NO_OBSERVATION)
+                    person_id = self._candidate
+                    self._clear_sequence()
+                    self._result = self._empty(
+                        "candidate_unavailable", state=state, person_id=person_id,
+                    )
+                    return self._result
+                if (not self._tracking_unknown or self._last_seen is None
+                        or timestamp - self._last_seen > self.policy.maximum_gap_seconds):
+                    self._seed_unknown(timestamp, observation.similarity)
+                else:
+                    self._count += 1
+                    self._last_seen = timestamp
+                    if observation.similarity is not None:
+                        self._similarities.append(observation.similarity)
+                stable = (
+                    self._count >= self.policy.minimum_observations
+                    and self._duration() >= self.policy.minimum_duration_seconds
+                )
+                self._result = self._result_for(
+                    StabilityState.STABLE if stable else StabilityState.STABILIZING,
+                    observation.similarity,
+                    "unknown_temporal_continuity_stable" if stable
+                    else "unknown_stabilizing",
                 )
                 return self._result
             if (
@@ -90,6 +114,13 @@ class StabilityTracker:
                 )
                 return self._result
 
+            if self._tracking_unknown:
+                self._seed(observation.person_id, timestamp, observation.similarity)
+                self._result = self._result_for(
+                    StabilityState.STABILIZING, observation.similarity,
+                    "candidate_after_unknown_reset",
+                )
+                return self._result
             if self._candidate is not None and observation.person_id != self._candidate:
                 # Candidate observations never transfer between people. The new candidate
                 # is seeded even when reset_on_candidate_change is false; that flag is
@@ -145,13 +176,23 @@ class StabilityTracker:
             return self._result
 
     def _seed(self, person_id: str, timestamp: float, similarity: float | None) -> None:
+        self._tracking_unknown = False
         self._candidate = person_id
         self._count = 1
         self._first_seen = timestamp
         self._last_seen = timestamp
         self._similarities = [] if similarity is None else [similarity]
 
+    def _seed_unknown(self, timestamp: float, similarity: float | None) -> None:
+        self._tracking_unknown = True
+        self._candidate = None
+        self._count = 1
+        self._first_seen = timestamp
+        self._last_seen = timestamp
+        self._similarities = [] if similarity is None else [similarity]
+
     def _clear_sequence(self) -> None:
+        self._tracking_unknown = False
         self._candidate = None
         self._count = 0
         self._first_seen = None

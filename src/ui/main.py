@@ -800,6 +800,9 @@ def main() -> int:
             unknown_popup_timeout_seconds=float(
                 popup_settings.get("unknown_popup_timeout_seconds", 60.0)
             ),
+            registered_pause_seconds=float(
+                popup_settings.get("registered_pause_seconds", 60.0)
+            ),
         ),
         identity_provider,
     )
@@ -807,6 +810,7 @@ def main() -> int:
         identification_controller,
         queue_size=int(settings["queues"].get("event_size", 16)),
         application_event_bus=application_events,
+        identification_presentation=identification_controller,
     )
     action_executor = build_action_executor(
         settings, detection_event_service, popup_action_adapter, application_events,

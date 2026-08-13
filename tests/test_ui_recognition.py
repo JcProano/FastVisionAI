@@ -143,6 +143,21 @@ class UIRecognitionTests(GalleryTestCase):
         self.assertTrue({field.name for field in dataclasses.fields(dto)}.isdisjoint(forbidden))
         self.assertFalse(any(isinstance(value, np.ndarray) for value in dataclasses.astuple(dto)))
 
+    def test_shared_gallery_update_with_five_templates_is_immediately_visible(self):
+        gallery = FaceGallery()
+        session = self.session(gallery)
+        gallery.register_identity(FaceIdentity("temporary", "Temporary 1"))
+        for index in range(5):
+            gallery.add_template(
+                "temporary", self.embedding([1.0, 0.01 * index + 0.001]),
+            )
+        self.assertIs(session.gallery, gallery)
+        self.assertEqual(len(gallery.templates()), 5)
+        dto, error = session.query(self.embedding([1.0, 0.001]))
+        self.assertEqual(dto.candidate_person_id, "temporary")
+        self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
+        self.assertIsNone(error)
+
 
 if __name__ == "__main__":
     unittest.main()

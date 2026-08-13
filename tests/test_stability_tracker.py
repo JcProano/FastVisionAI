@@ -69,6 +69,24 @@ class StabilityTrackerTests(unittest.TestCase):
         self.assertEqual(snapshot.stable_duration_seconds, 0)
         self.assertEqual(snapshot.average_similarity, .7)
 
+    def test_unknown_requires_continuity_and_oscillation_resets(self):
+        tracker = self.tracker(maximum_gap_seconds=1)
+        isolated = tracker.observe(observation(
+            0, None, state="UNKNOWN", similarity=.4,
+        ))
+        self.assertEqual(isolated.state, StabilityState.STABILIZING)
+        tracker.observe(observation(.5, None, state="UNKNOWN", similarity=.3))
+        stable = tracker.observe(observation(1, None, state="UNKNOWN", similarity=.2))
+        self.assertEqual(stable.state, StabilityState.STABLE)
+        registered = tracker.observe(observation(1.1, "person-a", similarity=.83))
+        self.assertEqual((registered.state, registered.observations_count),
+                         (StabilityState.STABILIZING, 1))
+        unknown_again = tracker.observe(observation(
+            1.2, None, state="UNKNOWN", similarity=.2,
+        ))
+        self.assertEqual((unknown_again.state, unknown_again.observations_count),
+                         (StabilityState.STABILIZING, 1))
+
     def test_gap_starts_new_sequence_without_gap_duration(self):
         tracker = self.tracker(maximum_gap_seconds=.5)
         tracker.observe(observation(0))

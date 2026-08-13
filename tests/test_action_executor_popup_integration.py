@@ -10,11 +10,16 @@ from src.engine.action_executor import (
     DetectionEventActionData, PopupActionData,
 )
 from src.engine.decision_orchestrator import DecisionOrchestrator, DecisionOrchestratorPolicy
+from src.engine.identification_policy import (
+    IdentificationPolicy, IdentificationPolicyEngine,
+)
 from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.ui.action_adapters import (
     DetectionEventServiceActionAdapter, IdentificationPopupActionAdapter,
 )
-from src.ui.contracts import ActionExecutorDTO, MonitoringDTO, UIState
+from src.ui.contracts import (
+    ActionExecutorDTO, DecisionOrchestratorDTO, MonitoringDTO, UIState,
+)
 from src.ui.identification import (
     IdentificationPopupDTO, IdentificationPopupPolicy, IdentificationPopupType,
     IdentificationPresentationController, IdentityPersonDTO,
@@ -90,7 +95,11 @@ def live_session(events, action, decision):
     live._stability = StabilityTracker(StabilityPolicy(
         minimum_observations=1, minimum_duration_seconds=0,
     ))
-    live._identification_policy = None; live._decision_orchestrator = decision
+    live._identification_policy = IdentificationPolicyEngine(IdentificationPolicy(
+        require_stable_observation=True, minimum_stability_observations=1,
+        minimum_stability_duration_seconds=0,
+    ))
+    live._decision_orchestrator = decision
     live._action_executor = action; live._detection_event_logging_via_executor = True
     live.event_queue = queue.Queue(maxsize=50)
     return live
@@ -128,6 +137,24 @@ class ActionExecutorPopupIntegrationTests(unittest.TestCase):
         action._drain_action_popups()
         self.assertEqual(action_controller.calls, 0)
         self.assertEqual(action_window.shown, 1)
+
+    def test_legacy_ui_requires_stable_orchestrator_popup_proposal(self):
+        popup_dto = IdentificationPopupDTO(
+            IdentificationPopupType.UNREGISTERED, None, None, None, None,
+            "UNKNOWN", False, "safe", datetime.now(timezone.utc),
+        )
+        controller = PresentationSpy(popup_dto); window = WindowSpy()
+        app = self.ui("legacy", controller, window)
+        app._decision_orchestrator = DecisionOrchestratorDTO(
+            "OBSERVATION_ONLY", True, None, ("LOG_DETECTION_EVENT",),
+            ("SHOW_UNREGISTERED_POPUP",),
+            ("unregistered_observation_not_stable",), True, "test", "1",
+        )
+        app.show_monitoring(MonitoringDTO(
+            UIState.MONITORING, "safe", None, .4, "NOT_EVALUATED", True,
+            recognition_state="UNKNOWN",
+        ))
+        self.assertEqual((controller.calls, window.shown), (0, 0))
 
     def test_registered_and_unregistered_executor_paths_with_logging(self):
         for person_id, state, expected_popup in (

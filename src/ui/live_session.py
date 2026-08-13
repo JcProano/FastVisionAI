@@ -41,6 +41,7 @@ from src.ui.runtime_adapter import (
 )
 from src.ui.people.contracts import PeopleOperationResultDTO
 from src.ui.people.controller import PeopleManagerController
+from src.ui.identification import IdentificationPresentationController
 from src.ui.thumbnails import ThumbnailManager, select_thumbnail
 from src.ui.thumbnails.contracts import ThumbnailSample
 from src.ui.dashboard.contracts import (
@@ -97,6 +98,7 @@ class LiveFaceSession:
         action_executor: ActionExecutor | None = None,
         detection_event_logging_via_executor: bool = False,
         application_event_bus: ApplicationEventBus | None = None,
+        identification_presentation: IdentificationPresentationController | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -125,6 +127,8 @@ class LiveFaceSession:
             raise ValueError("action-executor event mode requires a configured adapter")
         self._detection_event_logging_via_executor = detection_event_logging_via_executor
         self._application_events = application_event_bus
+        self._identification_presentation = identification_presentation
+        self._identification_pause_active = False
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -398,6 +402,17 @@ class LiveFaceSession:
                                 "No se pudo iniciar la captura adicional.", False)
 
     def _monitoring_step(self, face_count: int, guided) -> None:
+        presentation = getattr(self, "_identification_presentation", None)
+        if (presentation is not None
+                and presentation.registered_pause_remaining_seconds() > 0):
+            score = guided.face_quality_score
+            self._emit_monitoring(MonitoringDTO(
+                UIState.MONITORING, "Reconocimiento temporalmente pausado",
+                None, None, "deshabilitada / NOT_EVALUATED", True,
+                None if score is None else score.total_score,
+                None if score is None else score.quality_band.value,
+            ))
+            return
         if face_count == 0:
             self._emit_monitoring(MonitoringDTO(
                 UIState.NO_FACE, "No se detectó un rostro", None, None,
@@ -425,6 +440,23 @@ class LiveFaceSession:
             self._event(error)
 
     def _emit_monitoring(self, dto: MonitoringDTO) -> None:
+        presentation = getattr(self, "_identification_presentation", None)
+        pause_remaining = (
+            0.0 if presentation is None
+            else presentation.registered_pause_remaining_seconds()
+        )
+        if pause_remaining > 0:
+            if not self._identification_pause_active:
+                self._identification_pause_active = True
+                self._reset_stability(emit=False)
+            self._event(self._policy_not_evaluated_dto())
+            self._event(self._orchestration_not_evaluated_dto())
+            self._event(self._action_not_evaluated_dto())
+            self._event(dto)
+            return
+        if getattr(self, "_identification_pause_active", False):
+            self._identification_pause_active = False
+            self._reset_stability(emit=True)
         stability = getattr(self, "_stability", None)
         stability_result = None
         face_count = (0 if dto.state is UIState.NO_FACE else
@@ -443,7 +475,20 @@ class LiveFaceSession:
             dto, stability_result, identification, face_count,
         )
         self._event(orchestration)
-        self._event(self._evaluate_action_executor(orchestration, dto, face_count))
+        action = self._evaluate_action_executor(orchestration, dto, face_count)
+        self._event(action)
+        LOGGER.debug(
+            "Identification diagnostic recognition_state=%s candidate_present=%s "
+            "similarity=%s stability_state=%s policy_state=%s decision_state=%s "
+            "popup_action=%s",
+            dto.recognition_state, dto.candidate_person_id is not None,
+            "N/D" if dto.similarity is None else f"{dto.similarity:.6f}",
+            "NO_OBSERVATION" if stability_result is None else stability_result.state.value,
+            identification.state, orchestration.state,
+            next((item for item in action.requested_actions
+                  if item in {ProposedAction.SHOW_REGISTERED_POPUP.value,
+                              ProposedAction.SHOW_UNREGISTERED_POPUP.value}), "NONE"),
+        )
         if (not getattr(self, "_detection_event_logging_via_executor", False)
                 and self._detection_events is not None
                 and not self._event_history_suspended.is_set()):

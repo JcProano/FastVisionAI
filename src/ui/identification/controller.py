@@ -30,6 +30,7 @@ class IdentificationPresentationController:
         self._registered_last: dict[str, float] = {}
         self._unknown_last = float("-inf")
         self._suspended = False
+        self._registered_paused_until = float("-inf")
         self._lock = threading.RLock()
 
     def suspend(self) -> None:
@@ -46,6 +47,16 @@ class IdentificationPresentationController:
         """Start unknown cooldown only after its presentation has closed."""
         with self._lock:
             self._unknown_last = self._monotonic()
+            self._reset_stability()
+
+    def registered_pause_remaining_seconds(self) -> float:
+        """Return the monotonic presentation pause without altering camera/runtime."""
+        with self._lock:
+            return max(0.0, self._registered_paused_until - self._monotonic())
+
+    def clear_registered_pause(self) -> None:
+        with self._lock:
+            self._registered_paused_until = float("-inf")
             self._reset_stability()
 
     def observe(self, event: MonitoringDTO) -> IdentificationPopupDTO:
@@ -83,6 +94,9 @@ class IdentificationPresentationController:
     ) -> IdentificationPopupDTO:
         if not self.policy.enabled or self._suspended:
             return self._suppressed(event, "Presentación suspendida")
+        if self._monotonic() < self._registered_paused_until:
+            self._reset_stability()
+            return self._suppressed(event, "Reconocimiento temporalmente pausado")
         if event.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}:
             self._reset_stability()
             return self._suppressed(event, "Se requiere exactamente un rostro")
@@ -94,7 +108,9 @@ class IdentificationPresentationController:
         )
         unregistered = (
             event.candidate_person_id is None
-            and event.recognition_state in {"NO_GALLERY", "INCOMPATIBLE", "NOT_EVALUATED"}
+            and event.recognition_state in {
+                "UNKNOWN", "NO_GALLERY", "INCOMPATIBLE", "NOT_EVALUATED",
+            }
         )
         if not registered and not unregistered:
             self._reset_stability()
@@ -122,6 +138,8 @@ class IdentificationPresentationController:
                 return self._suppressed(event, "La persona ya no está disponible")
             thumbnail = self.provider.get_thumbnail(event.candidate_person_id)
             self._registered_last[event.candidate_person_id] = now
+            self._registered_paused_until = now + self.policy.registered_pause_seconds
+            self._reset_stability()
             return IdentificationPopupDTO(
                 IdentificationPopupType.REGISTERED_CANDIDATE,
                 person.person_id, person.display_name, person.external_identifier,

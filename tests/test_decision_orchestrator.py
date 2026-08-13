@@ -41,16 +41,39 @@ class DecisionOrchestratorTests(unittest.TestCase):
             self.assertIn(ProposedAction.LOG_DETECTION_EVENT, result.proposed_actions)
             self.assertNotEqual(result.state, DecisionState.ACTIONS_DISABLED)
 
-    def test_unregistered_popup_and_action_order(self):
-        result = self.evaluate(person_id=None, administrative_status=None,
+    def test_unregistered_popup_requires_stable_unknown_continuity(self):
+        isolated = self.evaluate(
+            person_id=None, recognition_state="UNKNOWN", administrative_status=None,
+            identification_policy_state="NO_CANDIDATE", policy_eligible=False,
+            stability_state="STABILIZING",
+        )
+        self.assertNotIn(ProposedAction.SHOW_UNREGISTERED_POPUP,
+                         isolated.proposed_actions)
+        self.assertIn(ProposedAction.SHOW_UNREGISTERED_POPUP,
+                      isolated.blocked_actions)
+        result = self.evaluate(person_id=None, recognition_state="UNKNOWN",
+                               administrative_status=None,
                                identification_policy_state="NO_CANDIDATE",
-                               policy_eligible=False, stability_state="NO_OBSERVATION")
+                               policy_eligible=False, stability_state="STABLE")
         self.assertEqual(result.state, DecisionState.ACTIONS_DISABLED)
         self.assertEqual(result.proposed_actions, (
             ProposedAction.SHOW_UNREGISTERED_POPUP,
             ProposedAction.LOG_DETECTION_EVENT,
         ))
         self.assertEqual(result.reasons[0], "automatic_actions_disabled")
+
+    def test_registered_popup_requires_active_and_policy_eligible(self):
+        policy = DecisionOrchestratorPolicy(automatic_actions_enabled=True)
+        disabled = self.evaluate(policy, administrative_status="DISABLED")
+        ineligible = self.evaluate(
+            policy, identification_policy_state="INSUFFICIENT_STABILITY",
+            policy_eligible=False,
+        )
+        for result in (disabled, ineligible):
+            self.assertNotIn(ProposedAction.SHOW_REGISTERED_POPUP,
+                             result.proposed_actions)
+            self.assertIn(ProposedAction.SHOW_REGISTERED_POPUP,
+                          result.blocked_actions)
 
     def test_registered_popup_requires_stability(self):
         policy = DecisionOrchestratorPolicy(automatic_actions_enabled=True)

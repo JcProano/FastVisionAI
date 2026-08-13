@@ -50,17 +50,20 @@ class DecisionOrchestrator:
         if structural_state is None and value.person_id is None:
             state = DecisionState.OBSERVATION_ONLY
             reasons.append("candidate_unregistered")
-            if policy.allow_unregistered_popup_proposal:
+            unknown_stable = (
+                value.face_count == 1
+                and recognition in {"UNKNOWN", "NO_GALLERY", "NOT_EVALUATED"}
+                and stability == "STABLE"
+            )
+            if policy.allow_unregistered_popup_proposal and unknown_stable:
                 proposals.append(ProposedAction.SHOW_UNREGISTERED_POPUP)
+            elif policy.allow_unregistered_popup_proposal:
+                blocked.append(ProposedAction.SHOW_UNREGISTERED_POPUP)
+                reasons.append("unregistered_observation_not_stable")
         elif structural_state is None:
             state = DecisionState.CANDIDATE_STABLE if stability == "STABLE" else DecisionState.OBSERVATION_ONLY
             if stability != "STABLE":
                 reasons.append("observation_not_stable")
-            if policy.allow_registered_popup_proposal:
-                if not policy.require_stable_for_registered_popup or stability == "STABLE":
-                    proposals.append(ProposedAction.SHOW_REGISTERED_POPUP)
-                else:
-                    blocked.append(ProposedAction.SHOW_REGISTERED_POPUP)
             if value.administrative_status != "ACTIVE":
                 state = DecisionState.BLOCKED_BY_ADMIN_STATUS
                 reasons.append("person_not_active")
@@ -69,6 +72,19 @@ class DecisionOrchestrator:
                 reasons.append("identification_policy_not_eligible")
             elif stability == "STABLE":
                 state = DecisionState.POLICY_ELIGIBLE
+            registered_eligible = (
+                value.face_count == 1
+                and value.administrative_status == "ACTIVE"
+                and value.policy_eligible
+                and identification == "ELIGIBLE"
+                and (not policy.require_stable_for_registered_popup
+                     or stability == "STABLE")
+            )
+            if policy.allow_registered_popup_proposal:
+                if registered_eligible:
+                    proposals.append(ProposedAction.SHOW_REGISTERED_POPUP)
+                else:
+                    blocked.append(ProposedAction.SHOW_REGISTERED_POPUP)
         else:
             state = structural_state
 

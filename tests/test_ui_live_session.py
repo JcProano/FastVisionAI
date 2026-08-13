@@ -13,6 +13,7 @@ from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan, GuidedCaptureState
 from src.engine.gallery import FaceGallery, FaceIdentity, FaceMatcher, MatchPolicy
 from src.engine.recognition import RecognitionPolicy, RecognitionService
+from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.ui.contracts import (
     EnrollmentProgressDTO, EnrollmentResultDTO, ErrorDTO, MonitoringDTO,
     UIErrorCode, UIState, VisualFrameDTO,
@@ -24,6 +25,11 @@ from src.ui.live_session import LiveFaceSession, operator_instruction
 from src.ui.mock_runtime import MockUIRuntimeAdapter
 from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.people.controller import PeopleManagerController
+from src.ui.identification import (
+    IdentificationPopupPolicy, IdentificationPresentationController,
+    IdentityPersonDTO,
+)
+from src.ui.thumbnails import ThumbnailDTO
 from src.engine.gallery.persistence import GalleryPersistence
 
 
@@ -45,6 +51,29 @@ class CountingRecognitionService(RecognitionService):
 class OpenFailAdapter(MockUIRuntimeAdapter):
     def open(self):
         return False
+
+
+class IdentityProvider:
+    def get_person(self, person_id):
+        return IdentityPersonDTO(
+            person_id, "Temporary", "Person", "Temporary Person", None,
+            status="ACTIVE",
+        )
+
+    def get_thumbnail(self, person_id):
+        return ThumbnailDTO(person_id, True, 224, 224, "jpeg", b"safe")
+
+
+class ResetCountingStabilityTracker(StabilityTracker):
+    def __init__(self):
+        super().__init__(StabilityPolicy(
+            minimum_observations=1, minimum_duration_seconds=0,
+        ))
+        self.reset_count = 0
+
+    def reset(self):
+        self.reset_count += 1
+        return super().reset()
 
 
 def controller(gallery=None, matcher=None, target=3, recognition=None):
@@ -77,6 +106,42 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_registered_pause_stops_recognition_but_video_worker_continues(self):
+        gallery = FaceGallery()
+        matcher = FaceMatcher(policy=MatchPolicy(False, None))
+        recognition = CountingRecognitionService(
+            gallery, matcher, RecognitionPolicy(top_k=matcher.top_k)
+        )
+        _, ui = controller(gallery, matcher, target=3, recognition=recognition)
+        clock = [0.0]
+        presentation = IdentificationPresentationController(
+            IdentificationPopupPolicy(candidate_stability_frames=1,
+                                      registered_pause_seconds=60),
+            IdentityProvider(), monotonic=lambda: clock[0],
+        )
+        popup = presentation.observe(MonitoringDTO(
+            UIState.MONITORING, "Candidato experimental", "Temporary Person", .83,
+            "deshabilitada / NOT_EVALUATED", True,
+            recognition_state="NOT_EVALUATED", candidate_person_id="person",
+        ))
+        self.assertEqual(popup.person_id, "person")
+        stability = ResetCountingStabilityTracker()
+        session = LiveFaceSession(
+            MockUIRuntimeAdapter(delay=.005), ui, event_queue_size=64,
+            identification_presentation=presentation,
+            stability_tracker=stability,
+        )
+        session.start()
+        self.assertTrue(wait_until(
+            lambda: session.dashboard_telemetry()[0].frames_processed >= 3
+        ))
+        self.assertEqual(recognition.calls, 0)
+        self.assertTrue(session.alive)
+        clock[0] = 60
+        self.assertTrue(wait_until(lambda: recognition.calls > 0))
+        self.assertGreaterEqual(stability.reset_count, 2)
+        session.close()
+
     def test_recognition_is_suspended_during_primary_enrollment_and_reactivated(self):
         gallery = FaceGallery()
         matcher = FaceMatcher(policy=MatchPolicy(False, None))
