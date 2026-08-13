@@ -1,4 +1,5 @@
 {
+  "config_schema_version": 1,
   "profile_name": "local_face_validation_dev",
   "profile_version": "1.0",
   "camera": {"source": 0},
@@ -184,5 +185,12 @@
     "dashboard_refresh_seconds": 10,
     "performance_window_seconds": 5,
     "stale_frame_seconds": 3
+  },
+  "configuration_manager": {
+    "enabled": true,
+    "profile": "DEVELOPMENT",
+    "backup_count": 10,
+    "allow_import": true,
+    "allow_export": true
   }
 }

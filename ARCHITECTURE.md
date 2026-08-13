@@ -408,3 +408,12 @@ quedan aislados. `RollingPerformanceMetrics` conserva solo timestamps monotónic
 en una ventana limitada. El subsistema no es fuente de verdad y no publica eventos
 ni altera los dominios observados. `VIEW_SYSTEM_HEALTH` habilita consulta read-only
 para todos los roles definidos.
+# Fase 38 — Configuration Manager
+
+`ProfileRegistry → ConfigurationLoader → ConfigurationValidator →
+ConfigurationSnapshot → ConfigurationService → ConfigurationController → UI`.
+El composition root consume `snapshot.as_mapping()` para conservar los builders
+existentes durante la migración progresiva. Los snapshots son profundamente
+inmutables. IO y validación se realizan fuera del `RLock`; `current()` no hace IO.
+El guardado usa temporal en el mismo directorio, `fsync`, revalidación, backup
+independiente en `config/backups/` y `os.replace()`.

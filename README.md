@@ -468,3 +468,14 @@ expuestos, realiza `SELECT 1` read-only y calcula FPS móvil con timestamps
 monotónicos. No abre cámara, ejecuta inferencia, reinicia servicios ni escribe en
 bases. Las latencias de procesamiento e inferencia permanecen `N/D` hasta disponer
 de una medición fiable.
+# Configuration Manager (Fase 38)
+
+`ConfigurationService` centraliza carga, validación, diff, recarga y guardado
+atómico sin reconstruir servicios. El formato legacy sin
+`config_schema_version` sigue siendo legible y se marca explícitamente; la versión
+actual es `1`. Development y Testing rechazan campos desconocidos, mientras
+Production los reporta como warning y nunca los aplica silenciosamente.
+
+Los cambios se clasifican como `HOT_RELOADABLE`, `RESTART_REQUIRED` o
+`IMMUTABLE_AT_RUNTIME`. Recargar solo cambia el snapshot: no reinicia cámara,
+Runtime ni bases. Las claves sensibles se redactan recursivamente.

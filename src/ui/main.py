@@ -90,6 +90,11 @@ from src.core.system_health import (
     SQLiteDatabaseHealthProvider, SystemHealthService, WorkerHealthProvider,
 )
 from src.ui.system_health import SystemHealthController, SystemHealthWindow
+from src.core.configuration import (
+    ConfigurationLoader, ConfigurationProfile, ConfigurationService,
+    ConfigurationValidator,
+)
+from src.ui.configuration import ConfigurationController, ConfigurationWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -690,7 +695,27 @@ def main() -> int:
         parser.error("mock automation options require --mock-camera")
     if args.mock_duration is not None and args.mock_duration <= 0:
         parser.error("--mock-duration must be positive")
-    settings = json.loads(args.config.read_text(encoding="utf-8"))
+    raw_settings = json.loads(args.config.read_text(encoding="utf-8"))
+    manager_settings = raw_settings.get("configuration_manager", {})
+    if not isinstance(manager_settings, dict):
+        raise ValueError("configuration_manager configuration must be an object")
+    configuration_service = configuration_controller = None
+    if bool(manager_settings.get("enabled", False)):
+        try:
+            profile = ConfigurationProfile(str(manager_settings.get("profile", "DEVELOPMENT")))
+        except ValueError as exc:
+            raise ValueError("configuration profile is unavailable") from exc
+        # Only DEVELOPMENT is explicitly mapped in this phase.
+        if profile is not ConfigurationProfile.DEVELOPMENT:
+            raise ValueError("configuration profile is unavailable")
+        loader = ConfigurationLoader(ConfigurationValidator(PROJECT_ROOT))
+        configuration_service = ConfigurationService(
+            loader, args.config, profile,
+            backup_count=int(manager_settings.get("backup_count", 10)),
+        )
+        settings = configuration_service.current().as_mapping()
+    else:
+        settings = raw_settings
     security = build_security(settings)
     application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
@@ -819,7 +844,7 @@ def main() -> int:
             return 0
         root.deiconify()
     people_window: dict[str, PeopleManagerWindow] = {}
-    configuration_window: dict[str, DashboardConfigurationWindow] = {}
+    configuration_window: dict[str, object] = {}
     profile_windows: dict[str, PersonProfileWindow] = {}
     history_window: dict[str, DetectionHistoryWindow] = {}
     attendance_window: dict[str, AttendanceHistoryWindow] = {}
@@ -927,9 +952,15 @@ def main() -> int:
         if current is not None and current.window.winfo_exists():
             current.focus()
             return
-        configuration_window["window"] = DashboardConfigurationWindow(
-            root, build_dashboard_configuration(settings)
-        )
+        if configuration_controller is None:
+            configuration_window["window"] = DashboardConfigurationWindow(
+                root, build_dashboard_configuration(settings)
+            )
+        else:
+            configuration_window["window"] = ConfigurationWindow(
+                root, configuration_controller,
+                on_close=lambda: configuration_window.pop("window", None),
+            )
 
     def gallery_summary() -> DashboardGalleryDTO:
         listing = people_controller.list_people()
@@ -1005,6 +1036,13 @@ def main() -> int:
         history_limit=int(backup_settings["operation_history_limit"]),
         prepare_for_restore=quiesce_for_restore,
     )
+    if configuration_service is not None:
+        configuration_controller = ConfigurationController(
+            configuration_service, security.authorization,
+            security_disabled=not security.enabled,
+            allow_import=bool(manager_settings.get("allow_import", True)),
+            allow_export=bool(manager_settings.get("allow_export", True)),
+        )
 
     health_settings = settings.get("system_health", {})
     if not isinstance(health_settings, dict):raise ValueError("system_health configuration must be an object")
