@@ -192,5 +192,16 @@
     "backup_count": 10,
     "allow_import": true,
     "allow_export": true
+  },
+  "audit": {
+    "enabled": true,
+    "database_path": "data/fastvision/audit.db",
+    "sqlite_timeout_seconds": 5.0,
+    "dashboard_refresh_seconds": 30.0,
+    "default_query_limit": 200,
+    "max_query_limit": 1000,
+    "metadata_max_items": 20,
+    "metadata_value_max_length": 256,
+    "message_max_length": 500
   }
 }

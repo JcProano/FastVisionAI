@@ -1,5 +1,7 @@
 # Biometric data handling
 
+`audit.db` no almacena embeddings, templates, imágenes, thumbnails ni hashes internos. Sus mensajes, metadata, DTO y CSV también excluyen PII civil completa, secretos, rutas absolutas y contenido de excepciones. `person_id` puede emplearse únicamente como referencia opaca.
+
 Face embeddings are sensitive biometric data. They must not be written to
 application logs, exception messages, diagnostics or console output. Temporary
 identifiers used by validation tools are not real identities.

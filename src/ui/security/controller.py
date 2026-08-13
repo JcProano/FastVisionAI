@@ -48,7 +48,10 @@ class SecurityController:
    else:self.logout()
   elif self.timeout_pending and not enrollment_active:self.logout()
   return self.status()
- def logout(self):self.sessions.logout();self.timeout_pending=False;self._audit("LOGOUT",{})
+ def logout(self):
+  current=self.sessions.current()
+  payload={} if current is None else {"user_id":current.user_id,"actor_role":current.role.value,"session_id":current.session_id}
+  self.sessions.logout();self.timeout_pending=False;self._audit("LOGOUT",payload)
  def status(self):
   current=self.sessions.current(); state=SecurityUIState.TIMEOUT_PENDING if self.timeout_pending else SecurityUIState.AUTHENTICATED if current else SecurityUIState.LOGGED_OUT
   return SecurityStatusDTO(self.enabled,current is not None,state,current.display_name if current else None,current.role.value if current else None,self.timeout_pending)

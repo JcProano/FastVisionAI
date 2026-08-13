@@ -17,20 +17,25 @@ from .contracts import AttendanceListDTO, AttendanceUIResult, PersonAttendanceSu
 class AttendanceUIController:
     def __init__(
         self, service: AttendanceService, repository: AttendanceRepository,
-        people: PersonRepository, authorization=None,
+        people: PersonRepository, authorization=None, audit_callback=None,
     ) -> None:
         self.service = service
         self.repository = repository
         self.people = people
         self.authorization = authorization
+        self.audit_callback = audit_callback
 
     def manual_check_in(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
         self._require("MANUAL_ATTENDANCE")
-        return self._result(self.service.manual_check_in(person_id, **kwargs))
+        result=self._result(self.service.manual_check_in(person_id, **kwargs))
+        if result.success:self._audit("MANUAL_CHECK_IN",{"person_id":person_id,"entity_id":result.attendance_id or ""})
+        return result
 
     def manual_check_out(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
         self._require("MANUAL_ATTENDANCE")
-        return self._result(self.service.manual_check_out(person_id, **kwargs))
+        result=self._result(self.service.manual_check_out(person_id, **kwargs))
+        if result.success:self._audit("MANUAL_CHECK_OUT",{"person_id":person_id,"entity_id":result.attendance_id or ""})
+        return result
 
     def list(
         self, *, date_from: datetime | None = None, date_to: datetime | None = None,
@@ -109,3 +114,8 @@ class AttendanceUIController:
             from src.core.security import AuthorizationPermission
             if not self.authorization.can(AuthorizationPermission(permission)):
                 raise PermissionError("operation is not authorized")
+
+    def _audit(self,event,payload):
+        if self.audit_callback:
+            try:self.audit_callback(event,payload)
+            except Exception:pass

@@ -1,5 +1,9 @@
 # FastVisionAI
 
+## Auditoría administrativa local
+
+El registro administrativo es append-only, usa un SQLite separado y cubre fronteras humanas como seguridad, usuarios, personas, asistencia manual, reportes, configuración, backup/restore y apertura de diagnóstico. Es best-effort: una indisponibilidad no revierte una operación principal confirmada. ADMIN y AUDITOR pueden consultar y exportar; OPERATOR y VIEWER no tienen acceso. El CSV UTF-8 no sobrescribe por defecto, protege contra fórmulas y omite metadata interna.
+
 ## Person Database (Fase 20, infraestructura)
 
 `src/core/person_database/` aporta un repositorio SQLite local para información

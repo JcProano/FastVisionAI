@@ -1,5 +1,9 @@
 # FastVisionAI Architecture
 
+## Administrative Audit Log
+
+`AuditService → AuditRepository → audit.db` es independiente y append-only. Cada controlador o servicio administrativo usa una sola frontera callback; `ApplicationEventBus` no participa. `AuditService.safe_record()` sanitiza metadata plana y aplica best-effort. `AuditController` exige nuevamente `VIEW_AUDIT` o `EXPORT_AUDIT`. `PERSON_CREATED` solo se registra tras enrollment y activación civil verificados; System Health solo al abrir explícitamente su ventana.
+
 ## Person Database boundary
 
 Person Database separa PII administrativa de la biometría. SQLite usa conexiones

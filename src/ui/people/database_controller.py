@@ -15,10 +15,11 @@ from .controller import PeopleManagerController
 
 
 class DatabasePeopleManagerController:
-    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController, authorization=None) -> None:
+    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController, authorization=None, audit_callback=None) -> None:
         self.repository = repository
         self.biometrics = biometrics
         self.authorization = authorization
+        self.audit_callback = audit_callback
 
     def _require(self, permission: str) -> None:
         if self.authorization is None:
@@ -87,6 +88,7 @@ class DatabasePeopleManagerController:
                 person_id, first_name, last_name, address, phone, email,
                 birth_date, sex, notes, clear_fields,
             ))
+            self._audit("PERSON_UPDATED", {"person_id": person_id})
             return PeopleOperationResultDTO(
                 PeopleManagerState.IDLE, True, "edit",
                 "Datos civiles actualizados.", person_id,
@@ -137,6 +139,7 @@ class DatabasePeopleManagerController:
                     timestamp=moment,
                 )
             self.repository.set_status(person_id, target)
+            self._audit("PERSON_STATUS_CHANGED", {"person_id": person_id, "status": target.value})
             return PeopleOperationResultDTO(
                 PeopleManagerState.IDLE, True, "status_change",
                 "Estado administrativo actualizado.", person_id, timestamp=moment,
@@ -177,3 +180,8 @@ class DatabasePeopleManagerController:
         return PeopleOperationResultDTO(
             PeopleManagerState.ERROR, False, operation, message, person_id,
         )
+
+    def _audit(self, event: str, payload: dict[str, str]) -> None:
+        if self.audit_callback:
+            try: self.audit_callback(event, payload)
+            except Exception: pass

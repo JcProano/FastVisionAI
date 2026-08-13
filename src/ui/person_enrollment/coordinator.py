@@ -19,13 +19,14 @@ from .contracts import PersonEnrollmentCoordinationError, PersonEnrollmentState
 
 class PersonEnrollmentCoordinator:
     def __init__(self, repository: PersonRepository, gallery: FaceGallery,
-                 workflow: LocalEnrollmentWorkflow) -> None:
+                 workflow: LocalEnrollmentWorkflow, audit_callback=None) -> None:
         self.repository = repository
         self.gallery = gallery
         self.workflow = workflow
         self._state = PersonEnrollmentState.IDLE
         self._reserved_person_id: str | None = None
         self._lock = threading.RLock()
+        self.audit_callback = audit_callback
 
     @property
     def state(self) -> PersonEnrollmentState:
@@ -111,7 +112,13 @@ class PersonEnrollmentCoordinator:
                 message="Registro biométrico y civil activo",
             )
             self._state = PersonEnrollmentState.IDLE
+            self._audit("PERSON_CREATED", {"person_id": person_id})
             return completed
+
+    def _audit(self, event: str, payload: dict[str, str]) -> None:
+        if self.audit_callback:
+            try: self.audit_callback(event, payload)
+            except Exception: pass
 
     def _compensate(self, person_id: str, reason: str) -> EnrollmentResultDTO:
         self._state = PersonEnrollmentState.ROLLING_BACK

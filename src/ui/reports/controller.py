@@ -12,10 +12,12 @@ class ReportController:
         "Resumen de detecciones", "Resumen del sistema",
     )
 
-    def __init__(self, service, exporter: ReportExporter | None = None, authorization=None) -> None:
+    def __init__(self, service, exporter: ReportExporter | None = None, authorization=None, audit_callback=None) -> None:
         self.service = service; self.exporter = exporter or ReportExporter()
         self.authorization = authorization
         self.last_report = None
+        self.audit_callback = audit_callback
+        self.last_report_type = None
 
     def generate(
         self, report_type: str, date_from: str, date_to: str,
@@ -38,6 +40,7 @@ class ReportController:
         elif report_type == "Resumen del sistema": result = self.service.system_summary(start)
         else: raise ReportValidationError("report type is invalid")
         self.last_report = result
+        self.last_report_type = report_type
         return result
 
     def default_dates(self, today: date | None = None) -> tuple[str, str]:
@@ -48,7 +51,11 @@ class ReportController:
     def export_csv(self, destination: Path, *, overwrite: bool = False):
         self._require("EXPORT_REPORTS")
         if self.last_report is None: raise ReportValidationError("generate a report first")
-        return self.exporter.export_csv(self.last_report, destination, overwrite=overwrite)
+        result=self.exporter.export_csv(self.last_report, destination, overwrite=overwrite)
+        if self.audit_callback:
+            try:self.audit_callback("REPORT_EXPORTED",{"report_type":self.last_report_type or "unknown","format":"CSV"})
+            except Exception:pass
+        return result
 
     @property
     def excel_available(self) -> bool: return self.exporter.excel_available()

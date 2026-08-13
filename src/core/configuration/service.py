@@ -21,7 +21,7 @@ class ConfigurationService:
   with self._lock:self._current=loaded;self.restart_required_pending=bool(difference.restart_required or difference.immutable)
   self._audit("CONFIG_RELOADED");return ConfigurationOperationResult(True,"Snapshot recargado; los servicios no fueron reconstruidos.",diff=difference)
  def save(self,candidate):
-  validation=self.validate_candidate(candidate)
+  validation=self.loader.validator.validate(candidate,self.profile)
   if not validation.valid:return ConfigurationOperationResult(False,"Configuración inválida; no se guardó.",validation)
   candidate=known_only(candidate);difference=self.diff(candidate);directory=self.path.parent;directory.mkdir(parents=True,exist_ok=True);descriptor,name=tempfile.mkstemp(prefix=f".{self.path.name}.",suffix=".tmp",dir=directory);temporary=Path(name);warning=None
   try:

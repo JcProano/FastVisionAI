@@ -95,6 +95,8 @@ from src.core.configuration import (
     ConfigurationValidator,
 )
 from src.ui.configuration import ConfigurationController, ConfigurationWindow
+from src.core.audit import AuditCallbackAdapter, AuditRepository, AuditService
+from src.ui.audit import AuditController, AuditLogWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -139,6 +141,24 @@ def build_security(
         authentication, sessions, authorization, enabled=True,
         bootstrap_enabled=bool(configuration.get("bootstrap_admin_enabled", True)),
     )
+
+
+def build_audit(settings: dict[str, object], project_root: Path = PROJECT_ROOT) -> AuditService:
+    configuration=settings.get("audit",{})
+    if not isinstance(configuration,dict):raise ValueError("audit configuration must be an object")
+    enabled=bool(configuration.get("enabled",False))
+    configured=Path(str(configuration.get("database_path","data/fastvision/audit.db")))
+    if configured.is_absolute() or ".." in configured.parts:raise ValueError("audit database path must be project-relative and safe")
+    root=project_root.resolve();database=(root/configured).resolve()
+    if root not in database.parents:raise ValueError("audit database path escapes project root")
+    repository=AuditRepository(database,timeout=float(configuration.get("sqlite_timeout_seconds",5.0)))
+    service=AuditService(repository,enabled=enabled,metadata_max_items=int(configuration.get("metadata_max_items",20)),metadata_value_max_length=int(configuration.get("metadata_value_max_length",256)),message_max_length=int(configuration.get("message_max_length",500)))
+    if enabled:
+        try:repository.initialize()
+        except Exception:
+            LOGGER.warning("Administrative audit initialization failed; audit remains unavailable")
+            service.enabled=False
+    return service
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,7 +736,11 @@ def main() -> int:
         settings = configuration_service.current().as_mapping()
     else:
         settings = raw_settings
+    audit_service=build_audit(settings)
     security = build_security(settings)
+    def audit(source):return AuditCallbackAdapter(audit_service,security.sessions.context,source)
+    security.audit_callback=audit("security")
+    if configuration_service is not None:configuration_service.audit=audit("configuration")
     application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
@@ -734,6 +758,9 @@ def main() -> int:
     identification_policy_engine = build_identification_policy_engine(settings)
     decision_orchestrator = build_decision_orchestrator(settings)
     controller = build_controller(args.config, startup.gallery, person_repository)
+    if controller.person_coordinator is not None:controller.person_coordinator.audit_callback=audit("person_enrollment")
+    if attendance_controller is not None:attendance_controller.audit_callback=audit("attendance")
+    if report_controller is not None:report_controller.audit_callback=audit("reports")
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
     people_controller = PeopleManagerController(
@@ -742,7 +769,7 @@ def main() -> int:
     )
     if person_repository is not None:
         people_controller = DatabasePeopleManagerController(  # type: ignore[assignment]
-            person_repository, people_controller, security.authorization,
+            person_repository, people_controller, security.authorization,audit("people"),
         )
     people_search_controller = build_people_search(
         settings, people_controller, thumbnail_manager,
@@ -1000,8 +1027,8 @@ def main() -> int:
     snapshots = SQLiteSnapshotProvider(
         float(backup_settings["sqlite_snapshot_timeout_seconds"])
     )
-    backup_service = BackupService(catalog, backup_archive, snapshots, maintenance)
-    restore_service = RestoreService(catalog, backup_archive, snapshots, maintenance)
+    backup_service = BackupService(catalog, backup_archive, snapshots, maintenance,audit_callback=audit("backup"))
+    restore_service = RestoreService(catalog, backup_archive, snapshots, maintenance,audit_callback=audit("restore"))
 
     def quiesce_for_restore() -> None:
         completed = threading.Event(); failure: list[BaseException] = []
@@ -1069,13 +1096,23 @@ def main() -> int:
             BackupHealthProvider(bool(backup_settings.get("enabled",False)),maintenance,backup_controller.history),
         ]
         system_health_service=SystemHealthService(providers,rolling)
-        system_health_controller=SystemHealthController(system_health_service,security.authorization,security_disabled=not security.enabled)
+        system_health_controller=SystemHealthController(system_health_service,security.authorization,security_disabled=not security.enabled,audit_callback=audit("system_health"))
 
     def open_system_health():
         if system_health_controller is None:return
         current=system_health_window.get("window")
         if current is not None and current.window.winfo_exists():current.focus();return
+        system_health_controller.record_viewed()
         system_health_window["window"]=SystemHealthWindow(root,system_health_controller,on_close=lambda:system_health_window.pop("window",None))
+
+    audit_window:dict[str,AuditLogWindow]={}
+    audit_settings=settings.get("audit",{})
+    audit_controller=AuditController(audit_service.repository,security.authorization,default_limit=int(audit_settings.get("default_query_limit",200)),maximum_limit=int(audit_settings.get("max_query_limit",1000))) if audit_service.enabled else None
+    def open_audit():
+        if audit_controller is None:return
+        current=audit_window.get("window")
+        if current is not None and current.window.winfo_exists():current.focus();return
+        audit_window["window"]=AuditLogWindow(root,audit_controller,on_close=lambda:audit_window.pop("window",None))
 
     def open_backup() -> None:
         current = backup_window.get("window")
@@ -1137,6 +1174,9 @@ def main() -> int:
         system_health_service=system_health_service,
         on_system_health=open_system_health,
         system_health_refresh_seconds=float(health_settings.get("dashboard_refresh_seconds",10)),
+        on_audit=open_audit if audit_controller is not None else None,
+        audit_controller=audit_controller,
+        audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)
