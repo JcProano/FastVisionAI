@@ -178,5 +178,11 @@
     "operation_history_limit": 50,
     "restore_timeout_seconds": 30.0,
     "sqlite_snapshot_timeout_seconds": 15.0
+  },
+  "system_health": {
+    "enabled": true,
+    "dashboard_refresh_seconds": 10,
+    "performance_window_seconds": 5,
+    "stale_frame_seconds": 3
   }
 }

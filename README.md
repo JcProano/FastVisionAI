@@ -461,3 +461,10 @@ La restauración valida todo el paquete antes de reemplazar destinos, exige perm
 > El backup contiene información sensible y no está cifrado. `encryption=NONE`.
 > Debe almacenarse en un medio protegido; SHA-256 aporta integridad, no
 > confidencialidad ni autenticidad.
+# System Health & Performance Monitor (Fase 37)
+
+El monitor técnico es exclusivamente observacional: reutiliza estados seguros ya
+expuestos, realiza `SELECT 1` read-only y calcula FPS móvil con timestamps
+monotónicos. No abre cámara, ejecuta inferencia, reinicia servicios ni escribe en
+bases. Las latencias de procesamiento e inferencia permanecen `N/D` hasta disponer
+de una medición fiable.

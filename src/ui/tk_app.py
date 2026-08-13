@@ -189,6 +189,10 @@ class LocalFaceTkApp:
         report_refresh_seconds: float = 30.0,
         can: Callable[[str], bool] | None = None,
         on_backup: Callable[[], None] | None = None,
+        system_health_controller: object | None = None,
+        system_health_service: object | None = None,
+        on_system_health: Callable[[], None] | None = None,
+        system_health_refresh_seconds: float = 10.0,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -230,6 +234,10 @@ class LocalFaceTkApp:
         self._decision_orchestrator: DecisionOrchestratorDTO | None = None
         self._action_executor: ActionExecutorDTO | None = None
         self._can = can or (lambda _permission: True)
+        self._system_health_controller = system_health_controller
+        self._system_health_service = system_health_service
+        self._system_health_refresh_seconds = system_health_refresh_seconds
+        self._system_health_after_id = None
 
         self._form: tk.Toplevel | None = None
         self._photo: tk.PhotoImage | None = None
@@ -366,6 +374,8 @@ class LocalFaceTkApp:
         metrics_card.grid(row=3, column=0, sticky="ew", padx=10, pady=4)
         self.metrics = ttk.Label(metrics_card, text="Captura FPS: N/D | Pipeline FPS: N/D | Latencia inferencia: N/D")
         self.metrics.pack(anchor="w")
+        self.system_health = ttk.Label(metrics_card, text="Estado del sistema: N/D | FPS móvil: N/D | Memoria: N/D | Uptime: N/D")
+        self.system_health.pack(anchor="w")
 
         actions = ttk.Frame(root, padding=(10, 6)); actions.grid(row=4, column=0, sticky="ew")
         self.register_button = ttk.Button(actions, text="Registrar rostro", command=self.open_form,state="normal" if self._can("ENROLL_PERSON") else "disabled")
@@ -374,12 +384,16 @@ class LocalFaceTkApp:
         self.people_button.pack(side="left", padx=3)
         self.backup_button = ttk.Button(actions, text="Copias de seguridad", command=on_backup or (lambda: None),state="normal" if self._can("BACKUP") or self._can("RESTORE") else "disabled")
         self.backup_button.pack(side="left", padx=3)
+        self.health_button = ttk.Button(actions,text="Ver diagnóstico",command=on_system_health or (lambda:None),state="normal" if system_health_controller is not None and self._can("VIEW_SYSTEM_HEALTH") else "disabled")
+        self.health_button.pack(side="left",padx=3)
         ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
         ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)
         ttk.Button(actions, text="Guardar galería", command=self._save_gallery).pack(side="left", padx=3)
         self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._cancel, state="disabled")
         self.cancel_button.pack(side="left", padx=3)
         ttk.Button(actions, text="Salir", command=self.close).pack(side="right", padx=3)
+        if self._system_health_controller is not None:
+            self._system_health_after_id=self.root.after(0,self._schedule_system_health)
 
     def show_monitoring(self, dto: MonitoringDTO) -> None:
         view = monitoring_text(dto)
@@ -530,8 +544,16 @@ class LocalFaceTkApp:
                 visual.rgb_bytes,
             )
             del visual
+            if self._system_health_service is not None:
+                self._system_health_service.observe_frame()
 
         metrics, quality = session.dashboard_telemetry()
+        if self._system_health_service is not None:
+            try:
+                depth = session.visual_queue.qsize()+session.event_queue.qsize()+session.command_queue.qsize()
+            except Exception:
+                depth = None
+            self._system_health_service.observe_counters(queue_depth=depth,dropped_frames=metrics.visual_frames_dropped)
         self._dashboard.update_metrics(metrics)
         self._dashboard.update_quality(quality)
         if self._get_gallery is not None:
@@ -1046,6 +1068,11 @@ class LocalFaceTkApp:
         Close UI and request resource cleanup.
         """
         self._closing = True
+        health_after_id = getattr(self,"_system_health_after_id",None)
+        if health_after_id is not None:
+            try:self.root.after_cancel(health_after_id)
+            except Exception:pass
+            self._system_health_after_id=None
         report_after_id = getattr(self, "_report_after_id", None)
         if report_after_id is not None:
             try: self.root.after_cancel(report_after_id)
@@ -1073,6 +1100,14 @@ class LocalFaceTkApp:
 
         if self.root.winfo_exists():
             self.root.destroy()
+
+    def _schedule_system_health(self) -> None:
+        if self._closing or self._system_health_controller is None:return
+        try:
+            dto=self._system_health_controller.snapshot()
+            self.system_health.configure(text=f"Estado del sistema: {dto.overall} | FPS móvil: {dto.fps} | Memoria: {dto.memory} | Uptime: {dto.uptime} | Procesamiento: {dto.processing_latency} | Inferencia: {dto.inference_latency}")
+        except Exception:self.system_health.configure(text="Estado del sistema: no disponible")
+        self._system_health_after_id=self.root.after(int(self._system_health_refresh_seconds*1000),self._schedule_system_health)
 
 
 def _number(value: float | None, suffix: str = "") -> str:

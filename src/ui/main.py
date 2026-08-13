@@ -84,6 +84,12 @@ from src.core.backup import (
     BackupSourceCatalog, RestoreService, SQLiteSnapshotProvider,
 )
 from src.ui.backup import BackupController, BackupWindow
+from src.core.system_health import (
+    ApplicationEventBusHealthProvider, BackupHealthProvider, CameraHealthProvider,
+    RollingPerformanceMetrics, RuntimeHealthProvider, SecurityHealthProvider,
+    SQLiteDatabaseHealthProvider, SystemHealthService, WorkerHealthProvider,
+)
+from src.ui.system_health import SystemHealthController, SystemHealthWindow
 
 LOGGER = logging.getLogger(__name__)
 
@@ -819,6 +825,7 @@ def main() -> int:
     attendance_window: dict[str, AttendanceHistoryWindow] = {}
     report_window: dict[str, ReportWindow] = {}
     backup_window: dict[str, BackupWindow] = {}
+    system_health_window: dict[str, SystemHealthWindow] = {}
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -846,6 +853,8 @@ def main() -> int:
         if reports_view is not None and reports_view.window.winfo_exists(): reports_view.close()
         backup_view = backup_window.pop("window", None)
         if backup_view is not None and backup_view.window.winfo_exists(): backup_view.close()
+        health_view = system_health_window.pop("window", None)
+        if health_view is not None and health_view.window.winfo_exists(): health_view.close()
         session.close()
         security.logout()
 
@@ -997,6 +1006,39 @@ def main() -> int:
         prepare_for_restore=quiesce_for_restore,
     )
 
+    health_settings = settings.get("system_health", {})
+    if not isinstance(health_settings, dict):raise ValueError("system_health configuration must be an object")
+    health_enabled = bool(health_settings.get("enabled", False))
+    system_health_service = system_health_controller = None
+    if health_enabled:
+        import math
+        for key,upper in (("dashboard_refresh_seconds",3600),("performance_window_seconds",3600),("stale_frame_seconds",300)):
+            value=float(health_settings.get(key,0))
+            if not math.isfinite(value) or value<=0 or value>upper:raise ValueError(f"system_health {key} is invalid")
+        rolling = RollingPerformanceMetrics(float(health_settings["performance_window_seconds"]))
+        def queue_depth():return session.visual_queue.qsize()+session.event_queue.qsize()+session.command_queue.qsize()
+        sources={item.component_type.value:item.source_path for item in catalog.sources()}
+        providers=[
+            CameraHealthProvider(enabled=lambda:True,worker_alive=lambda:session.alive,camera_state=lambda:app._dashboard.system.camera_state,last_frame_monotonic=lambda:rolling.last_frame_monotonic,stale_frame_seconds=float(health_settings["stale_frame_seconds"])),
+            WorkerHealthProvider(lambda:session.alive,lambda:controller.state.value,lambda:controller.enrollment.active,queue_depth),
+            RuntimeHealthProvider(lambda:app._dashboard.system.runtime_state),
+            SQLiteDatabaseHealthProvider("people_database",sources["PEOPLE_DATABASE"],enabled=bool(settings.get("person_database",{}).get("enabled",False))),
+            SQLiteDatabaseHealthProvider("events_database",sources["DETECTION_EVENTS_DATABASE"],enabled=bool(settings.get("event_history",{}).get("enabled",False))),
+            SQLiteDatabaseHealthProvider("attendance_database",sources["ATTENDANCE_DATABASE"],enabled=bool(settings.get("attendance",{}).get("enabled",False))),
+            SQLiteDatabaseHealthProvider("users_database",sources["USERS_DATABASE"],enabled=bool(settings.get("security",{}).get("enabled",True))),
+            ApplicationEventBusHealthProvider(application_events,application_event_diagnostics),
+            SecurityHealthProvider(security.enabled,security.sessions),
+            BackupHealthProvider(bool(backup_settings.get("enabled",False)),maintenance,backup_controller.history),
+        ]
+        system_health_service=SystemHealthService(providers,rolling)
+        system_health_controller=SystemHealthController(system_health_service,security.authorization,security_disabled=not security.enabled)
+
+    def open_system_health():
+        if system_health_controller is None:return
+        current=system_health_window.get("window")
+        if current is not None and current.window.winfo_exists():current.focus();return
+        system_health_window["window"]=SystemHealthWindow(root,system_health_controller,on_close=lambda:system_health_window.pop("window",None))
+
     def open_backup() -> None:
         current = backup_window.get("window")
         if current is not None and current.window.winfo_exists():
@@ -1053,6 +1095,10 @@ def main() -> int:
         ),
         can=lambda permission: security.authorization.can(AuthorizationPermission(permission)),
         on_backup=open_backup,
+        system_health_controller=system_health_controller,
+        system_health_service=system_health_service,
+        on_system_health=open_system_health,
+        system_health_refresh_seconds=float(health_settings.get("dashboard_refresh_seconds",10)),
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

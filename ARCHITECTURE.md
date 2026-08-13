@@ -400,3 +400,11 @@ restauración usa staging y rollback en el mismo filesystem; nunca usa
 `ZipFile.extractall()`. Los destinos están limitados al catálogo configurado. Un
 restore requiere estado `QUIESCENT`, invalida el uso en caliente y exige reinicio.
 `BACKUP` y `RESTORE` se validan tanto en UI como en `BackupController`.
+# Fase 37 — Salud y rendimiento
+
+`HealthProvider[] → SystemHealthService → SystemHealthController → Dashboard /
+SystemHealthWindow`. Los providers se ejecutan fuera del lock global y sus fallos
+quedan aislados. `RollingPerformanceMetrics` conserva solo timestamps monotónicos
+en una ventana limitada. El subsistema no es fuente de verdad y no publica eventos
+ni altera los dominios observados. `VIEW_SYSTEM_HEALTH` habilita consulta read-only
+para todos los roles definidos.
