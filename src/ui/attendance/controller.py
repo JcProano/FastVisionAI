@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
 from pathlib import Path
+from src.core.time_provider import Clock
 
 from src.core.attendance import (
     AttendanceDTO, AttendanceEventType, AttendancePolicy, AttendanceQuery,
@@ -18,12 +19,14 @@ class AttendanceUIController:
     def __init__(
         self, service: AttendanceService, repository: AttendanceRepository,
         people: PersonRepository, authorization=None, audit_callback=None,
+        clock: Clock | None = None, presentation_timezone: str = "America/Guayaquil",
     ) -> None:
         self.service = service
         self.repository = repository
         self.people = people
         self.authorization = authorization
         self.audit_callback = audit_callback
+        self.clock=clock or Clock();self.presentation_timezone=presentation_timezone
 
     def manual_check_in(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
         self._require("MANUAL_ATTENDANCE")
@@ -59,22 +62,21 @@ class AttendanceUIController:
         return AttendanceListDTO(events, len(events), f"{len(events)} marcaciones")
 
     def daily_summary(self, day: date | None = None):
-        return self.repository.daily_summary(day or date.today())
+        selected=day or self.clock.local_today(self.presentation_timezone);start,end=self.clock.local_day_utc_bounds(selected,self.presentation_timezone);return self.repository.summary_between(selected,start,end)
 
     def person_summary(
         self, person_id: str, day: date | None = None,
     ) -> PersonAttendanceSummaryDTO:
         check_ins = {AttendanceEventType.CHECK_IN, AttendanceEventType.MANUAL_CHECK_IN}
         check_outs = {AttendanceEventType.CHECK_OUT, AttendanceEventType.MANUAL_CHECK_OUT}
-        today = day or date.today()
+        today = day or self.clock.local_today(self.presentation_timezone)
         latest_by_type = tuple(
             rows[0] for event_type in AttendanceEventType
             if (rows := self.repository.query(AttendanceQuery(
                 person_id=person_id, event_type=event_type, limit=1,
             )))
         )
-        start = datetime.combine(today, time.min, tzinfo=timezone.utc)
-        end = datetime.combine(today, time.max, tzinfo=timezone.utc)
+        start,end=self.clock.local_day_utc_bounds(today,self.presentation_timezone)
         return PersonAttendanceSummaryDTO(
             max((item.timestamp for item in latest_by_type if item.event_type in check_ins),
                 default=None),

@@ -1,5 +1,7 @@
 # FastVisionAI
 
+**Versión candidata:** `1.0.0-rc1`. Consulte [release notes](docs/RELEASE_NOTES_v1.0.0-rc1.md), [despliegue Ubuntu](docs/DEPLOYMENT_UBUNTU.md), [Jetson Orin Nano](docs/JETSON_ORIN_NANO.md) y [checklist](docs/RELEASE_CHECKLIST.md).
+
 ## Auditoría administrativa local
 
 El registro administrativo es append-only, usa un SQLite separado y cubre fronteras humanas como seguridad, usuarios, personas, asistencia manual, reportes, configuración, backup/restore y apertura de diagnóstico. Es best-effort: una indisponibilidad no revierte una operación principal confirmada. ADMIN y AUDITOR pueden consultar y exportar; OPERATOR y VIEWER no tienen acceso. El CSV UTF-8 no sobrescribe por defecto, protege contra fórmulas y omite metadata interna.

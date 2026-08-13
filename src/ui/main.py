@@ -95,6 +95,7 @@ from src.core.configuration import (
     ConfigurationValidator,
 )
 from src.ui.configuration import ConfigurationController, ConfigurationWindow
+from src.core.time_provider import Clock
 from src.core.audit import AuditCallbackAdapter, AuditRepository, AuditService
 from src.ui.audit import AuditController, AuditLogWindow
 
@@ -725,8 +726,7 @@ def main() -> int:
             profile = ConfigurationProfile(str(manager_settings.get("profile", "DEVELOPMENT")))
         except ValueError as exc:
             raise ValueError("configuration profile is unavailable") from exc
-        # Only DEVELOPMENT is explicitly mapped in this phase.
-        if profile is not ConfigurationProfile.DEVELOPMENT:
+        if profile not in {ConfigurationProfile.DEVELOPMENT,ConfigurationProfile.PRODUCTION}:
             raise ValueError("configuration profile is unavailable")
         loader = ConfigurationLoader(ConfigurationValidator(PROJECT_ROOT))
         configuration_service = ConfigurationService(
@@ -736,8 +736,10 @@ def main() -> int:
         settings = configuration_service.current().as_mapping()
     else:
         settings = raw_settings
-    audit_service=build_audit(settings)
+    if settings.get("profile_name") == "local_face_validation_prod" and args.mock_camera:
+        parser.error("production profile does not allow mock camera")
     security = build_security(settings)
+    audit_service=build_audit(settings)
     def audit(source):return AuditCallbackAdapter(audit_service,security.sessions.context,source)
     security.audit_callback=audit("security")
     if configuration_service is not None:configuration_service.audit=audit("configuration")
@@ -822,6 +824,14 @@ def main() -> int:
         raise RuntimeError(
             "Tkinter no está disponible en este entorno; no se instalaron dependencias"
         ) from exc
+    root = tk.Tk()
+    if security.enabled:
+        root.withdraw()
+        if not LoginWindow(root, security).run():
+            root.destroy()
+            return 0
+        root.deiconify()
+    # Real Runtime/Camera ownership is deliberately constructed only after login.
     cancel_event = threading.Event()
     if args.mock_camera:
         adapter = MockUIRuntimeAdapter(
@@ -863,13 +873,6 @@ def main() -> int:
         detection_event_logging_via_executor=detection_logging_via_executor,
         application_event_bus=application_events,
     )
-    root = tk.Tk()
-    if security.enabled:
-        root.withdraw()
-        if not LoginWindow(root, security).run():
-            root.destroy()
-            return 0
-        root.deiconify()
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, object] = {}
     profile_windows: dict[str, PersonProfileWindow] = {}
@@ -878,6 +881,8 @@ def main() -> int:
     report_window: dict[str, ReportWindow] = {}
     backup_window: dict[str, BackupWindow] = {}
     system_health_window: dict[str, SystemHealthWindow] = {}
+    audit_window: dict[str, AuditLogWindow] = {}
+    closing = False
     def register(form):
         if not session.start_enrollment(form):
             app.status.configure(text="No se pudo encolar el registro")
@@ -885,6 +890,9 @@ def main() -> int:
         return True
 
     def close():
+        nonlocal closing
+        if closing:return
+        closing=True
         popup_action_adapter.close()
         window = people_window.pop("window", None)
         if window is not None and window.window.winfo_exists():
@@ -907,7 +915,9 @@ def main() -> int:
         if backup_view is not None and backup_view.window.winfo_exists(): backup_view.close()
         health_view = system_health_window.pop("window", None)
         if health_view is not None and health_view.window.winfo_exists(): health_view.close()
-        session.close()
+        audit_view=audit_window.pop("window",None)
+        if audit_view is not None and audit_view.window.winfo_exists():audit_view.close()
+        session.close(float(settings["worker"]["close_timeout_seconds"]))
         security.logout()
 
     profile_controller = None if person_repository is None else PersonProfileController(
@@ -1091,6 +1101,7 @@ def main() -> int:
             SQLiteDatabaseHealthProvider("events_database",sources["DETECTION_EVENTS_DATABASE"],enabled=bool(settings.get("event_history",{}).get("enabled",False))),
             SQLiteDatabaseHealthProvider("attendance_database",sources["ATTENDANCE_DATABASE"],enabled=bool(settings.get("attendance",{}).get("enabled",False))),
             SQLiteDatabaseHealthProvider("users_database",sources["USERS_DATABASE"],enabled=bool(settings.get("security",{}).get("enabled",True))),
+            SQLiteDatabaseHealthProvider("audit_database",sources["AUDIT_DATABASE"],enabled=bool(settings.get("audit",{}).get("enabled",False))),
             ApplicationEventBusHealthProvider(application_events,application_event_diagnostics),
             SecurityHealthProvider(security.enabled,security.sessions),
             BackupHealthProvider(bool(backup_settings.get("enabled",False)),maintenance,backup_controller.history),
@@ -1105,7 +1116,6 @@ def main() -> int:
         system_health_controller.record_viewed()
         system_health_window["window"]=SystemHealthWindow(root,system_health_controller,on_close=lambda:system_health_window.pop("window",None))
 
-    audit_window:dict[str,AuditLogWindow]={}
     audit_settings=settings.get("audit",{})
     audit_controller=AuditController(audit_service.repository,security.authorization,default_limit=int(audit_settings.get("default_query_limit",200)),maximum_limit=int(audit_settings.get("max_query_limit",1000))) if audit_service.enabled else None
     def open_audit():
@@ -1163,7 +1173,7 @@ def main() -> int:
         on_reports=open_reports,
         get_daily_report=(None if report_controller is None else
                           lambda: report_controller.service.daily_report(
-                              date.today()
+                              Clock().local_today(report_controller.service.policy.presentation_timezone)
                           )),
         report_refresh_seconds=float(
             settings.get("reports", {}).get("dashboard_refresh_seconds", 30)

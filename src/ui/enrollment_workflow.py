@@ -117,10 +117,10 @@ class LocalEnrollmentWorkflow:
                         record_template_quality_scores(
                             self.gallery, form.person_id, quality_scores  # type: ignore[arg-type]
                         )
-                    except Exception:
-                        LOGGER.exception(
+                    except Exception as exc:
+                        LOGGER.error(
                             "Could not attach safe quality metadata after enrollment; "
-                            "biometric payload omitted"
+                            "biometric payload omitted; exception_type=%s",type(exc).__name__
                         )
             persistence_succeeded: bool | None = None
             message = "Registro rechazado"
@@ -136,12 +136,12 @@ class LocalEnrollmentWorkflow:
                             persistence(self.gallery, manifest_path, archive_path)
                             persistence_succeeded = True
                             message += "; persistencia local completada"
-                        except Exception:
+                        except Exception as exc:
                             persistence_succeeded = False
                             message += "; persistencia local falló, la galería en memoria continúa válida"
-                            LOGGER.exception(
+                            LOGGER.error(
                                 "Local gallery persistence failed after successful enrollment; "
-                                "person_id=%s", form.person_id,
+                                "person_id=%s exception_type=%s", form.person_id,type(exc).__name__,
                             )
             dto = EnrollmentResultDTO(
                 UIState.ENROLLMENT_COMPLETE if enrolled else UIState.ENROLLMENT_REJECTED,

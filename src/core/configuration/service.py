@@ -7,8 +7,9 @@ from .contracts import *
 from .diff import configuration_diff
 from .validators import redact
 from .validators import known_only
+from src.version import __version__
 class ConfigurationService:
- def __init__(self,loader,path:Path,profile:ConfigurationProfile,*,backup_count=10,audit_callback=None,application_version="development"):
+ def __init__(self,loader,path:Path,profile:ConfigurationProfile,*,backup_count=10,audit_callback=None,application_version=__version__):
   if backup_count<=0:raise ValueError("backup_count must be positive")
   self.loader=loader;self.path=path;self.profile=profile;self.backup_count=backup_count;self.audit=audit_callback;self.application_version=application_version;self._lock=threading.RLock();self._current=loader.load(path,profile);self.restart_required_pending=False
  def current(self):

@@ -41,7 +41,10 @@ class AttendanceUITests(unittest.TestCase):
 
     def test_person_summary_does_not_load_unbounded_history(self):
         self.controller.manual_check_in(self.person_id)
-        summary = self.controller.person_summary(self.person_id, date.today())
+        event = self.controller.list().events[0]
+        from zoneinfo import ZoneInfo
+        local_day = event.timestamp.astimezone(ZoneInfo("America/Guayaquil")).date()
+        summary = self.controller.person_summary(self.person_id, local_day)
         self.assertIsNotNone(summary.last_check_in)
         self.assertEqual(summary.events_today, 1)
 

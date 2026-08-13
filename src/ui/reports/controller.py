@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
+from src.core.time_provider import Clock
 
 from src.core.reports import ReportExporter, ReportValidationError
 
@@ -12,12 +13,13 @@ class ReportController:
         "Resumen de detecciones", "Resumen del sistema",
     )
 
-    def __init__(self, service, exporter: ReportExporter | None = None, authorization=None, audit_callback=None) -> None:
+    def __init__(self, service, exporter: ReportExporter | None = None, authorization=None, audit_callback=None, clock:Clock|None=None) -> None:
         self.service = service; self.exporter = exporter or ReportExporter()
         self.authorization = authorization
         self.last_report = None
         self.audit_callback = audit_callback
         self.last_report_type = None
+        self.clock=clock or Clock()
 
     def generate(
         self, report_type: str, date_from: str, date_to: str,
@@ -44,7 +46,7 @@ class ReportController:
         return result
 
     def default_dates(self, today: date | None = None) -> tuple[str, str]:
-        end = today or date.today()
+        end = today or self.clock.local_today(self.service.policy.presentation_timezone)
         start = end - timedelta(days=self.service.policy.default_range_days - 1)
         return start.isoformat(), end.isoformat()
 

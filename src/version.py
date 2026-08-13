@@ -1,0 +1,4 @@
+"""Single source of truth for the FastVisionAI application version."""
+
+__version__ = "1.0.0-rc1"
+

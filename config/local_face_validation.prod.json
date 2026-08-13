@@ -1,0 +1,222 @@
+{
+  "config_schema_version": 1,
+  "profile_name": "local_face_validation_prod",
+  "profile_version": "1.0",
+  "camera": {
+    "source": 0
+  },
+  "queues": {
+    "visual_size": 1,
+    "event_size": 16,
+    "command_size": 8
+  },
+  "worker": {
+    "ui_poll_interval_ms": 30,
+    "close_timeout_seconds": 5
+  },
+  "dashboard": {
+    "initial_width": 1100,
+    "initial_height": 720,
+    "minimum_width": 820,
+    "minimum_height": 600,
+    "history_limit": 100,
+    "event_debounce_seconds": 2,
+    "metrics_refresh_ms": 250
+  },
+  "matcher": {
+    "top_k": 3,
+    "automatic_decision_enabled": false,
+    "threshold": null
+  },
+  "recognition": {
+    "policy_name": "local_recognition_disabled",
+    "policy_version": "1.0",
+    "automatic_decision_enabled": false,
+    "match_threshold": null,
+    "ambiguity_margin": null,
+    "top_k": 3,
+    "minimum_quality_score": null,
+    "allow_low_quality": false
+  },
+  "guided_capture": {
+    "target_samples": 5,
+    "policy_file": "config/guided_capture.dev.json",
+    "mirrored_source": true
+  },
+  "quality": {
+    "profile_file": "config/face_quality.dev.json"
+  },
+  "enrollment": {
+    "min_templates": 3,
+    "max_templates": 5,
+    "allow_low_quality": false,
+    "min_pairwise_similarity": null,
+    "max_pairwise_similarity": null,
+    "reject_exact_duplicates": true
+  },
+  "persistence": {
+    "enabled_by_default": false,
+    "load_on_startup": true,
+    "directory": "data/fastvision/gallery"
+  },
+  "thumbnails": {
+    "enabled": true,
+    "directory": "data/fastvision/thumbnails",
+    "width": 224,
+    "height": 224,
+    "format": "jpeg",
+    "jpeg_quality": 90,
+    "replace_existing": false
+  },
+  "identification_popup": {
+    "enabled": true,
+    "registered_cooldown_seconds": 10,
+    "unknown_cooldown_seconds": 10,
+    "unknown_popup_timeout_seconds": 60,
+    "candidate_stability_frames": 3
+  },
+  "person_database": {
+    "enabled": true,
+    "path": "data/fastvision/people.db",
+    "timeout_seconds": 5
+  },
+  "event_history": {
+    "enabled": true,
+    "database_path": "data/fastvision/events.db",
+    "registered_cooldown_seconds": 60,
+    "unregistered_cooldown_seconds": 60,
+    "history_limit": 500
+  },
+  "attendance": {
+    "enabled": true,
+    "database_path": "data/fastvision/attendance.db",
+    "timeout_seconds": 5,
+    "automatic_attendance_enabled": false,
+    "minimum_stable_observations": 3,
+    "minimum_observation_seconds": 2,
+    "duplicate_event_cooldown_seconds": 60,
+    "minimum_time_between_check_in_out_seconds": 60,
+    "allow_manual_events": true,
+    "policy_name": "attendance_manual_validation",
+    "policy_version": "1.0"
+  },
+  "stability": {
+    "enabled": true,
+    "minimum_observations": 5,
+    "minimum_duration_seconds": 1.5,
+    "maximum_gap_seconds": 0.75,
+    "minimum_similarity": null,
+    "reset_on_multiple_faces": true,
+    "reset_on_candidate_change": true,
+    "policy_name": "stability_development",
+    "policy_version": "1.0"
+  },
+  "identification_policy": {
+    "enabled": true,
+    "automatic_actions_enabled": false,
+    "require_candidate": true,
+    "require_active_person": true,
+    "require_stable_observation": true,
+    "minimum_quality_score": null,
+    "minimum_similarity": null,
+    "minimum_stability_observations": null,
+    "minimum_stability_duration_seconds": null,
+    "reject_incompatible": true,
+    "reject_ambiguous": true,
+    "policy_name": "identification_policy_production_conservative",
+    "policy_version": "1.0"
+  },
+  "decision_orchestrator": {
+    "enabled": true,
+    "automatic_actions_enabled": false,
+    "allow_registered_popup_proposal": true,
+    "allow_unregistered_popup_proposal": true,
+    "allow_detection_event_proposal": true,
+    "allow_attendance_proposal": false,
+    "require_stable_for_registered_popup": true,
+    "require_policy_eligible_for_attendance": true,
+    "require_active_person_for_attendance": true,
+    "policy_name": "decision_orchestrator_production_conservative",
+    "policy_version": "1.1"
+  },
+  "action_executor": {
+    "enabled": true,
+    "automatic_execution_enabled": false,
+    "allow_registered_popup": true,
+    "allow_unregistered_popup": true,
+    "allow_detection_event_logging": true,
+    "allow_attendance_execution": false,
+    "require_orchestrator_actions_enabled": true,
+    "policy_name": "action_executor_production_conservative",
+    "policy_version": "1.1"
+  },
+  "application_events": {
+    "enabled": true,
+    "max_diagnostic_events": 100
+  },
+  "reports": {
+    "enabled": true,
+    "default_range_days": 7,
+    "dashboard_refresh_seconds": 30,
+    "max_rows": 5000,
+    "presentation_timezone": "America/Guayaquil"
+  },
+  "people_search": {
+    "enabled": true,
+    "default_page_size": 25,
+    "allowed_page_sizes": [
+      25,
+      50,
+      100
+    ],
+    "debounce_ms": 400,
+    "presentation_timezone": "America/Guayaquil"
+  },
+  "security": {
+    "enabled": true,
+    "database_path": "data/fastvision/users.db",
+    "bootstrap_admin_enabled": true,
+    "minimum_password_length": 10,
+    "maximum_password_length": 128,
+    "max_failed_attempts": 5,
+    "lockout_seconds": 300,
+    "session_idle_timeout_seconds": 1800
+  },
+  "backup": {
+    "enabled": true,
+    "directory": "data/fastvision/backups",
+    "include_configuration": true,
+    "allowed_configuration_files": [
+      "config/local_face_validation.prod.json"
+    ],
+    "maximum_archive_size_bytes": 2147483648,
+    "maximum_file_count": 100000,
+    "operation_history_limit": 50,
+    "restore_timeout_seconds": 30,
+    "sqlite_snapshot_timeout_seconds": 15
+  },
+  "system_health": {
+    "enabled": true,
+    "dashboard_refresh_seconds": 10,
+    "performance_window_seconds": 5,
+    "stale_frame_seconds": 3
+  },
+  "configuration_manager": {
+    "enabled": true,
+    "profile": "PRODUCTION",
+    "backup_count": 10,
+    "allow_import": true,
+    "allow_export": true
+  },
+  "audit": {
+    "enabled": true,
+    "database_path": "data/fastvision/audit.db",
+    "sqlite_timeout_seconds": 5,
+    "dashboard_refresh_seconds": 30,
+    "default_query_limit": 200,
+    "max_query_limit": 1000,
+    "metadata_max_items": 20,
+    "metadata_value_max_length": 256,
+    "message_max_length": 500
+  }
+}

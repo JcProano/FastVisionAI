@@ -664,10 +664,10 @@ class LiveFaceSession:
                 if selected is not None:
                     try:
                         self._thumbnails.save(result.person_id, selected.image_bytes)
-                    except Exception:
-                        LOGGER.exception(
+                    except Exception as exc:
+                        LOGGER.error(
                             "Thumbnail save failed after successful enrollment; "
-                            "visual and biometric payloads omitted"
+                            "visual and biometric payloads omitted; exception_type=%s",type(exc).__name__
                         )
                         self._error(
                             UIErrorCode.THUMBNAIL_ERROR,
@@ -685,9 +685,9 @@ class LiveFaceSession:
                         self._manifest_path, self._archive_path,
                     )
                     succeeded = True
-                except Exception:
-                    LOGGER.exception(
-                        "Gallery persistence failed after ACTIVE; biometric payload omitted"
+                except Exception as exc:
+                    LOGGER.error(
+                        "Gallery persistence failed after ACTIVE; biometric payload omitted; exception_type=%s",type(exc).__name__
                     )
                 result = replace(result, persistence_succeeded=succeeded)
             if result.persistence_requested and result.persistence_succeeded is False:

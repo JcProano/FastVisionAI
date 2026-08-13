@@ -130,6 +130,9 @@ class AttendanceRepository:
     def daily_summary(self, day: date) -> AttendanceDailySummary:
         start = datetime.combine(day, time.min, tzinfo=timezone.utc)
         end = datetime.combine(day, time.max, tzinfo=timezone.utc)
+        return self.summary_between(day,start,end)
+
+    def summary_between(self,day:date,start:datetime,end:datetime)->AttendanceDailySummary:
         connection = self._connect()
         try:
             row = connection.execute(

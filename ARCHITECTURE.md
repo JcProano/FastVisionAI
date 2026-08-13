@@ -1,5 +1,9 @@
 # FastVisionAI Architecture
 
+## Release Candidate lifecycle
+
+El orden obligatorio es Configuration → Security → Audit → repositorios/servicios → Login → Runtime → Camera. Seguridad falla cerrada; auditoría y servicios opcionales degradan de forma segura. La persistencia temporal es UTC y los días de presentación usan `America/Guayaquil`. La versión central reside en `src/version.py`.
+
 ## Administrative Audit Log
 
 `AuditService → AuditRepository → audit.db` es independiente y append-only. Cada controlador o servicio administrativo usa una sola frontera callback; `ApplicationEventBus` no participa. `AuditService.safe_record()` sanitiza metadata plana y aplica best-effort. `AuditController` exige nuevamente `VIEW_AUDIT` o `EXPORT_AUDIT`. `PERSON_CREATED` solo se registra tras enrollment y activación civil verificados; System Health solo al abrir explícitamente su ventana.

@@ -1,0 +1,16 @@
+[Unit]
+Description=FastVisionAI local UI
+After=graphical.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/fastvisionai
+ExecStart=/opt/fastvisionai/venv/bin/python -m src.ui.main --config config/local_face_validation.prod.json --load-gallery
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=graphical.target
+

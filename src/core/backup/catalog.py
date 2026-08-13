@@ -20,7 +20,7 @@ class BackupSourceCatalog:
   return result
  def sources(self)->tuple[BackupSource,...]:
   result=[]
-  mapping=(("person_database","path","data/fastvision/people.db",BackupComponentType.PEOPLE_DATABASE,"people.db"),("event_history","database_path","data/fastvision/events.db",BackupComponentType.DETECTION_EVENTS_DATABASE,"events.db"),("attendance","database_path","data/fastvision/attendance.db",BackupComponentType.ATTENDANCE_DATABASE,"attendance.db"),("security","database_path","data/fastvision/users.db",BackupComponentType.USERS_DATABASE,"users.db"))
+  mapping=(("person_database","path","data/fastvision/people.db",BackupComponentType.PEOPLE_DATABASE,"people.db"),("event_history","database_path","data/fastvision/events.db",BackupComponentType.DETECTION_EVENTS_DATABASE,"events.db"),("attendance","database_path","data/fastvision/attendance.db",BackupComponentType.ATTENDANCE_DATABASE,"attendance.db"),("security","database_path","data/fastvision/users.db",BackupComponentType.USERS_DATABASE,"users.db"),("audit","database_path","data/fastvision/audit.db",BackupComponentType.AUDIT_DATABASE,"audit.db"))
   for section,key,default,kind,name in mapping:
    config=self.settings.get(section,{})
    if not isinstance(config,dict):raise BackupValidationError(f"{section} configuration is invalid")

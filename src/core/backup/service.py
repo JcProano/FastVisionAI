@@ -10,9 +10,10 @@ from .maintenance import ApplicationMaintenanceCoordinator
 from .sqlite_snapshot import SQLiteSnapshotProvider
 from src.engine.gallery import FaceGallery
 from src.engine.gallery.persistence import GalleryPersistence
+from src.version import __version__
 
 class BackupService:
- def __init__(self,catalog:BackupSourceCatalog,archive:BackupArchive,snapshots:SQLiteSnapshotProvider,maintenance:ApplicationMaintenanceCoordinator|None=None,*,application_version:str="development",audit_callback=None):self.catalog=catalog;self.archive=archive;self.snapshots=snapshots;self.maintenance=maintenance;self.application_version=application_version;self.audit=audit_callback
+ def __init__(self,catalog:BackupSourceCatalog,archive:BackupArchive,snapshots:SQLiteSnapshotProvider,maintenance:ApplicationMaintenanceCoordinator|None=None,*,application_version:str=__version__,audit_callback=None):self.catalog=catalog;self.archive=archive;self.snapshots=snapshots;self.maintenance=maintenance;self.application_version=application_version;self.audit=audit_callback
  def create(self,request:BackupRequest)->BackupResult:
   self._audit("BACKUP_STARTED");backup_id=str(uuid.uuid4());maintenance=self.maintenance
   if maintenance:maintenance.begin_backup()
