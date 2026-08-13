@@ -22,7 +22,18 @@ class LoginWindow:
    ttk.Label(self.window,text="Confirmar contraseña").grid(row=row,column=0);self.confirmation=ttk.Entry(self.window,show="•");self.confirmation.grid(row=row,column=1);row+=1
   self.message=ttk.Label(self.window,text="");self.message.grid(row=row,column=0,columnspan=2)
   ttk.Button(self.window,text="Crear" if bootstrap else "Ingresar",command=self.submit).grid(row=row+1,column=0);ttk.Button(self.window,text="Salir",command=self.cancel).grid(row=row+1,column=1)
-  self.window.bind("<Return>",lambda _e:self.submit());self.username.focus_set();self.window.transient(root);self.window.grab_set()
+  self.window.bind("<Return>",lambda _e:self.submit());self._prepare_window()
+ def _prepare_window(self):
+  """Map and center the modal independently from a withdrawn application root."""
+  self.window.update_idletasks()
+  width=max(420,int(self.window.winfo_reqwidth()));height=max(280,int(self.window.winfo_reqheight()))
+  screen_width=int(self.window.winfo_screenwidth());screen_height=int(self.window.winfo_screenheight())
+  x=max(0,(screen_width-width)//2);y=max(0,(screen_height-height)//2)
+  self.window.minsize(420,280);self.window.geometry(f"{width}x{height}+{x}+{y}")
+  try:root_visible=str(self.root.state())!="withdrawn" and bool(self.root.winfo_viewable())
+  except Exception:root_visible=False
+  if root_visible:self.window.transient(self.root)
+  self.window.deiconify();self.window.lift();self.window.focus_force();self.window.grab_set();self.username.focus_set()
  def submit(self):
   if self.bootstrap: result=self.controller.bootstrap(self.username.get(),self.display_name.get(),self.password.get(),self.confirmation.get())
   else:result=self.controller.login(self.username.get(),self.password.get())
