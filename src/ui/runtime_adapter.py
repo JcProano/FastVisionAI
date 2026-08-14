@@ -12,6 +12,7 @@ import cv2
 
 from src.camera.camera_manager import CameraManager
 from src.camera.camera_types import CameraConfig, CameraType, ReadStatus, ReconnectConfig
+from src.camera.source_discovery.selection import classify_camera_source
 from src.core.config_manager import PROJECT_ROOT, load_config
 from src.engine.alignment import FaceAligner
 from src.engine.benchmark.manager import BenchmarkManager
@@ -53,6 +54,8 @@ class UIRuntimeAdapter(Protocol):
     def new_evaluator(self) -> None: ...
     def set_thumbnail_capture(self, enabled: bool) -> None: ...
     def status(self) -> RuntimeStatusDTO: ...
+    def switch_camera(self, config: CameraConfig) -> bool: ...
+    def retry_camera(self) -> bool: ...
     def close(self) -> None: ...
 
 
@@ -81,8 +84,9 @@ class RealUIRuntimeAdapter:
         )
         self._embedding_models = ModelManager(PROJECT_ROOT)
         self._embedding = FaceEmbeddingPlugin(embedding.settings, self._embedding_models)
+        self._cancel_event = cancel_event
         self._camera = CameraManager(
-            CameraConfig("local_face_ui", CameraType.USB, source,
+            CameraConfig("local_face_ui", classify_camera_source(source), source,
                          reconnect=ReconnectConfig(True, 3, .5)), cancel_event,
         )
         self._aligner = FaceAligner()
@@ -97,6 +101,15 @@ class RealUIRuntimeAdapter:
 
     def open(self) -> bool:
         self._runtime.prepare()
+        return self._camera.open()
+
+    def switch_camera(self, config: CameraConfig) -> bool:
+        """Replace the sole owned camera after releasing it; runtime remains untouched."""
+        self._camera.release()
+        self._camera = CameraManager(config, self._cancel_event)
+        return self._camera.open()
+
+    def retry_camera(self) -> bool:
         return self._camera.open()
 
     def new_evaluator(self) -> None:

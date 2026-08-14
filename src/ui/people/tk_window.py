@@ -26,6 +26,8 @@ class PeopleManagerWindow:
         thumbnail_manager: ThumbnailManager | None = None,
         on_view_profile: Callable[[str], None] | None = None,
         advanced_controller: Any | None = None,
+        on_capture_photo: Callable[[str], bool] | None = None,
+        can_edit_photo: bool = True,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError("Tkinter no está disponible")
@@ -35,6 +37,8 @@ class PeopleManagerWindow:
         self._thumbnails = thumbnail_manager
         self._on_view_profile = on_view_profile
         self._advanced = advanced_controller
+        self._on_capture_photo = on_capture_photo
+        self._can_edit_photo = can_edit_photo
         self._search_after_id: Any | None = None
         self._page = 1
         self._thumbnail_photo: Any | None = None
@@ -117,6 +121,11 @@ class PeopleManagerWindow:
             self.window, text="Actualizar foto", command=self.update_thumbnail,
         )
         self.update_thumbnail_button.grid(row=6, column=5, padx=4)
+        self.capture_thumbnail_button = ttk.Button(
+            self.window, text="Capturar foto", command=self.capture_thumbnail,
+            state="normal" if can_edit_photo else "disabled",
+        )
+        self.capture_thumbnail_button.grid(row=7, column=5, padx=4)
         self.delete_thumbnail_button = ttk.Button(
             self.window, text="Eliminar foto", command=self.delete_thumbnail,
         )
@@ -234,11 +243,21 @@ class PeopleManagerWindow:
         try:
             dto = self._thumbnails.load(person.person_id)
             if not dto.available:
+                self.capture_thumbnail_button.configure(text="Capturar foto")
                 return
+            self.capture_thumbnail_button.configure(text="Actualizar foto")
             self._thumbnail_photo = tk.PhotoImage(data=thumbnail_to_ppm(dto), format="PPM")
             self.thumbnail.configure(image=self._thumbnail_photo, text="")
         except Exception:
             self.status.configure(text="No se pudo cargar la foto visual.")
+
+    def capture_thumbnail(self) -> None:
+        person = self.selected()
+        if (person is None or self._on_capture_photo is None
+                or not self._can_edit_photo):
+            return
+        if self._on_capture_photo(person.person_id):
+            self.status.configure(text="Captura de fotografía iniciada.")
 
     def update_thumbnail(self) -> None:
         person = self.selected()
@@ -399,6 +418,9 @@ class PeopleManagerWindow:
             button.configure(state="disabled" if busy else "normal")
         self.cancel_additional_button.configure(state="normal" if busy else "disabled")
         self.update_thumbnail_button.configure(state="disabled" if busy else "normal")
+        self.capture_thumbnail_button.configure(
+            state="disabled" if busy or not self._can_edit_photo else "normal"
+        )
         self.delete_thumbnail_button.configure(state="disabled" if busy else "normal")
         self.window.after(200, self._poll_state)
 

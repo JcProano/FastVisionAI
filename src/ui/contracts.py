@@ -14,6 +14,9 @@ class UIState(str, Enum):
     FORM_OPEN = "form_open"
     AWAITING_CONSENT = "awaiting_consent"
     ENROLLING = "enrolling"
+    ENROLLMENT_CAPTURE = "enrollment_capture"
+    ROLLBACK = "rollback"
+    CAPTURE_PERSON_PHOTO = "capture_person_photo"
     ENROLLMENT_COMPLETE = "enrollment_complete"
     ENROLLMENT_REJECTED = "enrollment_rejected"
     CANCELLED = "cancelled"
@@ -52,6 +55,9 @@ class RuntimeStatusDTO:
     runtime_state: str
     detector_model_state: str
     embedding_model_state: str
+    camera_switch_allowed: bool = True
+    camera_source_name: str = "N/D"
+    camera_source_type: str = "N/D"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +90,33 @@ class MonitoringDTO:
     quality_band: str | None = None
     recognition_state: str = "NOT_EVALUATED"
     candidate_person_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EnrollmentConflictDTO:
+    """Safe civil conflict projection; contains no cedula or biometric payload."""
+    state: UIState
+    person_id: str
+    person_status: str
+    message: str
+    can_view_person: bool
+    can_add_samples: bool
+    can_resume: bool = False
+    display_name: str | None = None
+    thumbnail_available: bool = False
+    template_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class PersonPhotoCaptureDTO:
+    state: UIState
+    person_id: str
+    message: str
+    quality_score: float | None
+    ready: bool
+    review: bool
+    replace_existing: bool
+    image_bytes: bytes | None = None
 
 
 @dataclass(frozen=True, slots=True)

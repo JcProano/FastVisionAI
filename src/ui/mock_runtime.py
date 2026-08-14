@@ -14,6 +14,7 @@ from src.engine.capture_quality.contracts import GuidedQualityMetrics
 from src.engine.embedding.contracts import FaceEmbedding
 from src.engine.face_quality.contracts import FaceQualityScore, QualityBand
 from src.ui.contracts import RuntimeStatusDTO, VisualFrameDTO
+from src.camera.camera_types import CameraConfig
 from src.ui.runtime_adapter import CameraAdapterError, InferenceAdapterError, ProcessingStep
 
 
@@ -95,6 +96,13 @@ class MockUIRuntimeAdapter:
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO("connected" if self.opened else "disconnected",
                                 "initialized", "loaded", "loaded")
+
+    def switch_camera(self, config: CameraConfig) -> bool:
+        self.opened = True
+        return True
+
+    def retry_camera(self) -> bool:
+        return self.open()
 
     def close(self) -> None:
         self.closed = True

@@ -14,7 +14,10 @@ from src.ui.contracts import (
 )
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 
-from .contracts import PersonEnrollmentCoordinationError, PersonEnrollmentState
+from .contracts import (
+    ExistingActivePersonError, ExistingPendingPersonError,
+    PersonEnrollmentCoordinationError, PersonEnrollmentState,
+)
 
 
 class PersonEnrollmentCoordinator:
@@ -46,6 +49,16 @@ class PersonEnrollmentCoordinator:
             if any(item.person_id == form.person_id for item in self.gallery.list_identities()):
                 self._state = PersonEnrollmentState.IDLE
                 raise PersonEnrollmentCoordinationError("person_id already exists in gallery")
+            existing = self.repository.get_by_cedula(form.cedula)
+            if existing is not None:
+                self._state = PersonEnrollmentState.IDLE
+                if existing.status is PersonStatus.ACTIVE:
+                    raise ExistingActivePersonError(existing.person_id)
+                if existing.status is PersonStatus.PENDING_BIOMETRIC:
+                    raise ExistingPendingPersonError(existing.person_id)
+                raise PersonEnrollmentCoordinationError(
+                    "La persona existe pero no está habilitada para enrollment."
+                )
             try:
                 request = PersonCreateRequest(
                     form.person_id, form.cedula, form.first_name, form.last_name,

@@ -30,6 +30,7 @@
     "allow_low_quality": false
   },
   "guided_capture": {
+    "manual_capture": true,
     "target_samples": 5,
     "policy_file": "config/guided_capture.dev.json",
     "mirrored_source": true

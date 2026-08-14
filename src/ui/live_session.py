@@ -28,7 +28,7 @@ from src.engine.identification_policy import (
 from src.engine.stability import StabilityObservation, StabilityTracker
 from src.ui.contracts import (
     ActionExecutorDTO, DecisionOrchestratorDTO, EnrollmentProgressDTO,
-    EnrollmentResultDTO, ErrorDTO,
+    EnrollmentResultDTO, EnrollmentConflictDTO, ErrorDTO, PersonPhotoCaptureDTO,
     IdentificationPolicyDTO,
     MonitoringDTO,
     RegistrationFormData, RuntimeStatusDTO, StabilityDTO, UIErrorCode, UIState,
@@ -42,6 +42,8 @@ from src.ui.runtime_adapter import (
 from src.ui.people.contracts import PeopleOperationResultDTO
 from src.ui.people.controller import PeopleManagerController
 from src.ui.identification import IdentificationPresentationController
+from src.ui.person_enrollment import ExistingActivePersonError, ExistingPendingPersonError
+from src.ui.photo_capture import PersonPhotoController
 from src.ui.thumbnails import ThumbnailManager, select_thumbnail
 from src.ui.thumbnails.contracts import ThumbnailSample
 from src.ui.dashboard.contracts import (
@@ -58,11 +60,13 @@ from src.core.application_events import (
 )
 from datetime import datetime, timezone
 from collections.abc import Callable
+from src.camera.camera_types import CameraConfig, CameraType
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
            RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO |
-           IdentificationPolicyDTO | DecisionOrchestratorDTO | ActionExecutorDTO)
+           EnrollmentConflictDTO | IdentificationPolicyDTO | DecisionOrchestratorDTO |
+           ActionExecutorDTO | PersonPhotoCaptureDTO)
 
 
 class SessionCommandType(str, Enum):
@@ -70,6 +74,14 @@ class SessionCommandType(str, Enum):
     CANCEL_ENROLLMENT = "cancel_enrollment"
     STOP = "stop"
     START_ADDITIONAL_ENROLLMENT = "start_additional_enrollment"
+    CAPTURE_ENROLLMENT_SAMPLE = "capture_enrollment_sample"
+    START_PERSON_PHOTO = "start_person_photo"
+    CAPTURE_PERSON_PHOTO = "capture_person_photo"
+    CONFIRM_PERSON_PHOTO = "confirm_person_photo"
+    RETAKE_PERSON_PHOTO = "retake_person_photo"
+    CANCEL_PERSON_PHOTO = "cancel_person_photo"
+    SWITCH_CAMERA = "switch_camera"
+    RETRY_CAMERA = "retry_camera"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +89,7 @@ class SessionCommand:
     kind: SessionCommandType
     form: RegistrationFormData | None = None
     person_id: str | None = None
+    camera_config: CameraConfig | None = None
 
 
 class LiveFaceSession:
@@ -99,6 +112,10 @@ class LiveFaceSession:
         detection_event_logging_via_executor: bool = False,
         application_event_bus: ApplicationEventBus | None = None,
         identification_presentation: IdentificationPresentationController | None = None,
+        manual_enrollment_capture: bool = False,
+        photo_controller: PersonPhotoController | None = None,
+        stay_alive_disconnected: bool = False,
+        camera_display_name: str = "N/D", camera_source_type: str = "N/D",
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -129,6 +146,17 @@ class LiveFaceSession:
         self._application_events = application_event_bus
         self._identification_presentation = identification_presentation
         self._identification_pause_active = False
+        self.manual_enrollment_capture = manual_enrollment_capture
+        self._capture_requested = False
+        self._photo_controller = photo_controller
+        self._stay_alive_disconnected = stay_alive_disconnected
+        self._camera_display_name = camera_display_name
+        self._camera_source_type = camera_source_type
+        self._photo_person_id: str | None = None
+        self._photo_replace = False
+        self._photo_capture_requested = False
+        self._pending_photo_bytes: bytes | None = None
+        self._photo_grace_until = 0.0
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
         self._thumbnail_samples: list[ThumbnailSample] = []
@@ -173,6 +201,11 @@ class LiveFaceSession:
     def cancel_enrollment(self) -> bool:
         return self._command(SessionCommand(SessionCommandType.CANCEL_ENROLLMENT))
 
+    def capture_enrollment_sample(self) -> bool:
+        if not self.manual_enrollment_capture:
+            return False
+        return self._command(SessionCommand(SessionCommandType.CAPTURE_ENROLLMENT_SAMPLE))
+
     def start_additional_enrollment(self, person_id: str) -> bool:
         accepted = self._command(SessionCommand(
             SessionCommandType.START_ADDITIONAL_ENROLLMENT, person_id=person_id
@@ -180,12 +213,51 @@ class LiveFaceSession:
         if accepted: self.set_event_history_suspended(True)
         return accepted
 
+    def start_person_photo(self, person_id: str) -> bool:
+        accepted = self._command(SessionCommand(
+            SessionCommandType.START_PERSON_PHOTO, person_id=person_id,
+        ))
+        if accepted:
+            self.set_event_history_suspended(True)
+        return accepted
+
+    def capture_person_photo(self) -> bool:
+        return self._command(SessionCommand(SessionCommandType.CAPTURE_PERSON_PHOTO))
+
+    def confirm_person_photo(self) -> bool:
+        return self._command(SessionCommand(SessionCommandType.CONFIRM_PERSON_PHOTO))
+
+    def retake_person_photo(self) -> bool:
+        return self._command(SessionCommand(SessionCommandType.RETAKE_PERSON_PHOTO))
+
+    def cancel_person_photo(self) -> bool:
+        return self._command(SessionCommand(SessionCommandType.CANCEL_PERSON_PHOTO))
+
     def set_event_history_suspended(self, suspended: bool) -> None:
         if suspended:
             self._event_history_suspended.set()
             self._reset_stability(emit=True)
         else:
             self._event_history_suspended.clear()
+
+    @property
+    def camera_switch_allowed(self) -> bool:
+        return not (
+            self._event_history_suspended.is_set() or self._plan is not None
+            or self._photo_person_id is not None or self.controller.enrollment.active
+        )
+
+    def switch_camera(self, config: CameraConfig) -> bool:
+        if not self.camera_switch_allowed:
+            return False
+        return self._command(SessionCommand(
+            SessionCommandType.SWITCH_CAMERA, camera_config=config,
+        ))
+
+    def retry_camera(self) -> bool:
+        if not self.camera_switch_allowed:
+            return False
+        return self._command(SessionCommand(SessionCommandType.RETRY_CAMERA))
 
     def request_stop(self) -> None:
         self._stop.set()
@@ -201,6 +273,8 @@ class LiveFaceSession:
         if self.controller.enrollment.active:
             self.controller.cancel_enrollment()
         self._clear_thumbnail_samples()
+        self._pending_photo_bytes = None
+        self._photo_person_id = None
         return not self.alive
 
     def drain_events(self) -> tuple[UIEvent, ...]:
@@ -244,9 +318,11 @@ class LiveFaceSession:
                             "No se pudo preparar el motor biométrico.", False)
                 return
             if not opened:
-                self._error(UIErrorCode.CAMERA_ERROR, "No se pudo abrir la cámara", False)
-                return
-            self._event(self.adapter.status())
+                self._error(UIErrorCode.CAMERA_ERROR,
+                            "Cámara desconectada. Use Buscar cámaras para seleccionar otra.", True)
+                if not self._stay_alive_disconnected:
+                    return
+            self._event(self._safe_status())
             while not self._stop.is_set():
                 self._commands()
                 if self._stop.is_set():
@@ -255,6 +331,7 @@ class LiveFaceSession:
                 try:
                     step = self.adapter.process(requested)
                 except CameraAdapterError:
+                    self._event(self._safe_status())
                     self._error(UIErrorCode.CAMERA_ERROR,
                                 "La cámara no está disponible; se aplicó su política de reconexión.",
                                 True)
@@ -279,8 +356,22 @@ class LiveFaceSession:
                 self._last_single_valid = (
                     step.face_count == 1 and step.guided.visual_quality_passed
                 )
-                if self._plan is not None:
-                    self._enrollment_step(step.guided, step.aligned_face_bytes)
+                if self._photo_person_id is not None:
+                    self._photo_step(step)
+                elif self._plan is not None:
+                    if not self.manual_enrollment_capture or self._capture_requested:
+                        self._capture_requested = False
+                        self._enrollment_step(step.guided, step.aligned_face_bytes)
+                    else:
+                        score = step.guided.face_quality_score
+                        self._event(EnrollmentProgressDTO(
+                            UIState.ENROLLMENT_CAPTURE,
+                            operator_instruction(self._plan.current, self.mirrored_source),
+                            self._plan.accepted_count, self._plan.target_samples,
+                            tuple(reason.value for reason in step.guided.reasons),
+                            None if score is None else score.total_score,
+                            None if score is None else score.quality_band.value, True,
+                        ))
                 else:
                     self._monitoring_step(step.face_count, step.guided)
         finally:
@@ -293,7 +384,9 @@ class LiveFaceSession:
                 self._additional_person_id = None
                 self._additional_samples.clear()
             self._clear_thumbnail_samples()
-            self._event(self.adapter.status())
+            self._pending_photo_bytes = None
+            self._photo_person_id = None
+            self._event(self._safe_status())
 
     def _commands(self) -> None:
         for command in _drain(self.command_queue):
@@ -308,6 +401,7 @@ class LiveFaceSession:
                 if self.controller.enrollment.active:
                     self.controller.cancel_enrollment()
                 self._plan = None
+                self._capture_requested = False
                 if self._people is not None and self._additional_person_id is not None:
                     self._event(self._people.cancel_additional())
                 self._additional_person_id = None
@@ -316,6 +410,7 @@ class LiveFaceSession:
                 self.adapter.set_thumbnail_capture(False)
                 self.adapter.new_evaluator()
                 self._reset_stability(emit=True)
+                self._event_history_suspended.clear()
                 self._event(MonitoringDTO(
                     UIState.MONITORING, "Registro cancelado", None, None,
                     "deshabilitada / NOT_EVALUATED", True,
@@ -346,6 +441,31 @@ class LiveFaceSession:
                         run_id=self._session_id, person_id=command.form.person_id,
                         state="ENROLLING", message="primary_enrollment_started",
                     ))
+                except (ExistingActivePersonError, ExistingPendingPersonError) as exc:
+                    self._plan = None
+                    self._capture_requested = False
+                    self._clear_thumbnail_samples()
+                    self.adapter.set_thumbnail_capture(False)
+                    active = isinstance(exc, ExistingActivePersonError)
+                    display_name = None
+                    template_count = 0
+                    if self._people is not None:
+                        try:
+                            details = self._people.details(exc.person_id)
+                            display_name = details.summary.display_name
+                            template_count = details.summary.template_count
+                        except Exception:
+                            pass
+                    thumbnail_available = bool(
+                        self._thumbnails is not None
+                        and self._thumbnails.exists(exc.person_id)
+                    )
+                    self._event(EnrollmentConflictDTO(
+                        UIState.ERROR, exc.person_id,
+                        "ACTIVE" if active else "PENDING_BIOMETRIC", str(exc),
+                        True, active and template_count == 0, False, display_name,
+                        thumbnail_available, template_count,
+                    ))
                 except Exception:
                     LOGGER.exception(
                         "Enrollment start failed before biometric sample collection; "
@@ -356,8 +476,10 @@ class LiveFaceSession:
                     if self.controller.enrollment.active:
                         self.controller.cancel_enrollment()
                     self._plan = None
+                    self._capture_requested = False
                     self._clear_thumbnail_samples()
                     self.adapter.set_thumbnail_capture(False)
+                    self._event_history_suspended.clear()
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "No se pudo iniciar el registro guiado.", False)
             elif (command.kind is SessionCommandType.START_ADDITIONAL_ENROLLMENT and
@@ -398,10 +520,88 @@ class LiveFaceSession:
                     self._plan = None
                     self._additional_person_id = None
                     self._additional_samples.clear()
+                    self._event_history_suspended.clear()
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "No se pudo iniciar la captura adicional.", False)
+            elif command.kind is SessionCommandType.CAPTURE_ENROLLMENT_SAMPLE:
+                if self._plan is None:
+                    self._error(UIErrorCode.ENROLLMENT_ERROR,
+                                "No existe una captura de enrollment activa.", True)
+                else:
+                    self._capture_requested = True
+            elif command.kind is SessionCommandType.START_PERSON_PHOTO:
+                self._start_person_photo(command.person_id)
+            elif command.kind is SessionCommandType.CAPTURE_PERSON_PHOTO:
+                if self._photo_person_id is not None:
+                    self._photo_capture_requested = True
+            elif command.kind is SessionCommandType.RETAKE_PERSON_PHOTO:
+                if self._photo_person_id is not None:
+                    self._pending_photo_bytes = None
+                    self._photo_capture_requested = False
+            elif command.kind is SessionCommandType.CONFIRM_PERSON_PHOTO:
+                self._confirm_person_photo()
+            elif command.kind is SessionCommandType.CANCEL_PERSON_PHOTO:
+                self._finish_person_photo("Captura de fotografía cancelada.", saved=False)
+            elif command.kind is SessionCommandType.SWITCH_CAMERA and command.camera_config is not None:
+                if not self.camera_switch_allowed:
+                    self._error(UIErrorCode.CAMERA_ERROR,
+                                "No se puede cambiar la cámara durante una operación sensible.", True)
+                    continue
+                try:
+                    opened = self.adapter.switch_camera(command.camera_config)
+                    self._camera_id = command.camera_config.name
+                    self._camera_display_name = command.camera_config.name
+                    self._camera_source_type = (
+                        "DroidCam-OBS" if command.camera_config.camera_type is CameraType.USB
+                        and any(marker in command.camera_config.name.casefold()
+                                for marker in ("droidcam", "obs", "virtual", "loopback")) else
+                        "V4L2" if command.camera_config.camera_type is CameraType.USB else
+                        "HTTP/MJPEG" if str(command.camera_config.source).lower().startswith(("http://", "https://"))
+                        else "RTSP"
+                    )
+                    self._event(self._safe_status())
+                    if not opened:
+                        self._error(UIErrorCode.CAMERA_ERROR,
+                                    "La cámara seleccionada no está disponible.", True)
+                except Exception:
+                    LOGGER.exception("Camera switch failed; source details omitted")
+                    self._error(UIErrorCode.CAMERA_ERROR,
+                                "No se pudo cambiar la cámara.", True)
+            elif command.kind is SessionCommandType.RETRY_CAMERA:
+                if not self.camera_switch_allowed:
+                    self._error(UIErrorCode.CAMERA_ERROR,
+                                "No se puede cambiar de cámara durante un registro.", True)
+                    continue
+                try:
+                    self._event(replace(self._safe_status(), camera_state="reconnecting"))
+                    self.adapter.retry_camera()
+                    self._event(self._safe_status())
+                except Exception:
+                    LOGGER.exception("Camera retry failed; source details omitted")
+                    self._error(UIErrorCode.CAMERA_ERROR, "No se pudo reconectar la cámara.", True)
+
+    def _safe_status(self) -> RuntimeStatusDTO:
+        return replace(
+            self.adapter.status(), camera_switch_allowed=self.camera_switch_allowed,
+            camera_source_name=self._camera_display_name,
+            camera_source_type=self._camera_source_type,
+        )
 
     def _monitoring_step(self, face_count: int, guided) -> None:
+        if time.monotonic() < self._photo_grace_until:
+            self._event(MonitoringDTO(
+                UIState.MONITORING, "Identificación temporalmente suspendida", None,
+                None, "deshabilitada / NOT_EVALUATED", False,
+                recognition_state="NOT_EVALUATED",
+            ))
+            return
+        if self._event_history_suspended.is_set():
+            self._event(MonitoringDTO(
+                UIState.FORM_OPEN, "Identificación suspendida durante el registro",
+                None, None, "deshabilitada / NOT_EVALUATED", False,
+                recognition_state="NOT_EVALUATED",
+            ))
+            return
         presentation = getattr(self, "_identification_presentation", None)
         if (presentation is not None
                 and presentation.registered_pause_remaining_seconds() > 0):
@@ -438,6 +638,93 @@ class LiveFaceSession:
         self._emit_monitoring(dto)
         if error is not None:
             self._event(error)
+
+    def _start_person_photo(self, person_id: str | None) -> None:
+        if (self._plan is not None or self._photo_person_id is not None
+                or person_id is None or self._photo_controller is None):
+            self._event_history_suspended.clear()
+            self._error(UIErrorCode.THUMBNAIL_ERROR,
+                        "No se pudo iniciar la captura de fotografía.", True)
+            return
+        try:
+            self._photo_replace = self._photo_controller.begin(person_id)
+            self._photo_person_id = person_id
+            self._pending_photo_bytes = None
+            self._photo_capture_requested = False
+            self.adapter.set_thumbnail_capture(True)
+            self.adapter.new_evaluator()
+            self._reset_stability(emit=True)
+            self._event(PersonPhotoCaptureDTO(
+                UIState.CAPTURE_PERSON_PHOTO, person_id,
+                "Mantenga un solo rostro frente a la cámara.", None,
+                False, False, self._photo_replace,
+            ))
+        except Exception:
+            LOGGER.exception("Person photo capture start failed; visual payload omitted")
+            self._event_history_suspended.clear()
+            self._error(UIErrorCode.THUMBNAIL_ERROR,
+                        "No se pudo iniciar la captura de fotografía.", True)
+
+    def _photo_step(self, step) -> None:
+        person_id = self._photo_person_id
+        if person_id is None:
+            return
+        score = step.guided.face_quality_score
+        quality = None if score is None else score.total_score
+        ready = bool(step.face_count == 1 and step.guided.accepted and step.aligned_face_bytes)
+        if self._photo_capture_requested:
+            self._photo_capture_requested = False
+            if ready:
+                self._pending_photo_bytes = step.aligned_face_bytes
+                self._event(PersonPhotoCaptureDTO(
+                    UIState.CAPTURE_PERSON_PHOTO, person_id,
+                    "Revise la fotografía capturada.", quality, True, True,
+                    self._photo_replace, self._pending_photo_bytes,
+                ))
+                return
+        message = (
+            "No se detecta un rostro." if step.face_count == 0 else
+            "Se detectaron varios rostros." if step.face_count > 1 else
+            "Calidad insuficiente." if not step.guided.accepted else
+            "Fotografía lista para capturar."
+        )
+        self._event(PersonPhotoCaptureDTO(
+            UIState.CAPTURE_PERSON_PHOTO, person_id, message, quality,
+            ready, False, self._photo_replace,
+        ))
+
+    def _confirm_person_photo(self) -> None:
+        if (self._photo_person_id is None or self._pending_photo_bytes is None
+                or self._photo_controller is None):
+            return
+        try:
+            self._photo_controller.save(
+                self._photo_person_id, self._pending_photo_bytes,
+                replace=self._photo_replace,
+            )
+            self._finish_person_photo("Fotografía guardada correctamente.", saved=True)
+        except Exception:
+            LOGGER.exception("Person photo save failed; visual payload omitted")
+            self._error(UIErrorCode.THUMBNAIL_ERROR,
+                        "No se pudo guardar la fotografía.", True)
+
+    def _finish_person_photo(self, message: str, *, saved: bool) -> None:
+        person_id = self._photo_person_id
+        if person_id is None:
+            return
+        replace_existing = self._photo_replace
+        self._pending_photo_bytes = None
+        self._photo_capture_requested = False
+        self._photo_person_id = None
+        self.adapter.set_thumbnail_capture(False)
+        self.adapter.new_evaluator()
+        self._reset_stability(emit=True)
+        self._photo_grace_until = time.monotonic() + 2.5
+        self._event_history_suspended.clear()
+        self._event(PersonPhotoCaptureDTO(
+            UIState.MONITORING, person_id, message, None, saved, False,
+            replace_existing,
+        ))
 
     def _emit_monitoring(self, dto: MonitoringDTO) -> None:
         presentation = getattr(self, "_identification_presentation", None)
@@ -693,6 +980,7 @@ class LiveFaceSession:
                 self._additional_person_id = None
                 self._additional_samples.clear()
                 self._plan = None
+                self._event_history_suspended.clear()
                 self.adapter.new_evaluator()
             return
         try:
@@ -752,6 +1040,8 @@ class LiveFaceSession:
                         "El registro no pudo completarse.", False)
         finally:
             self._plan = None
+            self._capture_requested = False
+            self._event_history_suspended.clear()
             self._clear_thumbnail_samples()
             self.adapter.set_thumbnail_capture(False)
             self.adapter.new_evaluator()

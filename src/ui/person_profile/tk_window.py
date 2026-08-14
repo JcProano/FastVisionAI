@@ -23,6 +23,8 @@ class PersonProfileWindow:
         self, root: Any, controller: PersonProfileController, person_id: str, *,
         on_additional: Callable[[str], bool], thumbnail_manager: ThumbnailManager,
         on_close: Callable[[str], None] | None = None,
+        on_capture_photo: Callable[[str], bool] | None = None,
+        can_edit_photo: bool = True,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError("Tkinter no está disponible")
@@ -31,6 +33,7 @@ class PersonProfileWindow:
         self._on_additional = on_additional
         self._thumbnails = thumbnail_manager
         self._on_close = on_close
+        self._on_capture_photo = on_capture_photo
         self._photo: Any | None = None
         self.window = tk.Toplevel(root)
         self.window.title("Ficha completa de persona")
@@ -50,7 +53,10 @@ class PersonProfileWindow:
         self.edit_button.pack(side="left", padx=4)
         self.additional_button = ttk.Button(actions, text="Agregar muestras", command=self.add_samples)
         self.additional_button.pack(side="left", padx=4)
-        self.photo_button = ttk.Button(actions, text="Actualizar foto", command=self.update_photo)
+        self.photo_button = ttk.Button(
+            actions, text="Capturar fotografía", command=self.capture_photo,
+            state="normal" if can_edit_photo else "disabled",
+        )
         self.photo_button.pack(side="left", padx=4)
         self.check_in_button = ttk.Button(actions, text="Registrar entrada manual",
                                           command=lambda: self.manual_attendance(True))
@@ -108,11 +114,20 @@ class PersonProfileWindow:
         self._photo = None
         self.thumbnail.configure(image="", text="Sin foto registrada")
         if profile.thumbnail_available and profile.thumbnail_bytes:
+            self.photo_button.configure(text="Actualizar foto")
             dto = self._thumbnails.load(self.person_id)
             payload = thumbnail_to_ppm(dto)
             if payload is not None:
                 self._photo = tk.PhotoImage(data=payload, format="PPM")
                 self.thumbnail.configure(image=self._photo, text="")
+        else:
+            self.photo_button.configure(text="Capturar fotografía")
+
+    def capture_photo(self) -> None:
+        if self._on_capture_photo is None:
+            return
+        if self._on_capture_photo(self.person_id):
+            self.status.configure(text="Captura de fotografía iniciada.")
 
     def edit(self) -> None:
         profile = self._profile

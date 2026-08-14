@@ -20,6 +20,8 @@ from src.ui.contracts import (
     ActionExecutorDTO,
     EnrollmentProgressDTO,
     EnrollmentResultDTO,
+    EnrollmentConflictDTO,
+    PersonPhotoCaptureDTO,
     ErrorDTO,
     MonitoringDTO,
     RegistrationFormData,
@@ -172,9 +174,20 @@ class LocalFaceTkApp:
         *,
         on_register: Callable[[RegistrationFormData], None],
         on_cancel: Callable[[], None],
+        on_capture_enrollment: Callable[[], bool] | None = None,
+        on_view_person: Callable[[str], None] | None = None,
+        on_additional_enrollment: Callable[[str], bool] | None = None,
+        on_start_photo: Callable[[str], bool] | None = None,
+        on_capture_photo: Callable[[], bool] | None = None,
+        on_confirm_photo: Callable[[], bool] | None = None,
+        on_retake_photo: Callable[[], bool] | None = None,
+        on_cancel_photo: Callable[[], bool] | None = None,
+        enrollment_target_samples: int = 5,
         on_close: Callable[[], None],
         on_people: Callable[[], None] | None = None,
         on_configuration: Callable[[], None] | None = None,
+        on_camera: Callable[[], None] | None = None,
+        on_retry_camera: Callable[[], bool] | None = None,
         on_save_gallery: Callable[[], object] | None = None,
         get_gallery: Callable[[], DashboardGalleryDTO] | None = None,
         dashboard_settings: dict[str, object] | None = None,
@@ -214,9 +227,20 @@ class LocalFaceTkApp:
         self.root = root
         self._on_register = on_register
         self._on_cancel = on_cancel
+        self._on_capture_enrollment = on_capture_enrollment
+        self._on_view_person = on_view_person
+        self._on_additional_enrollment = on_additional_enrollment
+        self._on_start_photo = on_start_photo
+        self._on_capture_photo = on_capture_photo
+        self._on_confirm_photo = on_confirm_photo
+        self._on_retake_photo = on_retake_photo
+        self._on_cancel_photo = on_cancel_photo
+        self._enrollment_target_samples = enrollment_target_samples
         self._on_close = on_close
         self._on_people = on_people
         self._on_configuration = on_configuration
+        self._on_camera = on_camera
+        self._on_retry_camera = on_retry_camera
         self._on_save_gallery = on_save_gallery
         self._get_gallery = get_gallery
         self._get_thumbnail = get_thumbnail
@@ -253,6 +277,17 @@ class LocalFaceTkApp:
         self._audit_after_id = None
 
         self._form: tk.Toplevel | None = None
+        self._enrollment_video: Any | None = None
+        self._enrollment_progress: Any | None = None
+        self._enrollment_quality: Any | None = None
+        self._enrollment_reasons: Any | None = None
+        self._capture_button: Any | None = None
+        self._photo_capture_window: Any | None = None
+        self._photo_capture_preview: Any | None = None
+        self._photo_capture_status: Any | None = None
+        self._photo_capture_quality: Any | None = None
+        self._photo_capture_image: Any | None = None
+        self._enrollment_resume_after_id: Any | None = None
         self._photo: tk.PhotoImage | None = None
         settings = dashboard_settings or {}
         self._dashboard = DashboardStateStore(
@@ -303,6 +338,29 @@ class LocalFaceTkApp:
         self.runtime_status.pack(anchor="w")
         self.gallery_status = ttk.Label(system_card, text="Personas: 0\nTemplates: 0")
         self.gallery_status.pack(anchor="w", pady=(6, 0))
+
+        camera_card = ttk.LabelFrame(side, text="CÁMARA", padding=8)
+        camera_card.pack(fill="x", pady=6)
+        self.camera_status = ttk.Label(
+            camera_card, text="Estado: Desconectada\nFuente: N/D\nTipo: N/D", justify="left",
+        )
+        self.camera_status.pack(anchor="w")
+        camera_actions = ttk.Frame(camera_card); camera_actions.pack(fill="x", pady=(6, 0))
+        self.camera_search_button = ttk.Button(
+            camera_actions, text="Buscar cámaras", command=on_camera or (lambda: None),
+            state="normal" if on_camera is not None else "disabled",
+        )
+        self.camera_search_button.pack(side="left", padx=2)
+        self.camera_change_button = ttk.Button(
+            camera_actions, text="Cambiar cámara", command=on_camera or (lambda: None),
+            state="normal" if on_camera is not None else "disabled",
+        )
+        self.camera_change_button.pack(side="left", padx=2)
+        self.camera_retry_button = ttk.Button(
+            camera_actions, text="Reintentar", command=on_retry_camera or (lambda: None),
+            state="disabled",
+        )
+        self.camera_retry_button.pack(side="left", padx=2)
 
         candidate_card = ttk.LabelFrame(side, text="Candidato experimental", padding=8)
         candidate_card.pack(fill="x", pady=6)
@@ -412,6 +470,9 @@ class LocalFaceTkApp:
         self.audit_button.pack(side="left",padx=3)
         ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
         ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)
+        self.camera_button = ttk.Button(actions, text="Cámara", command=on_camera or (lambda: None),
+                                        state="normal" if on_camera is not None else "disabled")
+        self.camera_button.pack(side="left", padx=3)
         ttk.Button(actions, text="Guardar galería", command=self._save_gallery).pack(side="left", padx=3)
         self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._cancel, state="disabled")
         self.cancel_button.pack(side="left", padx=3)
@@ -447,6 +508,7 @@ class LocalFaceTkApp:
                 self.register_button.configure(state="disabled")
                 return
             self._enrollment_active = False
+            self._close_enrollment_form()
             self._on_registration_form_state(False)
             if self._identification is not None:
                 self._identification.resume()
@@ -483,6 +545,7 @@ class LocalFaceTkApp:
         dto: EnrollmentProgressDTO,
     ) -> None:
         self._enrollment_active = True
+        self._set_camera_switch_allowed(False)
         self._clear_pending_popups()
         if self._identification is not None:
             self._identification.suspend()
@@ -494,6 +557,22 @@ class LocalFaceTkApp:
                 f"{dto.accepted_samples}/{dto.target_samples}"
             )
         )
+        if getattr(self, "_enrollment_progress", None) is not None:
+            self._enrollment_progress.configure(
+                text=f"Muestras: {dto.accepted_samples} / {dto.target_samples}"
+            )
+        if getattr(self, "_enrollment_quality", None) is not None:
+            quality = "No disponible" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
+            self._enrollment_quality.configure(text=f"Calidad: {quality}")
+        if getattr(self, "_enrollment_reasons", None) is not None:
+            reasons = "Muestra lista para capturar" if not dto.current_reasons else \
+                "No capturada: " + ", ".join(dto.current_reasons)
+            checklist = _enrollment_checklist(dto.accepted_samples, dto.target_samples)
+            self._enrollment_reasons.configure(
+                text=f"{dto.instruction}\n{reasons}\n\n{checklist}"
+            )
+        if getattr(self, "_capture_button", None) is not None:
+            self._capture_button.configure(state="normal")
 
         self.register_button.configure(
             state="disabled"
@@ -511,21 +590,106 @@ class LocalFaceTkApp:
         self,
         dto: EnrollmentResultDTO,
     ) -> None:
-        self._enrollment_active = False
+        self._enrollment_active = True
         self._registration_form_open = False
-        self._on_registration_form_state(False)
-        if self._identification is not None:
-            self._identification.resume()
+        self._close_enrollment_form()
         self.status.configure(text=dto.message)
         self.candidate.configure(text=dto.display_name)
 
-        self.register_button.configure(
-            state="normal"
-        )
+        self.register_button.configure(state="disabled")
 
         self.cancel_button.configure(
             state="disabled"
         )
+        previous = getattr(self, "_enrollment_resume_after_id", None)
+        if previous is not None:
+            try: self.root.after_cancel(previous)
+            except Exception: pass
+        root = getattr(self, "root", None)
+        if root is None or not hasattr(root, "after"):
+            self._finish_enrollment_grace()
+        else:
+            self._enrollment_resume_after_id = root.after(
+                2500, self._finish_enrollment_grace,
+            )
+
+    def show_enrollment_conflict(self, dto: EnrollmentConflictDTO) -> None:
+        self._enrollment_active = False
+        self._registration_form_open = True
+        form = self._form
+        if form is None or not form.winfo_exists():
+            self._leave_registration_form_state(resume=True)
+            self.status.configure(text=dto.message)
+            return
+        for child in form.winfo_children():
+            child.destroy()
+        form.title("Conflicto de registro")
+        photo = "Disponible" if dto.thumbnail_available else "No disponible"
+        samples = (str(dto.template_count) if dto.template_count else "No disponibles")
+        ttk.Label(
+            form,
+            text=("PERSONA YA REGISTRADA\n\n"
+                  f"Nombre: {dto.display_name or 'No disponible'}\n"
+                  f"Estado: {dto.person_status}\nFotografía: {photo}\n"
+                  f"Muestras biométricas: {samples}\n\n{dto.message}"),
+            wraplength=440, justify="left",
+        ).pack(padx=20, pady=20)
+        actions = ttk.Frame(form); actions.pack(pady=(0, 20))
+        if (dto.person_status == "ACTIVE" and not dto.thumbnail_available
+                and self._on_start_photo is not None):
+            ttk.Button(
+                actions, text="Capturar foto",
+                command=lambda: self._start_conflict_photo(dto.person_id),
+            ).pack(side="left", padx=5)
+        if dto.can_view_person and self._on_view_person is not None:
+            ttk.Button(actions, text="Ver persona",
+                       command=lambda: self._view_conflict_person(dto.person_id)).pack(
+                           side="left", padx=5)
+        if dto.can_add_samples and self._on_additional_enrollment is not None:
+            ttk.Button(actions, text="Agregar muestras",
+                       command=lambda: self._start_conflict_additional(dto.person_id)).pack(
+                           side="left", padx=5)
+        ttk.Button(actions, text="Cancelar",
+                   command=lambda: self._close_conflict_form()).pack(side="left", padx=5)
+
+    def _finish_enrollment_grace(self) -> None:
+        self._enrollment_resume_after_id = None
+        if self._closing:
+            return
+        self._enrollment_active = False
+        self._on_registration_form_state(False)
+        if self._identification is not None:
+            self._identification.resume()
+        self.register_button.configure(state="normal")
+
+    def _start_conflict_additional(self, person_id: str) -> None:
+        if self._on_additional_enrollment is None:
+            return
+        if self._on_additional_enrollment(person_id):
+            self._registration_form_open = False
+            self._enrollment_active = True
+            self._close_enrollment_form()
+
+    def _start_conflict_photo(self, person_id: str) -> None:
+        if self._on_start_photo is None:
+            return
+        if self._on_start_photo(person_id):
+            self._close_enrollment_form()
+            self._registration_form_open = False
+            self._enrollment_active = True
+
+    def _view_conflict_person(self, person_id: str) -> None:
+        """Release the modal conflict form before opening the existing profile UI."""
+        callback = self._on_view_person
+        if callback is None:
+            return
+        self._close_enrollment_form()
+        self._leave_registration_form_state(resume=True)
+        callback(person_id)
+
+    def _close_conflict_form(self) -> None:
+        self._close_enrollment_form()
+        self._leave_registration_form_state(resume=True)
 
     def show_error(
         self,
@@ -536,6 +700,7 @@ class LocalFaceTkApp:
         if dto.operation is UIErrorCode.ENROLLMENT_ERROR and not dto.recoverable:
             self._enrollment_active = False
             self._registration_form_open = False
+            self._close_enrollment_form()
             self._on_registration_form_state(False)
             if self._identification is not None and not self._closing:
                 self._identification.resume()
@@ -560,6 +725,25 @@ class LocalFaceTkApp:
         self.header_state.configure(
             text=f"Cámara ● {dto.camera_state}   Runtime ● {dto.runtime_state}"
         )
+        if hasattr(self, "camera_button"):
+            self.camera_button.configure(
+                text="Buscar cámaras" if dto.camera_state == "disconnected" else "Cámara",
+                state="normal" if dto.camera_switch_allowed else "disabled",
+            )
+        state_text = {
+            "connected": "Conectada", "disconnected": "Desconectada",
+            "reconnecting": "Reconectando", "error": "Error",
+        }.get(dto.camera_state, dto.camera_state.title())
+        if hasattr(self, "camera_status"):
+            self.camera_status.configure(
+                text=f"Estado: {state_text}\nFuente: {dto.camera_source_name}\nTipo: {dto.camera_source_type}"
+            )
+            allowed = "normal" if dto.camera_switch_allowed else "disabled"
+            self.camera_search_button.configure(state=allowed)
+            self.camera_change_button.configure(state=allowed)
+            self.camera_retry_button.configure(
+                state=allowed if dto.camera_state == "disconnected" else "disabled"
+            )
 
     def poll_session(
         self,
@@ -613,6 +797,12 @@ class LocalFaceTkApp:
                 EnrollmentResultDTO,
             ):
                 self.show_result(event)
+
+            elif isinstance(event, EnrollmentConflictDTO):
+                self.show_enrollment_conflict(event)
+
+            elif isinstance(event, PersonPhotoCaptureDTO):
+                self.show_person_photo_capture(event)
 
             elif isinstance(event, ErrorDTO):
                 self.show_error(event)
@@ -843,6 +1033,107 @@ class LocalFaceTkApp:
         )
 
         self._photo = photo
+        enrollment_video = getattr(self, "_enrollment_video", None)
+        if enrollment_video is not None:
+            try:
+                if enrollment_video.winfo_exists():
+                    enrollment_video.configure(image=photo, text="")
+            except Exception:
+                self._enrollment_video = None
+        photo_preview = getattr(self, "_photo_capture_preview", None)
+        if photo_preview is not None and self._photo_capture_image is None:
+            try:
+                if photo_preview.winfo_exists():
+                    photo_preview.configure(image=photo, text="")
+            except Exception:
+                self._photo_capture_preview = None
+
+    def show_person_photo_capture(self, dto: PersonPhotoCaptureDTO) -> None:
+        if dto.state is UIState.MONITORING:
+            self.status.configure(text=dto.message)
+            self._close_photo_capture()
+            self._enrollment_active = False
+            self._set_camera_switch_allowed(True)
+            self._on_registration_form_state(False)
+            if self._identification is not None:
+                self._identification.resume()
+            return
+        self._enrollment_active = True
+        self._set_camera_switch_allowed(False)
+        self._clear_pending_popups()
+        if self._identification is not None:
+            self._identification.suspend()
+        if self._identification_popup is not None:
+            self._dismiss_identification_popup("photo_capture")
+        if self._photo_capture_window is None:
+            window = tk.Toplevel(self.root)
+            self._photo_capture_window = window
+            window.title("CAPTURAR FOTOGRAFÍA")
+            window.geometry("650x650")
+            window.protocol("WM_DELETE_WINDOW", self._cancel_person_photo)
+            ttk.Label(window, text="CAPTURAR FOTOGRAFÍA",
+                      font=("TkDefaultFont", 15, "bold")).pack(pady=10)
+            self._photo_capture_preview = ttk.Label(
+                window, text="Esperando video", anchor="center",
+            )
+            self._photo_capture_preview.pack(fill="both", expand=True, padx=15, pady=8)
+            self._photo_capture_quality = ttk.Label(window, text="Calidad: N/D")
+            self._photo_capture_quality.pack()
+            self._photo_capture_status = ttk.Label(window, wraplength=580)
+            self._photo_capture_status.pack(pady=6)
+            actions = ttk.Frame(window); actions.pack(pady=10)
+            self._photo_capture_take = ttk.Button(
+                actions, text="Capturar fotografía",
+                command=lambda: self._on_capture_photo and self._on_capture_photo(),
+            )
+            self._photo_capture_take.pack(side="left", padx=4)
+            self._photo_capture_use = ttk.Button(
+                actions, text="Usar esta foto",
+                command=lambda: self._on_confirm_photo and self._on_confirm_photo(),
+            )
+            self._photo_capture_use.pack(side="left", padx=4)
+            self._photo_capture_repeat = ttk.Button(
+                actions, text="Repetir", command=self._retake_person_photo,
+            )
+            self._photo_capture_repeat.pack(side="left", padx=4)
+            ttk.Button(actions, text="Cancelar", command=self._cancel_person_photo).pack(
+                side="left", padx=4,
+            )
+        self._photo_capture_status.configure(text=dto.message)
+        quality = "N/D" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
+        self._photo_capture_quality.configure(text=f"Calidad: {quality}")
+        self._photo_capture_take.configure(state="normal" if dto.ready and not dto.review else "disabled")
+        self._photo_capture_use.configure(state="normal" if dto.review else "disabled")
+        self._photo_capture_repeat.configure(state="normal" if dto.review else "disabled")
+        if dto.review and dto.image_bytes:
+            visual = ThumbnailDTO(dto.person_id, True, 112, 112, "png", dto.image_bytes)
+            payload = thumbnail_to_ppm(visual)
+            if payload is not None:
+                self._photo_capture_image = tk.PhotoImage(data=payload, format="PPM")
+                self._photo_capture_preview.configure(image=self._photo_capture_image, text="")
+        elif not dto.review:
+            self._photo_capture_image = None
+
+    def _retake_person_photo(self) -> None:
+        self._photo_capture_image = None
+        if self._on_retake_photo is not None:
+            self._on_retake_photo()
+
+    def _cancel_person_photo(self) -> None:
+        if self._on_cancel_photo is not None:
+            self._on_cancel_photo()
+
+    def _close_photo_capture(self) -> None:
+        window = self._photo_capture_window
+        self._photo_capture_window = None
+        self._photo_capture_preview = None
+        self._photo_capture_image = None
+        if window is not None:
+            try:
+                if window.winfo_exists():
+                    window.destroy()
+            except Exception:
+                pass
 
     def open_form(self) -> None:
         """
@@ -1025,7 +1316,8 @@ class LocalFaceTkApp:
                 return
 
             accepted = self._on_register(data)
-            close_form(enrollment_started=accepted is not False)
+            if accepted is not False:
+                self._show_enrollment_capture(form)
 
         ttk.Button(
             form,
@@ -1061,8 +1353,73 @@ class LocalFaceTkApp:
             weight=1,
         )
 
+    def _show_enrollment_capture(self, form: Any) -> None:
+        """Transform the existing civil form into a safe enrollment presentation."""
+        for child in form.winfo_children():
+            child.destroy()
+        self._registration_form_open = False
+        self._enrollment_active = True
+        form.title("REGISTRO FACIAL")
+        form.geometry("760x720")
+        ttk.Label(form, text="REGISTRO FACIAL", font=("TkDefaultFont", 16, "bold")).pack(
+            pady=(16, 8)
+        )
+        self._enrollment_video = ttk.Label(
+            form, text="Esperando video en vivo", anchor="center",
+        )
+        self._enrollment_video.pack(fill="both", expand=True, padx=18, pady=8)
+        self._enrollment_quality = ttk.Label(form, text="Calidad: No disponible")
+        self._enrollment_quality.pack(pady=3)
+        self._enrollment_progress = ttk.Label(
+            form, text=f"Muestras: 0 / {self._enrollment_target_samples}",
+        )
+        self._enrollment_progress.pack(pady=3)
+        self._enrollment_reasons = ttk.Label(
+            form,
+            text=("Mantenga el rostro frente a cámara\n\n" +
+                  _enrollment_checklist(0, self._enrollment_target_samples)),
+            justify="left", wraplength=680,
+        )
+        self._enrollment_reasons.pack(padx=18, pady=8)
+        actions = ttk.Frame(form); actions.pack(pady=(6, 16))
+        self._capture_button = ttk.Button(
+            actions, text="Capturar", command=self._request_enrollment_capture,
+        )
+        self._capture_button.pack(side="left", padx=6)
+        ttk.Button(actions, text="Cancelar", command=self._cancel).pack(
+            side="left", padx=6
+        )
+        form.protocol("WM_DELETE_WINDOW", self._cancel)
+
+    def _request_enrollment_capture(self) -> None:
+        callback = self._on_capture_enrollment
+        if callback is None:
+            return
+        if callback() and self._capture_button is not None:
+            self._capture_button.configure(state="disabled")
+
+    def _close_enrollment_form(self) -> None:
+        form = getattr(self, "_form", None)
+        self._form = None
+        self._enrollment_video = None
+        self._enrollment_progress = None
+        self._enrollment_quality = None
+        self._enrollment_reasons = None
+        self._capture_button = None
+        if form is not None:
+            try:
+                form.grab_release()
+            except Exception:
+                pass
+            try:
+                if form.winfo_exists():
+                    form.destroy()
+            except Exception:
+                pass
+
     def _enter_registration_form_state(self) -> None:
         self._registration_form_open = True
+        self._set_camera_switch_allowed(False)
         self._clear_pending_popups()
         self._on_registration_form_state(True)
         if self._identification is not None:
@@ -1075,12 +1432,21 @@ class LocalFaceTkApp:
         self._clear_pending_popups()
         self._registration_form_open = False
         if resume:
+            self._set_camera_switch_allowed(True)
+        if resume:
             self._on_registration_form_state(False)
         if resume:
             self._enrollment_active = False
             if self._identification is not None:
                 self._identification.resume()
             self.register_button.configure(state="normal")
+
+    def _set_camera_switch_allowed(self, allowed: bool) -> None:
+        for name in ("camera_button", "camera_search_button", "camera_change_button"):
+            button = getattr(self, name, None)
+            if button is not None: button.configure(state="normal" if allowed else "disabled")
+        retry = getattr(self, "camera_retry_button", None)
+        if retry is not None and not allowed: retry.configure(state="disabled")
 
     def _dismiss_identification_popup(self, reason: str) -> None:
         if self._identification_popup is None:
@@ -1113,6 +1479,12 @@ class LocalFaceTkApp:
         Close UI and request resource cleanup.
         """
         self._closing = True
+        self._close_photo_capture()
+        enrollment_after_id = getattr(self, "_enrollment_resume_after_id", None)
+        if enrollment_after_id is not None:
+            try: self.root.after_cancel(enrollment_after_id)
+            except Exception: pass
+            self._enrollment_resume_after_id = None
         health_after_id = getattr(self,"_system_health_after_id",None)
         if health_after_id is not None:
             try:self.root.after_cancel(health_after_id)
@@ -1176,3 +1548,15 @@ def _value(value: float | str | None) -> str:
     if value is None:
         return "N/D"
     return f"{value:.3f}" if isinstance(value, float) else str(value)
+
+
+def _enrollment_checklist(accepted: int, target: int) -> str:
+    labels = (
+        "Frontal", "Ligero giro izquierda", "Ligero giro derecha",
+        "Variación 1", "Variación 2",
+    )
+    return "\n".join(
+        f"{'✓' if index < accepted else '○'} "
+        f"{labels[index] if index < len(labels) else f'Muestra {index + 1}'}"
+        for index in range(target)
+    )

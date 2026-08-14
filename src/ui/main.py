@@ -12,7 +12,7 @@ import json
 import logging
 import threading
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -39,6 +39,12 @@ from src.ui.live_session import LiveFaceSession
 from src.ui.mock_runtime import MockUIRuntimeAdapter
 from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.runtime_adapter import RealUIRuntimeAdapter
+from src.ui.camera_selection_window import CameraSelectionWindow
+from src.camera.source_discovery import (
+    CameraSelectionController, CameraSourceDiscovery, camera_config_for_source,
+    parse_discovery_config, CameraConfigurationPersistence,
+    redact_url,
+)
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
 from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
@@ -48,6 +54,7 @@ from src.ui.people.database_controller import DatabasePeopleManagerController
 from src.ui.dashboard.config_window import DashboardConfigurationWindow
 from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
 from src.ui.thumbnails import ThumbnailManager
+from src.ui.photo_capture import PersonPhotoController
 from src.ui.identification import (
     IdentificationPopupPolicy, IdentificationPresentationController,
     PeopleThumbnailIdentityInfoProvider,
@@ -732,8 +739,14 @@ def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfi
         camera, guided, quality, persistence, recognition,
     )):
         raise ValueError("dashboard configuration sections must be objects")
+    raw_camera_source = camera.get("source", "N/D")
+    safe_camera_source = (
+        redact_url(raw_camera_source) if isinstance(raw_camera_source, str)
+        and raw_camera_source.lower().startswith(("rtsp://", "http://", "https://"))
+        else str(raw_camera_source)
+    )
     return DashboardConfigurationDTO(
-        str(camera.get("source", "N/D")), str(camera.get("resolution", "N/D")),
+        safe_camera_source, str(camera.get("resolution", "N/D")),
         bool(guided.get("mirrored_source", False)), str(guided.get("policy_file", "N/D")),
         str(quality.get("profile_file", "N/D")), int(guided["target_samples"]),
         bool(persistence.get("enabled_by_default", False)),
@@ -812,6 +825,11 @@ def main() -> int:
     if report_controller is not None:report_controller.audit_callback=audit("reports")
     persistence, manifest_path, archive_path = build_persistence(settings)
     thumbnail_manager = build_thumbnail_manager(settings)
+    photo_controller = (
+        None if person_repository is None else PersonPhotoController(
+            person_repository, thumbnail_manager, security.authorization,
+        )
+    )
     people_controller = PeopleManagerController(
         startup.gallery, controller.enrollment.enrollment,
         GalleryPersistence(enabled=True), manifest_path, archive_path,
@@ -883,6 +901,38 @@ def main() -> int:
             return 0
     # Real Runtime/Camera ownership is deliberately constructed only after login.
     cancel_event = threading.Event()
+    camera_discovery_config = parse_discovery_config(settings["camera"])
+    camera_discovery = CameraSourceDiscovery(camera_discovery_config)
+    initial_selection = None
+    initial_selection_result = None
+    if camera_discovery_config.source == "auto":
+        initial_selection_result = CameraSelectionController(camera_discovery).refresh()
+        initial_selection = initial_selection_result.selected
+    initial_source = camera_discovery_config.source
+    if initial_selection is not None:
+        initial_source = camera_config_for_source(initial_selection, camera_discovery_config).source
+    elif initial_source == "auto":
+        # Deliberately invalid local index: the app remains DISCONNECTED until selection.
+        initial_source = camera_discovery_config.scan_indices + 10_000
+    current_camera_source = {"id": (
+        initial_selection.source_id if initial_selection is not None else
+        f"v4l2:{initial_source}" if isinstance(initial_source, int)
+        and camera_discovery_config.source != "auto" else None
+    )}
+    initial_camera_name = (
+        initial_selection.display_name if initial_selection is not None else
+        f"Cámara de video #{initial_source}" if isinstance(initial_source, int)
+        and camera_discovery_config.source != "auto" else
+        "Cámara RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else
+        "Cámara HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
+        "Sin cámara seleccionada"
+    )
+    initial_camera_type = (
+        "DroidCam-OBS" if initial_selection is not None and initial_selection.details.get("virtual") else
+        "V4L2" if isinstance(initial_source, int) else
+        "HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
+        "RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else "N/D"
+    )
     if args.mock_camera:
         adapter = MockUIRuntimeAdapter(
             delay=float(settings["worker"]["mock_frame_delay_seconds"]),
@@ -892,7 +942,7 @@ def main() -> int:
         policy_path = Path(settings["guided_capture"]["policy_file"])
         quality_path = Path(settings["quality"]["profile_file"])
         adapter = RealUIRuntimeAdapter(
-            source=settings["camera"]["source"],
+            source=initial_source,
             policy=load_guided_profile(policy_path).policy,
             quality_profile_path=quality_path,
             cancel_event=cancel_event,
@@ -910,7 +960,7 @@ def main() -> int:
         people_controller=people_controller,
         thumbnail_manager=thumbnail_manager,
         detection_event_service=detection_event_service,
-        camera_id=str(settings["camera"].get("source", "camera")),
+        camera_id=(current_camera_source["id"] or "camera"),
         administrative_status_resolver=(None if person_repository is None else
             lambda person_id: (
                 record.status.value if (record := person_repository.get_by_person_id(person_id))
@@ -923,9 +973,29 @@ def main() -> int:
         detection_event_logging_via_executor=detection_logging_via_executor,
         application_event_bus=application_events,
         identification_presentation=identification_controller,
+        manual_enrollment_capture=bool(
+            settings["guided_capture"].get("manual_capture", True)
+        ),
+        photo_controller=photo_controller,
+        stay_alive_disconnected=True,
+        camera_display_name=initial_camera_name,
+        camera_source_type=initial_camera_type,
     )
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, object] = {}
+    camera_window: dict[str, CameraSelectionWindow] = {}
+    selector_discovery = CameraSourceDiscovery(
+        replace(camera_discovery_config, auto_discovery=True),
+        occupied_source_id=lambda: current_camera_source["id"],
+    )
+    camera_persistence = (None if configuration_service is None else
+                          CameraConfigurationPersistence(configuration_service))
+    camera_selection = CameraSelectionController(
+        selector_discovery, switch_allowed=lambda: session.camera_switch_allowed,
+        persist_config=None if camera_persistence is None else camera_persistence.save,
+    )
+    if initial_selection_result is not None:
+        camera_selection.sources = initial_selection_result.sources
     profile_windows: dict[str, PersonProfileWindow] = {}
     history_window: dict[str, DetectionHistoryWindow] = {}
     attendance_window: dict[str, AttendanceHistoryWindow] = {}
@@ -951,6 +1021,9 @@ def main() -> int:
         config_window = configuration_window.pop("window", None)
         if config_window is not None and config_window.window.winfo_exists():
             config_window.close()
+        source_window = camera_window.pop("window", None)
+        if source_window is not None and source_window.window.winfo_exists():
+            source_window.close()
         for profile in tuple(profile_windows.values()):
             if profile.window.winfo_exists():
                 profile.close()
@@ -1018,6 +1091,8 @@ def main() -> int:
             root, profile_controller, person_id,
             on_additional=session.start_additional_enrollment,
             thumbnail_manager=thumbnail_manager, on_close=close_profile,
+            on_capture_photo=session.start_person_photo,
+            can_edit_photo=security.authorization.can(AuthorizationPermission.EDIT_PERSON),
         )
 
     def open_people(_person_id: str | None = None):
@@ -1033,6 +1108,8 @@ def main() -> int:
             thumbnail_manager=thumbnail_manager,
             on_view_profile=open_profile,
             advanced_controller=people_search_controller,
+            on_capture_photo=session.start_person_photo,
+            can_edit_photo=security.authorization.can(AuthorizationPermission.EDIT_PERSON),
         )
 
     def open_configuration():
@@ -1049,6 +1126,23 @@ def main() -> int:
                 root, configuration_controller,
                 on_close=lambda: configuration_window.pop("window", None),
             )
+
+    def use_camera(source) -> bool:
+        config = camera_config_for_source(source, selector_discovery.config)
+        accepted = session.switch_camera(config)
+        if accepted:
+            current_camera_source["id"] = source.source_id
+        return accepted
+
+    def open_camera_selection() -> None:
+        current = camera_window.get("window")
+        if current is not None and current.window.winfo_exists():
+            current.focus(); return
+        camera_window["window"] = CameraSelectionWindow(
+            root, camera_selection, use_camera,
+            current_source_id=lambda: current_camera_source["id"],
+            on_close=lambda: camera_window.pop("window", None),
+        )
 
     def gallery_summary() -> DashboardGalleryDTO:
         listing = people_controller.list_people()
@@ -1202,9 +1296,20 @@ def main() -> int:
         root,
         on_register=register,
         on_cancel=session.cancel_enrollment,
+        on_capture_enrollment=session.capture_enrollment_sample,
+        on_view_person=open_profile,
+        on_additional_enrollment=session.start_additional_enrollment,
+        on_start_photo=session.start_person_photo,
+        on_capture_photo=session.capture_person_photo,
+        on_confirm_photo=session.confirm_person_photo,
+        on_retake_photo=session.retake_person_photo,
+        on_cancel_photo=session.cancel_person_photo,
+        enrollment_target_samples=int(settings["guided_capture"]["target_samples"]),
         on_close=close,
         on_people=open_people,
         on_configuration=open_configuration,
+        on_camera=open_camera_selection,
+        on_retry_camera=session.retry_camera,
         on_save_gallery=save_gallery,
         get_gallery=gallery_summary,
         dashboard_settings=settings.get("dashboard", {}),
@@ -1245,6 +1350,9 @@ def main() -> int:
     if startup.error is not None:
         app.show_error(startup.error)
     session.start()
+    if (initial_selection_result is not None
+            and (initial_selection_result.requires_selection or not initial_selection_result.sources)):
+        root.after(0, open_camera_selection)
     app.poll_session(session, int(settings["worker"]["ui_poll_interval_ms"]))
     if args.mock_auto_enroll:
         mock_form = validate_registration_form(

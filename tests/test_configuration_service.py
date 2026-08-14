@@ -44,3 +44,11 @@ class ServiceTests(unittest.TestCase):
    for t in threads:t.start()
    for t in threads:t.join()
    self.assertFalse(errors)
+ def test_camera_network_and_preference_persist_atomically(self):
+  with TemporaryDirectory() as d:
+   root=Path(d);path,service=self.make(root)
+   candidate={"config_schema_version":1,"camera":{"source":"auto","auto_discovery":True,"scan_indices":10,"preferred_source":"front","network_sources":[{"id":"front","type":"NETWORK_RTSP","name":"Entrada","url":"rtsp://user:pass@cam/live"}]}}
+   self.assertTrue(service.save(candidate).success)
+   persisted=json.loads(path.read_text())
+   self.assertEqual(persisted["camera"]["preferred_source"],"front")
+   self.assertEqual(persisted["camera"]["network_sources"][0]["url"],"rtsp://user:pass@cam/live")

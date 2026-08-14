@@ -53,6 +53,33 @@ class OpenFailAdapter(MockUIRuntimeAdapter):
         return False
 
 
+class CountingOpenAdapter(MockUIRuntimeAdapter):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.open_calls = 0
+
+    def open(self):
+        self.open_calls += 1
+        return super().open()
+
+
+class RejectedGuidedAdapter(MockUIRuntimeAdapter):
+    def __init__(self, state, *, face_count):
+        super().__init__(delay=.004)
+        self.state = state
+        self.face_count = face_count
+
+    def process(self, requested_pose):
+        step = super().process(requested_pose)
+        rejected = replace(
+            step.guided, primary_state=self.state, reasons=(self.state,),
+            accepted=False, visual_quality_passed=False,
+            temporal_check_passed=False, diversity_check_passed=False,
+            embedding=None,
+        )
+        return replace(step, face_count=self.face_count, guided=rejected)
+
+
 class IdentityProvider:
     def get_person(self, person_id):
         return IdentityPersonDTO(
@@ -106,6 +133,83 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_manual_enrollment_captures_only_after_operator_request(self):
+        gallery, ui = controller(target=5)
+        adapter = CountingOpenAdapter(delay=.004)
+        session = LiveFaceSession(
+            adapter, ui, event_queue_size=64, manual_enrollment_capture=True,
+        )
+        session.start()
+        self.assertTrue(wait_until(lambda: adapter.sequence >= 2))
+        self.assertTrue(session.start_enrollment(form()))
+        self.assertTrue(wait_until(lambda: session._plan is not None))
+        time.sleep(.04)
+        self.assertEqual(session._plan.accepted_count, 0)
+        for expected in range(1, 6):
+            self.assertTrue(session.capture_enrollment_sample())
+            self.assertTrue(wait_until(
+                lambda expected=expected: session._plan is None
+                if expected == 5 else (
+                    session._plan is not None
+                    and session._plan.accepted_count == expected
+                )
+            ))
+        self.assertTrue(wait_until(lambda: session._plan is None))
+        events = session.drain_events()
+        session.close()
+        self.assertEqual(len(gallery.templates()), 5)
+        self.assertTrue(any(
+            isinstance(item, EnrollmentResultDTO)
+            and item.enrollment_status == "enrolled" for item in events
+        ))
+        self.assertTrue(adapter.closed)
+        self.assertEqual(adapter.open_calls, 1)
+
+    def test_manual_enrollment_rejects_multiple_faces_without_consuming_sample(self):
+        _, ui = controller(target=2)
+        adapter = MockUIRuntimeAdapter(delay=.004, multiple_at=set(range(1, 1000)))
+        session = LiveFaceSession(
+            adapter, ui, event_queue_size=64, manual_enrollment_capture=True,
+        )
+        session.start()
+        self.assertTrue(session.start_enrollment(form()))
+        self.assertTrue(wait_until(lambda: session._plan is not None))
+        self.assertTrue(session.capture_enrollment_sample())
+        time.sleep(.04)
+        self.assertEqual(session._plan.accepted_count, 0)
+        events = session.drain_events()
+        session.cancel_enrollment()
+        session.close()
+        self.assertTrue(any(
+            isinstance(item, EnrollmentProgressDTO)
+            and "multiple_faces" in item.current_reasons for item in events
+        ))
+
+    def test_manual_enrollment_does_not_capture_no_face_or_low_quality(self):
+        for state, face_count in (
+            (GuidedCaptureState.NO_FACE, 0),
+            (GuidedCaptureState.BLURRY, 1),
+        ):
+            with self.subTest(state=state):
+                _, ui = controller(target=2)
+                adapter = RejectedGuidedAdapter(state, face_count=face_count)
+                session = LiveFaceSession(
+                    adapter, ui, event_queue_size=64, manual_enrollment_capture=True,
+                )
+                session.start()
+                self.assertTrue(session.start_enrollment(form()))
+                self.assertTrue(wait_until(lambda: session._plan is not None))
+                self.assertTrue(session.capture_enrollment_sample())
+                time.sleep(.04)
+                self.assertEqual(session._plan.accepted_count, 0)
+                self.assertTrue(any(
+                    isinstance(item, EnrollmentProgressDTO)
+                    and state.value in item.current_reasons
+                    for item in session.drain_events()
+                ))
+                session.cancel_enrollment()
+                session.close()
+
     def test_registered_pause_stops_recognition_but_video_worker_continues(self):
         gallery = FaceGallery()
         matcher = FaceMatcher(policy=MatchPolicy(False, None))
@@ -462,7 +566,7 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: not session.alive, .6))
         self.assertTrue(slow.closed)
 
-    def test_matcher_error_multiple_faces_and_nonblocking_command(self):
+    def test_matcher_error_and_enrollment_command_is_nonblocking(self):
         gallery = FaceGallery()
         # Compatible template makes the failing matcher path reachable.
         mock = MockUIRuntimeAdapter(delay=.003, multiple_at={2})
@@ -478,8 +582,8 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertTrue(accepted)
         self.assertTrue(wait_until(lambda: mock.sequence >= 7))
         events = session.drain_events(); session.close()
-        self.assertTrue(any(isinstance(item, MonitoringDTO) and
-                            item.state is UIState.MULTIPLE_FACES for item in events))
+        self.assertTrue(any(isinstance(item, EnrollmentProgressDTO)
+                            for item in events))
         self.assertTrue(any(isinstance(item, ErrorDTO) and
                             item.operation is UIErrorCode.MATCHER_ERROR for item in events))
 

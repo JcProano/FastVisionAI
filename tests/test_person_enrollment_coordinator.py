@@ -3,10 +3,11 @@ import unittest
 import uuid
 from pathlib import Path
 
-from src.core.person_database import PersonRepository, PersonStatus
+from src.core.person_database import PersonCreateRequest, PersonRepository, PersonStatus
 from src.engine.gallery import FaceGallery, FaceIdentity
 from src.ui.contracts import EnrollmentProgressDTO, EnrollmentResultDTO, RegistrationFormData, UIState
 from src.ui.person_enrollment import (
+    ExistingActivePersonError, ExistingPendingPersonError,
     PersonEnrollmentCoordinationError, PersonEnrollmentCoordinator, PersonEnrollmentState,
 )
 
@@ -116,6 +117,39 @@ class CoordinatorTests(unittest.TestCase):
             registration = form(); coordinator.begin(registration); outcome = coordinator.commit()
             self.assertEqual(outcome.coordination_state, PersonEnrollmentState.INCONSISTENT.value)
             self.assertEqual(coordinator.state, PersonEnrollmentState.INCONSISTENT)
+
+    def test_existing_active_cedula_is_reported_without_second_insert(self):
+        repository, _, _, coordinator = self.make()
+        original = form()
+        repository.create(PersonCreateRequest(
+            original.person_id, original.cedula, original.first_name, original.last_name,
+        ))
+        repository.set_status(original.person_id, PersonStatus.ACTIVE)
+        duplicate = form()
+
+        with self.assertRaises(ExistingActivePersonError) as raised:
+            coordinator.begin(duplicate)
+
+        self.assertEqual(raised.exception.person_id, original.person_id)
+        self.assertEqual(repository.count(), 1)
+        self.assertIsNone(repository.get_by_person_id(duplicate.person_id))
+        self.assertEqual(coordinator.state, PersonEnrollmentState.IDLE)
+
+    def test_existing_pending_cedula_requires_explicit_resolution(self):
+        repository, _, _, coordinator = self.make()
+        original = form()
+        repository.create(PersonCreateRequest(
+            original.person_id, original.cedula, original.first_name, original.last_name,
+        ))
+        duplicate = form()
+
+        with self.assertRaises(ExistingPendingPersonError) as raised:
+            coordinator.begin(duplicate)
+
+        self.assertEqual(raised.exception.person_id, original.person_id)
+        self.assertEqual(repository.count(), 1)
+        self.assertIsNone(repository.get_by_person_id(duplicate.person_id))
+        self.assertEqual(coordinator.state, PersonEnrollmentState.IDLE)
 
 
 if __name__ == "__main__": unittest.main()

@@ -15,3 +15,17 @@ class PersonEnrollmentState(str, Enum):
 
 class PersonEnrollmentCoordinationError(RuntimeError):
     pass
+
+
+class ExistingActivePersonError(PersonEnrollmentCoordinationError):
+    def __init__(self, person_id: str) -> None:
+        super().__init__("Esta persona ya está registrada.")
+        self.person_id = person_id
+
+
+class ExistingPendingPersonError(PersonEnrollmentCoordinationError):
+    def __init__(self, person_id: str) -> None:
+        super().__init__(
+            "Existe un registro biométrico pendiente; requiere resolución administrativa."
+        )
+        self.person_id = person_id
