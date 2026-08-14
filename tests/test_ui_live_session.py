@@ -126,8 +126,9 @@ class LiveFaceSessionTests(unittest.TestCase):
         ))
         self.assertEqual(popup.person_id, "person")
         stability = ResetCountingStabilityTracker()
+        adapter = MockUIRuntimeAdapter(delay=.005)
         session = LiveFaceSession(
-            MockUIRuntimeAdapter(delay=.005), ui, event_queue_size=64,
+            adapter, ui, event_queue_size=64,
             identification_presentation=presentation,
             stability_tracker=stability,
         )
@@ -137,6 +138,8 @@ class LiveFaceSessionTests(unittest.TestCase):
         ))
         self.assertEqual(recognition.calls, 0)
         self.assertTrue(session.alive)
+        self.assertEqual(adapter.status().runtime_state, "initialized")
+        self.assertGreater(session.dashboard_telemetry()[0].frames_received, 0)
         clock[0] = 60
         self.assertTrue(wait_until(lambda: recognition.calls > 0))
         self.assertGreaterEqual(stability.reset_count, 2)

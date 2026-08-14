@@ -1,6 +1,7 @@
 import inspect
 import json
 import unittest
+from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,7 @@ class IdentificationPopupTests(unittest.TestCase):
         def configure(self, **values): self.values.update(values)
         def winfo_exists(self): return self.exists
         def destroy(self): self.exists = False
+        def lift(self): self.values["lifted"] = True
 
     def popup(self):
         clock = [0.0]; root = self.FakeRoot(); closed = []; registered = []
@@ -36,10 +38,22 @@ class IdentificationPopupTests(unittest.TestCase):
         popup._monotonic = lambda: clock[0]
         popup.window = self.FakeWidget(); popup._photo = None; popup._person_id = None
         popup._popup_type = None; popup._timer_id = None; popup._unknown_deadline = None
+        popup._registered_deadline = None
         popup.title = self.FakeWidget(); popup.thumbnail = self.FakeWidget()
+        popup.right_title = self.FakeWidget()
         popup.details = self.FakeWidget(); popup.countdown = self.FakeWidget()
         popup.primary = self.FakeWidget(); popup.secondary = self.FakeWidget()
         return popup, clock, root, closed, registered
+
+    @staticmethod
+    def registered(*, thumbnail=True):
+        return IdentificationPopupDTO(
+            IdentificationPopupType.REGISTERED_CANDIDATE, "person-safe",
+            "Temporary Person", "******1234", .924, "NOT_EVALUATED", thumbnail,
+            "safe", datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc),
+            phone="0990000000", email="temporary@example.test", civil_status="ACTIVE",
+            registered_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        )
 
     @staticmethod
     def unknown():
@@ -88,11 +102,79 @@ class IdentificationPopupTests(unittest.TestCase):
     def test_popup_text_actions_singleton_and_thumbnail_placeholder(self):
         source = inspect.getsource(IdentificationPopupWindow)
         for expected in (
-            "PERSONA REGISTRADA EN LA GALERÍA LOCAL",
+            "✔ IDENTIFICACIÓN EXITOSA", "PERSONA IDENTIFICADA",
             "PERSONA NO REGISTRADA EN LA GALERÍA LOCAL",
-            "Candidato experimental registrado", "NOT_EVALUATED",
-            "Ver persona", "Registrar persona", "Sin foto registrada",
+            "Estado: IDENTIFICADO", "Ver detalles", "Registrar persona",
+            "Sin fotografía registrada",
             "winfo_exists", "lift",
+        ):
+            self.assertIn(expected, source)
+
+    def test_registered_popup_with_photo_and_safe_information(self):
+        popup, _, _, _, _ = self.popup()
+        popup.provider = Mock()
+        popup.provider.get_thumbnail.return_value = Mock()
+        with patch("src.ui.identification.tk_popup.thumbnail_to_ppm", return_value=b"ppm"), \
+             patch("src.ui.identification.tk_popup.tk.PhotoImage", return_value="photo"):
+            popup._render(self.registered())
+        self.assertEqual(popup.thumbnail.values["image"], "photo")
+        self.assertEqual(popup.title.values["text"], "✔ IDENTIFICACIÓN EXITOSA")
+        self.assertIn("Temporary Person", popup.details.values["text"])
+        self.assertIn("Score de reconocimiento: 92.4 %", popup.details.values["text"])
+        self.assertIn("Estado: IDENTIFICADO", popup.details.values["text"])
+        self.assertNotIn("person-safe", popup.details.values["text"])
+
+    def test_registered_popup_without_photo_uses_placeholder(self):
+        popup, _, _, _, _ = self.popup()
+        popup._render(self.registered(thumbnail=False))
+        self.assertIn("Sin fotografía registrada", popup.thumbnail.values["text"])
+
+    def test_missing_registered_data_is_explicitly_unavailable(self):
+        popup, _, _, _, _ = self.popup()
+        dto = IdentificationPopupDTO(
+            IdentificationPopupType.REGISTERED_CANDIDATE, "person-safe", None,
+            None, None, "NOT_EVALUATED", False, "safe",
+            datetime.now(timezone.utc),
+        )
+        popup._render(dto)
+        self.assertGreaterEqual(popup.details.values["text"].count("No disponible"), 8)
+
+    def test_singleton_registered_popup_updates_only_when_person_changes(self):
+        popup, _, _, _, _ = self.popup()
+        first = self.registered(thumbnail=False)
+        popup._popup_type = IdentificationPopupType.REGISTERED_CANDIDATE
+        popup._person_id = first.person_id
+        popup._render = Mock()
+        popup.show(first)
+        popup._render.assert_not_called()
+        changed = IdentificationPopupDTO(
+            IdentificationPopupType.REGISTERED_CANDIDATE, "person-other",
+            "Other Person", "******5678", .8, "NOT_EVALUATED", False,
+            "safe", datetime.now(timezone.utc),
+        )
+        popup.show(changed)
+        popup._render.assert_called_once_with(changed)
+
+    def test_registered_countdown_manual_and_automatic_close(self):
+        popup, clock, root, _, _ = self.popup()
+        popup._render(self.registered(thumbnail=False))
+        self.assertEqual(popup.secondary.values["text"], "Cerrar (5)")
+        clock[0] = 1; root.run(popup._timer_id)
+        self.assertEqual(popup.secondary.values["text"], "Cerrar (4)")
+        clock[0] = 5; root.run(popup._timer_id)
+        self.assertEqual(popup.secondary.values["text"], "Cerrar (0)")
+        self.assertFalse(popup.active); self.assertFalse(root.callbacks)
+
+        popup, _, root, _, _ = self.popup(); popup._render(self.registered(thumbnail=False))
+        timer = popup._timer_id; popup.dismiss("user")
+        self.assertIn(timer, root.cancelled); self.assertFalse(root.callbacks)
+
+    def test_enter_escape_x_and_modal_wiring(self):
+        source = inspect.getsource(IdentificationPopupWindow._build)
+        for expected in (
+            'bind("<Return>"', 'bind("<Escape>"',
+            'protocol("WM_DELETE_WINDOW", self.dismiss)', "grab_set()",
+            "update_idletasks()", "focus_force()",
         ):
             self.assertIn(expected, source)
 
@@ -109,11 +191,11 @@ class IdentificationPopupTests(unittest.TestCase):
         self.assertIn("self._dismiss_identification_popup(", inspect.getsource(LocalFaceTkApp.show_progress))
         self.assertIn("IdentificationPopupType.REGISTERED_CANDIDATE", app_source)
 
-    def test_forbidden_automatic_identity_language_is_absent(self):
+    def test_forbidden_access_language_is_absent(self):
         source = inspect.getsource(IdentificationPopupWindow).casefold()
         for forbidden in (
             "identidad confirmada", "persona identificada biométricamente",
-            "acceso autorizado", "acceso denegado", "reconocido",
+            "acceso autorizado", "acceso denegado",
         ):
             self.assertNotIn(forbidden, source)
 

@@ -23,6 +23,7 @@ class SQLiteThumbnailIdentityInfoProvider:
                 record.person_id, record.first_name, record.last_name,
                 f"{record.first_name} {record.last_name}", record.cedula,
                 record.address, record.phone, record.email, record.status.value,
+                registered_at=record.created_at,
             )
         if any(item.person_id == person_id for item in self._gallery.list_identities()):
             return IdentityPersonDTO(

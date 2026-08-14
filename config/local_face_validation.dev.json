@@ -160,6 +160,7 @@
   },
   "security": {
     "enabled": true,
+    "skip_login_for_local_validation": true,
     "database_path": "data/fastvision/users.db",
     "bootstrap_admin_enabled": true,
     "minimum_password_length": 10,

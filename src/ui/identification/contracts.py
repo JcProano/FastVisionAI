@@ -51,6 +51,11 @@ class IdentificationPopupDTO:
     phone: str | None = None
     email: str | None = None
     civil_status: str | None = None
+    department: str | None = None
+    position: str | None = None
+    company: str | None = None
+    registered_at: datetime | None = None
+    last_access_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +70,11 @@ class IdentityPersonDTO:
     email: str | None = None
     status: str | None = None
     legacy_without_civil_data: bool = False
+    department: str | None = None
+    position: str | None = None
+    company: str | None = None
+    registered_at: datetime | None = None
+    last_access_at: datetime | None = None
 
 
 class IdentityInfoProvider(Protocol):

@@ -44,6 +44,10 @@ from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.core.detection_events import DetectionEventDTO
 
 
+def local_validation_banner(enabled: bool) -> str:
+    return "MODO VALIDACIÓN LOCAL — LOGIN OMITIDO" if enabled else ""
+
+
 @dataclass(frozen=True, slots=True)
 class MonitoringText:
     headline: str
@@ -197,6 +201,7 @@ class LocalFaceTkApp:
         on_audit: Callable[[], None] | None = None,
         audit_controller: object | None = None,
         audit_refresh_seconds: float = 30.0,
+        local_validation_login_bypass: bool = False,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -244,6 +249,7 @@ class LocalFaceTkApp:
         self._system_health_after_id = None
         self._audit_controller = audit_controller
         self._audit_refresh_seconds = audit_refresh_seconds
+        self._local_validation_login_bypass = local_validation_login_bypass
         self._audit_after_id = None
 
         self._form: tk.Toplevel | None = None
@@ -275,6 +281,11 @@ class LocalFaceTkApp:
         ttk.Label(header, text="FASTVISION AI", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         self.header_state = ttk.Label(header, text="Cámara ●  Runtime ●")
         self.header_state.grid(row=0, column=1, sticky="e")
+        self.validation_mode_banner = ttk.Label(
+            header,
+            text=local_validation_banner(local_validation_login_bypass),
+        )
+        self.validation_mode_banner.grid(row=1, column=0, columnspan=2, sticky="w")
 
         body = ttk.Frame(root, padding=(10, 4)); body.grid(row=1, column=0, sticky="nsew")
         body.columnconfigure(0, weight=3); body.columnconfigure(1, weight=1)

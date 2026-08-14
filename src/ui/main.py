@@ -11,8 +11,9 @@ import argparse
 import json
 import logging
 import threading
+import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
@@ -77,6 +78,7 @@ from src.ui.people.search_controller import (
 from src.core.security import (
     AuthenticationPolicy, AuthenticationService, AuthenticatedSessionManager,
     AuthorizationEngine, AuthorizationPermission, PasswordHasher, PasswordPolicy, UserRepository,
+    AuthenticatedSessionDTO, UserDTO, UserRole, UserStatus,
 )
 from src.ui.security import AuthorizationController, LoginWindow, SecurityController
 from src.core.backup import (
@@ -100,6 +102,50 @@ from src.core.audit import AuditCallbackAdapter, AuditRepository, AuditService
 from src.ui.audit import AuditController, AuditLogWindow
 
 LOGGER = logging.getLogger(__name__)
+
+
+def local_validation_login_bypass_enabled(settings: dict[str, object]) -> bool:
+    """Return only the explicit local-validation switch; never infer a bypass."""
+    configuration = settings.get("security", {})
+    if not isinstance(configuration, dict):
+        raise ValueError("security configuration must be an object")
+    enabled = configuration.get("skip_login_for_local_validation", False)
+    if type(enabled) is not bool:
+        raise ValueError("security.skip_login_for_local_validation must be boolean")
+    if enabled and not bool(configuration.get("enabled", True)):
+        raise ValueError("local validation login bypass requires security.enabled=true")
+    return enabled
+
+
+def start_local_validation_admin_session(
+    security: SecurityController,
+) -> AuthenticatedSessionDTO:
+    """Start an ephemeral ADMIN session without creating a repository user."""
+    if not security.enabled:
+        raise ValueError("local validation session requires enabled security")
+    now = datetime.now(timezone.utc)
+    temporary_user = UserDTO(
+        str(uuid.uuid4()), "local-validation-admin", "Validación local",
+        UserRole.ADMIN, UserStatus.ACTIVE, 0, None, None, None, now, now,
+    )
+    return security.sessions.start(temporary_user)
+
+
+def authenticate_startup(
+    root: object, security: SecurityController, *, skip_login: bool,
+    login_factory=LoginWindow,
+) -> bool:
+    """Authenticate before Runtime/Camera construction, optionally via explicit bypass."""
+    root.withdraw()
+    if skip_login:
+        start_local_validation_admin_session(security)
+        LOGGER.warning("Security login bypass enabled for local validation")
+        authenticated = True
+    else:
+        authenticated = bool(login_factory(root, security).run())
+    if authenticated:
+        root.deiconify()
+    return authenticated
 
 
 def build_security(
@@ -739,6 +785,7 @@ def main() -> int:
     if settings.get("profile_name") == "local_face_validation_prod" and args.mock_camera:
         parser.error("production profile does not allow mock camera")
     security = build_security(settings)
+    local_validation_bypass = local_validation_login_bypass_enabled(settings)
     audit_service=build_audit(settings)
     def audit(source):return AuditCallbackAdapter(audit_service,security.sessions.context,source)
     security.audit_callback=audit("security")
@@ -810,7 +857,6 @@ def main() -> int:
         identification_controller,
         queue_size=int(settings["queues"].get("event_size", 16)),
         application_event_bus=application_events,
-        identification_presentation=identification_controller,
     )
     action_executor = build_action_executor(
         settings, detection_event_service, popup_action_adapter, application_events,
@@ -830,11 +876,11 @@ def main() -> int:
         ) from exc
     root = tk.Tk()
     if security.enabled:
-        root.withdraw()
-        if not LoginWindow(root, security).run():
+        if not authenticate_startup(
+            root, security, skip_login=local_validation_bypass,
+        ):
             root.destroy()
             return 0
-        root.deiconify()
     # Real Runtime/Camera ownership is deliberately constructed only after login.
     cancel_event = threading.Event()
     if args.mock_camera:
@@ -876,6 +922,7 @@ def main() -> int:
         action_executor=action_executor,
         detection_event_logging_via_executor=detection_logging_via_executor,
         application_event_bus=application_events,
+        identification_presentation=identification_controller,
     )
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, object] = {}
@@ -1191,6 +1238,7 @@ def main() -> int:
         on_audit=open_audit if audit_controller is not None else None,
         audit_controller=audit_controller,
         audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
+        local_validation_login_bypass=local_validation_bypass,
     )
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)

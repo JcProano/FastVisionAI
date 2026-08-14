@@ -147,6 +147,10 @@ class IdentificationPresentationController:
                 "Candidato experimental registrado", self._utcnow(),
                 getattr(person, "address", None), getattr(person, "phone", None),
                 getattr(person, "email", None), getattr(person, "status", None),
+                getattr(person, "department", None), getattr(person, "position", None),
+                getattr(person, "company", None),
+                getattr(person, "registered_at", None),
+                getattr(person, "last_access_at", None),
             )
 
         if now - self._unknown_last < self.policy.unknown_cooldown_seconds:

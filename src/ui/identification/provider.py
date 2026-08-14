@@ -20,6 +20,7 @@ class PeopleThumbnailIdentityInfoProvider:
             return IdentityPersonDTO(
                 item.person_id, item.first_name, item.last_name, item.display_name,
                 item.external_identifier, legacy_without_civil_data=True,
+                registered_at=item.created_at,
             )
         except Exception:
             return None
