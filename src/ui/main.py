@@ -55,6 +55,26 @@ from src.ui.dashboard.config_window import DashboardConfigurationWindow
 from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
 from src.ui.thumbnails import ThumbnailManager
 from src.ui.photo_capture import PersonPhotoController
+from src.ui.photo_capture import AutomaticPhotoPolicy
+from src.ui.video_presentation import VideoPresentation
+
+
+def _video_presentation_settings(settings: dict[str, object]) -> dict[str, object]:
+    camera = settings.get("camera", {})
+    if not isinstance(camera, dict): return {}
+    presentation = camera.get("presentation", {})
+    crop = camera.get("presentation_crop", {})
+    presentation = presentation if isinstance(presentation, dict) else {}
+    crop = crop if isinstance(crop, dict) else {}
+    return {
+        "rotation": int(presentation.get("rotation", 0)),
+        "mirror_horizontal": bool(presentation.get("mirror_horizontal", False)),
+        "crop_enabled": bool(crop.get("enabled", False)),
+        "crop_top_percent": float(crop.get("top_percent", 0)),
+        "crop_bottom_percent": float(crop.get("bottom_percent", 0)),
+        "crop_left_percent": float(crop.get("left_percent", 0)),
+        "crop_right_percent": float(crop.get("right_percent", 0)),
+    }
 from src.ui.identification import (
     IdentificationPopupPolicy, IdentificationPresentationController,
     PeopleThumbnailIdentityInfoProvider,
@@ -977,6 +997,7 @@ def main() -> int:
             settings["guided_capture"].get("manual_capture", True)
         ),
         photo_controller=photo_controller,
+        photo_capture_policy=AutomaticPhotoPolicy(**settings.get("photo_capture", {})),
         stay_alive_disconnected=True,
         camera_display_name=initial_camera_name,
         camera_source_type=initial_camera_type,
@@ -1313,6 +1334,8 @@ def main() -> int:
         on_save_gallery=save_gallery,
         get_gallery=gallery_summary,
         dashboard_settings=settings.get("dashboard", {}),
+        video_presentation=VideoPresentation(**_video_presentation_settings(settings)),
+        photo_capture_mode=str(settings.get("photo_capture", {}).get("mode", "automatic")),
         get_thumbnail=thumbnail_manager.load,
         identification_controller=identification_controller,
         identification_popup=identification_popup,

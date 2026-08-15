@@ -117,6 +117,8 @@ class PersonPhotoCaptureDTO:
     review: bool
     replace_existing: bool
     image_bytes: bytes | None = None
+    stability_observations: int = 0
+    stability_required: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -12,7 +12,9 @@ from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 
-from src.engine.capture_quality import CapturePlanStep, CapturePose, GuidedCapturePlan
+from src.engine.capture_quality import (
+    CapturePlanStep, CapturePose, GuidedCapturePlan, GuidedCaptureState,
+)
 from src.engine.action_executor import (
     ActionExecutionInput, ActionExecutionResult, ActionExecutionState, ActionExecutor,
     DetectionEventActionData, PopupActionData,
@@ -43,7 +45,9 @@ from src.ui.people.contracts import PeopleOperationResultDTO
 from src.ui.people.controller import PeopleManagerController
 from src.ui.identification import IdentificationPresentationController
 from src.ui.person_enrollment import ExistingActivePersonError, ExistingPendingPersonError
-from src.ui.photo_capture import PersonPhotoController
+from src.ui.photo_capture import (
+    AutomaticPhotoPolicy, AutomaticPhotoSelector, PersonPhotoController,
+)
 from src.ui.thumbnails import ThumbnailManager, select_thumbnail
 from src.ui.thumbnails.contracts import ThumbnailSample
 from src.ui.dashboard.contracts import (
@@ -114,6 +118,7 @@ class LiveFaceSession:
         identification_presentation: IdentificationPresentationController | None = None,
         manual_enrollment_capture: bool = False,
         photo_controller: PersonPhotoController | None = None,
+        photo_capture_policy: AutomaticPhotoPolicy | None = None,
         stay_alive_disconnected: bool = False,
         camera_display_name: str = "N/D", camera_source_type: str = "N/D",
     ) -> None:
@@ -149,6 +154,8 @@ class LiveFaceSession:
         self.manual_enrollment_capture = manual_enrollment_capture
         self._capture_requested = False
         self._photo_controller = photo_controller
+        self._photo_policy = photo_capture_policy or AutomaticPhotoPolicy()
+        self._photo_selector = AutomaticPhotoSelector(self._photo_policy)
         self._stay_alive_disconnected = stay_alive_disconnected
         self._camera_display_name = camera_display_name
         self._camera_source_type = camera_source_type
@@ -156,6 +163,7 @@ class LiveFaceSession:
         self._photo_replace = False
         self._photo_capture_requested = False
         self._pending_photo_bytes: bytes | None = None
+        self._pending_photo_quality: float | None = None
         self._photo_grace_until = 0.0
         self._event_history_suspended = threading.Event()
         self._session_id = str(uuid.uuid4())
@@ -537,7 +545,9 @@ class LiveFaceSession:
             elif command.kind is SessionCommandType.RETAKE_PERSON_PHOTO:
                 if self._photo_person_id is not None:
                     self._pending_photo_bytes = None
+                    self._pending_photo_quality = None
                     self._photo_capture_requested = False
+                    self._photo_selector.reset()
             elif command.kind is SessionCommandType.CONFIRM_PERSON_PHOTO:
                 self._confirm_person_photo()
             elif command.kind is SessionCommandType.CANCEL_PERSON_PHOTO:
@@ -650,7 +660,9 @@ class LiveFaceSession:
             self._photo_replace = self._photo_controller.begin(person_id)
             self._photo_person_id = person_id
             self._pending_photo_bytes = None
+            self._pending_photo_quality = None
             self._photo_capture_requested = False
+            self._photo_selector.reset()
             self.adapter.set_thumbnail_capture(True)
             self.adapter.new_evaluator()
             self._reset_stability(emit=True)
@@ -671,23 +683,58 @@ class LiveFaceSession:
             return
         score = step.guided.face_quality_score
         quality = None if score is None else score.total_score
-        ready = bool(step.face_count == 1 and step.guided.accepted and step.aligned_face_bytes)
+        ready = bool(step.face_count == 1 and step.guided.visual_quality_passed
+                     and step.aligned_face_bytes)
+        if self._pending_photo_bytes is not None:
+            self._event(PersonPhotoCaptureDTO(
+                UIState.CAPTURE_PERSON_PHOTO, person_id, "Fotografía capturada.",
+                self._pending_photo_quality, True, True,
+                self._photo_replace, self._pending_photo_bytes,
+                self._photo_policy.stability_frames, self._photo_policy.stability_frames,
+            ))
+            return
         if self._photo_capture_requested:
             self._photo_capture_requested = False
             if ready:
                 self._pending_photo_bytes = step.aligned_face_bytes
+                self._pending_photo_quality = quality
                 self._event(PersonPhotoCaptureDTO(
                     UIState.CAPTURE_PERSON_PHOTO, person_id,
                     "Revise la fotografía capturada.", quality, True, True,
                     self._photo_replace, self._pending_photo_bytes,
                 ))
                 return
+        reasons = set(step.guided.reasons)
         message = (
-            "No se detecta un rostro." if step.face_count == 0 else
+            "Buscando rostro..." if step.face_count == 0 else
             "Se detectaron varios rostros." if step.face_count > 1 else
-            "Calidad insuficiente." if not step.guided.accepted else
+            "Acérquese un poco." if GuidedCaptureState.FACE_TOO_SMALL in reasons else
+            "Centre su rostro." if (GuidedCaptureState.FACE_OFF_CENTER in reasons
+                                     or GuidedCaptureState.PARTIALLY_VISIBLE in reasons) else
+            "Calidad insuficiente." if not step.guided.visual_quality_passed else
             "Fotografía lista para capturar."
         )
+        if self._photo_policy.mode == "automatic":
+            automatic = self._photo_selector.observe(
+                valid=ready, image_bytes=step.aligned_face_bytes,
+                quality_score=quality, rejection_message=message,
+            )
+            if automatic.captured_bytes is not None:
+                self._pending_photo_bytes = automatic.captured_bytes
+                self._pending_photo_quality = automatic.quality_score
+                self._event(PersonPhotoCaptureDTO(
+                    UIState.CAPTURE_PERSON_PHOTO, person_id, automatic.message,
+                    automatic.quality_score, True, True, self._photo_replace,
+                    self._pending_photo_bytes, automatic.observations,
+                    automatic.required_observations,
+                ))
+                return
+            self._event(PersonPhotoCaptureDTO(
+                UIState.CAPTURE_PERSON_PHOTO, person_id, automatic.message,
+                automatic.quality_score, ready, False, self._photo_replace, None,
+                automatic.observations, automatic.required_observations,
+            ))
+            return
         self._event(PersonPhotoCaptureDTO(
             UIState.CAPTURE_PERSON_PHOTO, person_id, message, quality,
             ready, False, self._photo_replace,
@@ -714,7 +761,9 @@ class LiveFaceSession:
             return
         replace_existing = self._photo_replace
         self._pending_photo_bytes = None
+        self._pending_photo_quality = None
         self._photo_capture_requested = False
+        self._photo_selector.reset()
         self._photo_person_id = None
         self.adapter.set_thumbnail_capture(False)
         self.adapter.new_evaluator()

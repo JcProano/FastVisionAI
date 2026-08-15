@@ -159,7 +159,7 @@ class RealUIRuntimeAdapter:
         rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
         visual = VisualFrameDTO(frame.width, frame.height, rgb.tobytes(order="C"), frame.sequence_id)
         thumbnail_bytes = None
-        if self._thumbnail_capture_active and guided.accepted and len(aligned) == 1:
+        if self._thumbnail_capture_active and guided.visual_quality_passed and len(aligned) == 1:
             encoded, payload = cv2.imencode(".png", aligned[0].image)
             if encoded:
                 thumbnail_bytes = payload.tobytes()

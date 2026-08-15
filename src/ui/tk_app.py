@@ -38,6 +38,7 @@ from src.ui.dashboard.contracts import DashboardGalleryDTO
 from src.ui.dashboard.state import DashboardStateStore
 from src.ui.thumbnails import ThumbnailDTO
 from src.ui.thumbnails.presentation import thumbnail_to_ppm
+from src.ui.video_presentation import VideoPresentation, render_rgb
 from src.ui.identification import (
     IdentificationPopupDTO, IdentificationPopupType,
     IdentificationPresentationController,
@@ -191,6 +192,8 @@ class LocalFaceTkApp:
         on_save_gallery: Callable[[], object] | None = None,
         get_gallery: Callable[[], DashboardGalleryDTO] | None = None,
         dashboard_settings: dict[str, object] | None = None,
+        video_presentation: VideoPresentation | None = None,
+        photo_capture_mode: str = "automatic",
         get_thumbnail: Callable[[str], ThumbnailDTO] | None = None,
         identification_controller: IdentificationPresentationController | None = None,
         identification_popup: IdentificationPopupWindow | None = None,
@@ -289,6 +292,8 @@ class LocalFaceTkApp:
         self._photo_capture_image: Any | None = None
         self._enrollment_resume_after_id: Any | None = None
         self._photo: tk.PhotoImage | None = None
+        self._video_presentation = video_presentation or VideoPresentation()
+        self._photo_capture_mode = photo_capture_mode
         settings = dashboard_settings or {}
         self._dashboard = DashboardStateStore(
             int(settings.get("history_limit", 100)),
@@ -328,8 +333,9 @@ class LocalFaceTkApp:
         video_card = ttk.LabelFrame(body, text="VIDEO EN VIVO", padding=6)
         video_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         video_card.columnconfigure(0, weight=1); video_card.rowconfigure(0, weight=1)
-        self.video = ttk.Label(video_card, text="Vista local sin frame", anchor="center")
+        self.video = tk.Canvas(video_card, background="#202124", highlightthickness=0)
         self.video.grid(row=0, column=0, sticky="nsew")
+        self._video_item = self.video.create_image(0, 0, anchor="center")
 
         side = ttk.Frame(body); side.grid(row=0, column=1, sticky="nsew")
         system_card = ttk.LabelFrame(side, text="Estado del sistema", padding=8)
@@ -1018,19 +1024,21 @@ class LocalFaceTkApp:
         Only Tk's current PhotoImage is retained.
         """
 
-        header = (
-            f"P6 {width} {height} 255\n"
-        ).encode("ascii")
+        available_width = max(1, self.video.winfo_width())
+        available_height = max(1, self.video.winfo_height())
+        width, height, rgb_bytes = render_rgb(
+            rgb_bytes, width, height, available_width, available_height,
+            self._video_presentation,
+        )
+        header = f"P6 {width} {height} 255\n".encode("ascii")
 
         photo = tk.PhotoImage(
             data=header + rgb_bytes,
             format="PPM",
         )
 
-        self.video.configure(
-            image=photo,
-            text="",
-        )
+        self.video.coords(self._video_item, available_width // 2, available_height // 2)
+        self.video.itemconfigure(self._video_item, image=photo)
 
         self._photo = photo
         enrollment_video = getattr(self, "_enrollment_video", None)
@@ -1068,17 +1076,19 @@ class LocalFaceTkApp:
         if self._photo_capture_window is None:
             window = tk.Toplevel(self.root)
             self._photo_capture_window = window
-            window.title("CAPTURAR FOTOGRAFÍA")
+            window.title("CAPTURA DE FOTOGRAFÍA")
             window.geometry("650x650")
             window.protocol("WM_DELETE_WINDOW", self._cancel_person_photo)
-            ttk.Label(window, text="CAPTURAR FOTOGRAFÍA",
+            ttk.Label(window, text="CAPTURA DE FOTOGRAFÍA",
                       font=("TkDefaultFont", 15, "bold")).pack(pady=10)
             self._photo_capture_preview = ttk.Label(
                 window, text="Esperando video", anchor="center",
             )
             self._photo_capture_preview.pack(fill="both", expand=True, padx=15, pady=8)
-            self._photo_capture_quality = ttk.Label(window, text="Calidad: N/D")
+            self._photo_capture_quality = ttk.Label(window, text="Calidad actual: N/D")
             self._photo_capture_quality.pack()
+            self._photo_capture_stability = ttk.Label(window, text="Estabilidad: 0/5")
+            self._photo_capture_stability.pack()
             self._photo_capture_status = ttk.Label(window, wraplength=580)
             self._photo_capture_status.pack(pady=6)
             actions = ttk.Frame(window); actions.pack(pady=10)
@@ -1086,7 +1096,8 @@ class LocalFaceTkApp:
                 actions, text="Capturar fotografía",
                 command=lambda: self._on_capture_photo and self._on_capture_photo(),
             )
-            self._photo_capture_take.pack(side="left", padx=4)
+            if self._photo_capture_mode == "manual":
+                self._photo_capture_take.pack(side="left", padx=4)
             self._photo_capture_use = ttk.Button(
                 actions, text="Usar esta foto",
                 command=lambda: self._on_confirm_photo and self._on_confirm_photo(),
@@ -1101,8 +1112,15 @@ class LocalFaceTkApp:
             )
         self._photo_capture_status.configure(text=dto.message)
         quality = "N/D" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
-        self._photo_capture_quality.configure(text=f"Calidad: {quality}")
-        self._photo_capture_take.configure(state="normal" if dto.ready and not dto.review else "disabled")
+        self._photo_capture_quality.configure(text=f"Calidad actual: {quality}")
+        required = dto.stability_required or 5
+        self._photo_capture_stability.configure(
+            text=f"Estabilidad: {dto.stability_observations}/{required}",
+        )
+        self._photo_capture_take.configure(
+            state="normal" if self._photo_capture_mode == "manual"
+            and dto.ready and not dto.review else "disabled",
+        )
         self._photo_capture_use.configure(state="normal" if dto.review else "disabled")
         self._photo_capture_repeat.configure(state="normal" if dto.review else "disabled")
         if dto.review and dto.image_bytes:
