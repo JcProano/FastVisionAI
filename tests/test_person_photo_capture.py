@@ -9,6 +9,7 @@ from src.core.person_database import PersonCreateRequest, PersonRepository
 from src.engine.gallery import FaceGallery
 from src.engine.capture_quality import GuidedCaptureState
 from src.ui.live_session import LiveFaceSession
+from src.ui.contracts import RegistrationFormData
 from src.ui.mock_runtime import MockUIRuntimeAdapter
 from src.ui.photo_capture import AutomaticPhotoPolicy, PersonPhotoController
 from src.ui.thumbnails import ThumbnailManager
@@ -125,6 +126,33 @@ class PersonPhotoCaptureTests(unittest.TestCase):
         self.assertTrue(self.thumbnails.exists(self.person_id))
         self.assertEqual(len(gallery.templates()), 0)
         self.assertEqual(self.repository.get_by_person_id(self.person_id).cedula, "1710034065")
+
+    def test_profile_photo_occurs_after_five_biometric_templates(self):
+        gallery, ui = controller(FaceGallery(), target=5)
+        photo = PersonPhotoController(self.repository, self.thumbnails, Authorization(True))
+        session = LiveFaceSession(
+            MockUIRuntimeAdapter(delay=.003, thumbnail_capture_enabled=True), ui,
+            event_queue_size=64, thumbnail_manager=self.thumbnails,
+            photo_controller=photo, profile_photo_after_enrollment=True,
+            photo_capture_policy=AutomaticPhotoPolicy(
+                mode="automatic", stability_frames=1, countdown_seconds=0,
+                minimum_quality_score=75,
+            ),
+        )
+        form = RegistrationFormData(
+            "Temporary", "Person", "Temporary Person", self.person_id,
+            None, True, False,
+        )
+        session.start(); session.start_enrollment(form)
+        self.assertTrue(wait_until(lambda: len(gallery.templates(self.person_id)) == 5))
+        self.assertFalse(self.thumbnails.exists(self.person_id))
+        self.assertTrue(session.start_person_photo(self.person_id))
+        self.assertTrue(wait_until(lambda: session._pending_photo_bytes is not None))
+        session.confirm_person_photo()
+        self.assertTrue(wait_until(lambda: session._photo_person_id is None))
+        session.close()
+        self.assertTrue(self.thumbnails.exists(self.person_id))
+        self.assertEqual(len(gallery.templates(self.person_id)), 5)
 
     def test_no_face_multiple_faces_and_low_quality_are_not_captured(self):
         adapters = (

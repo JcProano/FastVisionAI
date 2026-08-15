@@ -111,7 +111,9 @@
     "unregistered_cooldown_seconds": 60.0
   },
   "guided_capture": {
-    "manual_capture": true,
+    "manual_capture": false,
+    "minimum_quality_score": 75,
+    "stability_frames": 3,
     "mirrored_source": true,
     "policy_file": "config/guided_capture.dev.json",
     "target_samples": 5
@@ -159,6 +161,12 @@
     "directory": "data/ui_validation",
     "enabled_by_default": false,
     "load_on_startup": false
+  },
+  "photo_capture": {
+    "mode": "automatic",
+    "stability_frames": 5,
+    "countdown_seconds": 3,
+    "minimum_quality_score": 75
   },
   "person_database": {
     "enabled": true,

@@ -145,6 +145,18 @@ class FaceCaptureQualityTests(unittest.TestCase):
         self.assertEqual(metrics.embeddings_calculated, 1)
         self.assertEqual(metrics.samples_accepted, 1)
 
+    def test_tentative_acceptance_can_be_rejected_and_best_restored_for_stability(self):
+        evaluator = FaceCaptureQualityEvaluator(self.policy)
+        face = self.face(frame=self.frame(sequence=1, timestamp=1))
+        result = evaluator.evaluate(
+            (self.detection(),), (face,), CapturePose.FRONTAL, "run", 1,
+            lambda value: self.embedding(value),
+        )
+        self.assertTrue(evaluator.reject_last_accepted(result))
+        self.assertEqual(evaluator.metrics().samples_accepted, 0)
+        self.assertTrue(evaluator.restore_accepted(result))
+        self.assertEqual(evaluator.metrics().samples_accepted, 1)
+
     def test_same_timestamp_with_different_sequence_is_not_accepted_twice(self):
         evaluator = FaceCaptureQualityEvaluator(self.policy)
         first = self.face(frame=self.frame(sequence=1, timestamp=1))

@@ -43,6 +43,12 @@ class MockUIRuntimeAdapter:
     def set_thumbnail_capture(self, enabled: bool) -> None:
         self.thumbnail_capture_active = self.thumbnail_capture_enabled and enabled
 
+    def reject_enrollment_candidate(self, guided) -> bool:
+        return bool(getattr(guided, "accepted", False))
+
+    def restore_enrollment_candidate(self, guided) -> bool:
+        return bool(getattr(guided, "accepted", False))
+
     def process(self, requested_pose: CapturePose) -> ProcessingStep:
         time.sleep(self.delay)
         self.sequence += 1

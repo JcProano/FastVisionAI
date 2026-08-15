@@ -12,12 +12,15 @@ class AutomaticPhotoPolicy:
     mode: str = "automatic"
     stability_frames: int = 5
     countdown_seconds: float = 2.0
+    minimum_quality_score: float = 75.0
 
     def __post_init__(self) -> None:
         if self.mode not in ("automatic", "manual"):
             raise ValueError("photo_capture.mode must be automatic or manual")
         if self.stability_frames <= 0 or self.countdown_seconds < 0:
             raise ValueError("photo capture stability must be positive and countdown non-negative")
+        if not 0 <= self.minimum_quality_score <= 100:
+            raise ValueError("photo capture minimum quality score must be within 0..100")
 
 
 @dataclass(frozen=True, slots=True)

@@ -184,6 +184,8 @@ class LocalFaceTkApp:
         on_retake_photo: Callable[[], bool] | None = None,
         on_cancel_photo: Callable[[], bool] | None = None,
         enrollment_target_samples: int = 5,
+        manual_enrollment_capture: bool = True,
+        profile_photo_after_enrollment: bool = False,
         on_close: Callable[[], None],
         on_people: Callable[[], None] | None = None,
         on_configuration: Callable[[], None] | None = None,
@@ -239,6 +241,8 @@ class LocalFaceTkApp:
         self._on_retake_photo = on_retake_photo
         self._on_cancel_photo = on_cancel_photo
         self._enrollment_target_samples = enrollment_target_samples
+        self._manual_enrollment_capture = manual_enrollment_capture
+        self._profile_photo_after_enrollment = profile_photo_after_enrollment
         self._on_close = on_close
         self._on_people = on_people
         self._on_configuration = on_configuration
@@ -559,23 +563,30 @@ class LocalFaceTkApp:
             self._dismiss_identification_popup("enrollment")
         self.status.configure(
             text=(
-                f"{dto.instruction} — "
+                f"Paso {min(dto.accepted_samples + 1, dto.target_samples)} de "
+                f"{dto.target_samples} — {dto.instruction} — "
                 f"{dto.accepted_samples}/{dto.target_samples}"
             )
         )
         if getattr(self, "_enrollment_progress", None) is not None:
             self._enrollment_progress.configure(
-                text=f"Muestras: {dto.accepted_samples} / {dto.target_samples}"
+                text=(f"Muestras: {dto.accepted_samples} / {dto.target_samples}\n"
+                      f"{_enrollment_progress_bar(dto.accepted_samples, dto.target_samples)}")
             )
         if getattr(self, "_enrollment_quality", None) is not None:
             quality = "No disponible" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
             self._enrollment_quality.configure(text=f"Calidad: {quality}")
         if getattr(self, "_enrollment_reasons", None) is not None:
-            reasons = "Muestra lista para capturar" if not dto.current_reasons else \
-                "No capturada: " + ", ".join(dto.current_reasons)
+            reasons = (f"Muestra capturada {dto.accepted_samples}/{dto.target_samples}"
+                       if not dto.current_reasons and dto.accepted_samples else
+                       "Buena imagen detectada") if not dto.current_reasons else \
+                "No capturada: " + ", ".join(
+                    _enrollment_reason(reason) for reason in dto.current_reasons
+                )
             checklist = _enrollment_checklist(dto.accepted_samples, dto.target_samples)
             self._enrollment_reasons.configure(
-                text=f"{dto.instruction}\n{reasons}\n\n{checklist}"
+                text=(f"Paso {min(dto.accepted_samples + 1, dto.target_samples)} de "
+                      f"{dto.target_samples}\n{dto.instruction}\n{reasons}\n\n{checklist}")
             )
         if getattr(self, "_capture_button", None) is not None:
             self._capture_button.configure(state="normal")
@@ -598,9 +609,23 @@ class LocalFaceTkApp:
     ) -> None:
         self._enrollment_active = True
         self._registration_form_open = False
-        self._close_enrollment_form()
         self.status.configure(text=dto.message)
         self.candidate.configure(text=dto.display_name)
+
+        if getattr(self, "_profile_photo_after_enrollment", False) and self._form is not None:
+            form = self._form
+            for child in form.winfo_children(): child.destroy()
+            form.title("REGISTRO FACIAL COMPLETADO")
+            ttk.Label(form, text="✓ REGISTRO FACIAL COMPLETADO",
+                      font=("TkDefaultFont", 16, "bold")).pack(pady=(40, 12))
+            ttk.Label(form, text=f"{dto.templates_registered}/5 muestras\n\n"
+                      "Ahora tomaremos su fotografía de perfil.",
+                      justify="center").pack(pady=12)
+            ttk.Button(form, text="Continuar",
+                       command=lambda: self._continue_profile_photo(dto.person_id)).pack(pady=16)
+            return
+
+        self._close_enrollment_form()
 
         self.register_button.configure(state="disabled")
 
@@ -618,6 +643,11 @@ class LocalFaceTkApp:
             self._enrollment_resume_after_id = root.after(
                 2500, self._finish_enrollment_grace,
             )
+
+    def _continue_profile_photo(self, person_id: str) -> None:
+        self._close_enrollment_form()
+        if self._on_start_photo is None or not self._on_start_photo(person_id):
+            self.status.configure(text="No se pudo iniciar la fotografía de perfil.")
 
     def show_enrollment_conflict(self, dto: EnrollmentConflictDTO) -> None:
         self._enrollment_active = False
@@ -1076,10 +1106,10 @@ class LocalFaceTkApp:
         if self._photo_capture_window is None:
             window = tk.Toplevel(self.root)
             self._photo_capture_window = window
-            window.title("CAPTURA DE FOTOGRAFÍA")
+            window.title("FOTO DE PERFIL")
             window.geometry("650x650")
             window.protocol("WM_DELETE_WINDOW", self._cancel_person_photo)
-            ttk.Label(window, text="CAPTURA DE FOTOGRAFÍA",
+            ttk.Label(window, text="FOTO DE PERFIL",
                       font=("TkDefaultFont", 15, "bold")).pack(pady=10)
             self._photo_capture_preview = ttk.Label(
                 window, text="Esperando video", anchor="center",
@@ -1403,7 +1433,8 @@ class LocalFaceTkApp:
         self._capture_button = ttk.Button(
             actions, text="Capturar", command=self._request_enrollment_capture,
         )
-        self._capture_button.pack(side="left", padx=6)
+        if self._manual_enrollment_capture:
+            self._capture_button.pack(side="left", padx=6)
         ttk.Button(actions, text="Cancelar", command=self._cancel).pack(
             side="left", padx=6
         )
@@ -1571,10 +1602,34 @@ def _value(value: float | str | None) -> str:
 def _enrollment_checklist(accepted: int, target: int) -> str:
     labels = (
         "Frontal", "Ligero giro izquierda", "Ligero giro derecha",
-        "Variación 1", "Variación 2",
+        "Arriba", "Natural",
     )
     return "\n".join(
         f"{'✓' if index < accepted else '○'} "
         f"{labels[index] if index < len(labels) else f'Muestra {index + 1}'}"
         for index in range(target)
     )
+
+
+def _enrollment_progress_bar(accepted: int, target: int) -> str:
+    filled = 0 if target <= 0 else round(10 * accepted / target)
+    return f"[{'█' * filled}{'-' * (10 - filled)}] {accepted}/{target}"
+
+
+def _enrollment_reason(reason: str) -> str:
+    return {
+        "no_face": "Centre su rostro",
+        "multiple_faces": "Se detectaron varios rostros",
+        "face_too_small": "Rostro demasiado lejos; acérquese a la cámara",
+        "low_interocular_distance": "Acérquese a la cámara",
+        "partially_visible": "Rostro parcialmente fuera del cuadro",
+        "face_off_center": "Centre su rostro",
+        "too_dark": "Iluminación insuficiente",
+        "too_bright": "Iluminación excesiva",
+        "low_contrast": "Contraste insuficiente",
+        "blurry": "Rostro borroso; no se mueva",
+        "pose_not_requested": "Siga la pose indicada",
+        "too_soon": "No se mueva; espere un momento",
+        "near_duplicate": "Cambie ligeramente la pose",
+        "quality_below_enrollment_minimum": "Calidad insuficiente",
+    }.get(reason, reason.replace("_", " ").capitalize())

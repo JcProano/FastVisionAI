@@ -133,6 +133,68 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_enrollment_captures_above_configured_score_without_requiring_100(self):
+        class ScoreAdapter(MockUIRuntimeAdapter):
+            def process(self, requested_pose):
+                step = super().process(requested_pose)
+                return replace(step, guided=replace(
+                    step.guided,
+                    face_quality_score=replace(step.guided.face_quality_score,
+                                               total_score=75.1),
+                ))
+        gallery, ui = controller(target=1)
+        session = LiveFaceSession(
+            ScoreAdapter(delay=.003), ui, event_queue_size=32,
+            enrollment_minimum_quality_score=75,
+        )
+        session.start(); session.start_enrollment(form())
+        self.assertTrue(wait_until(lambda: len(gallery.templates()) == 1))
+        session.close()
+
+    def test_enrollment_does_not_capture_below_configured_score(self):
+        class ScoreAdapter(MockUIRuntimeAdapter):
+            def process(self, requested_pose):
+                step = super().process(requested_pose)
+                return replace(step, guided=replace(
+                    step.guided,
+                    face_quality_score=replace(step.guided.face_quality_score,
+                                               total_score=74.9),
+                ))
+        _, ui = controller(target=1)
+        adapter = ScoreAdapter(delay=.003)
+        session = LiveFaceSession(
+            adapter, ui, event_queue_size=32,
+            enrollment_minimum_quality_score=75,
+        )
+        session.start(); session.start_enrollment(form())
+        self.assertTrue(wait_until(lambda: adapter.sequence >= 8))
+        self.assertIsNotNone(session._plan)
+        self.assertEqual(session._plan.accepted_count, 0)
+        self.assertTrue(any(
+            isinstance(item, EnrollmentProgressDTO)
+            and "quality_below_enrollment_minimum" in item.current_reasons
+            for item in session.drain_events()
+        ))
+        session.cancel_enrollment(); session.close()
+
+    def test_automatic_enrollment_requires_stability_observations(self):
+        gallery, ui = controller(target=1)
+        session = LiveFaceSession(
+            MockUIRuntimeAdapter(delay=.015), ui, event_queue_size=64,
+            enrollment_minimum_quality_score=75, enrollment_stability_frames=3,
+        )
+        session.start(); session.start_enrollment(form())
+        seen = []
+        self.assertTrue(wait_until(lambda: (
+            seen.extend(session.drain_events()) or any(
+                isinstance(item, EnrollmentProgressDTO)
+                and item.instruction == "Mantenga la posición..." for item in seen
+            )
+        )))
+        self.assertEqual(len(gallery.templates()), 0)
+        self.assertTrue(wait_until(lambda: len(gallery.templates()) == 1))
+        session.close()
+
     def test_manual_enrollment_captures_only_after_operator_request(self):
         gallery, ui = controller(target=5)
         adapter = CountingOpenAdapter(delay=.004)
@@ -352,7 +414,7 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertEqual(operator_instruction(frontal, True), "Mire al frente")
 
     def test_mirrored_presentation_preserves_guided_plan_logical_order(self):
-        plan = GuidedCapturePlan(4)
+        plan = GuidedCapturePlan(5)
         logical = []
         messages = []
         while not plan.completed:
@@ -361,11 +423,12 @@ class LiveFaceSessionTests(unittest.TestCase):
             plan.accept()
         self.assertEqual(logical, [
             CapturePose.FRONTAL, CapturePose.SLIGHT_LEFT,
-            CapturePose.SLIGHT_RIGHT, CapturePose.FRONTAL,
+            CapturePose.SLIGHT_RIGHT, CapturePose.FRONTAL, CapturePose.FRONTAL,
         ])
         self.assertEqual(messages, [
-            "Mire al frente", "Gire ligeramente a la derecha",
-            "Gire ligeramente a la izquierda", "Mire al frente con expresión neutra",
+            "Mire directamente a la cámara", "Gire ligeramente a la derecha",
+            "Gire ligeramente a la izquierda", "Levante ligeramente el rostro",
+            "Posición natural",
         ])
 
     def test_enrollment_progress_message_uses_operator_perspective(self):

@@ -8,6 +8,7 @@ from src.engine.gallery import FaceGallery, FaceIdentity
 from src.ui.form_validation import RegistrationFormError, validate_registration_form
 from src.ui.identification.database_provider import SQLiteThumbnailIdentityInfoProvider
 from src.core.person_database import SQLiteIdentityDataProvider
+from src.ui.main import GALLERY_SYNC_WARNING, civil_gallery_sync_warning
 
 
 class _Thumbnails:
@@ -40,6 +41,30 @@ class PersonDatabaseUIIntegrationTests(unittest.TestCase):
                 "Ana", "Pérez", None, consent_confirmed=True,
                 persist_locally=False, cedula="0000000000",
             )
+
+    def test_civil_gallery_mismatch_is_reported_without_automatic_merge(self):
+        person_id = str(uuid.uuid4())
+        self.repository.create(PersonCreateRequest(
+            person_id, "1710034065", "Ana", "Pérez",
+        ))
+        self.repository.set_status(person_id, PersonStatus.ACTIVE)
+        gallery = FaceGallery()
+        other_id = str(uuid.uuid4())
+        gallery.register_identity(FaceIdentity(other_id, "Biometric identity"))
+        self.assertEqual(
+            civil_gallery_sync_warning(self.repository, gallery), GALLERY_SYNC_WARNING,
+        )
+        self.assertIsNotNone(self.repository.get_by_person_id(person_id))
+        self.assertEqual(gallery.list_identities()[0].person_id, other_id)
+
+    def test_matching_active_person_and_gallery_has_no_warning(self):
+        person_id = str(uuid.uuid4())
+        self.repository.create(PersonCreateRequest(
+            person_id, "1710034065", "Ana", "Pérez",
+        ))
+        self.repository.set_status(person_id, PersonStatus.ACTIVE)
+        gallery = FaceGallery(); gallery.register_identity(FaceIdentity(person_id, "Ana"))
+        self.assertIsNone(civil_gallery_sync_warning(self.repository, gallery))
 
     def test_provider_exposes_only_active_and_labels_gallery_legacy(self):
         gallery = FaceGallery()

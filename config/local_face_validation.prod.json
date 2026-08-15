@@ -19,7 +19,8 @@
   "photo_capture": {
     "mode": "automatic",
     "stability_frames": 5,
-    "countdown_seconds": 2
+    "countdown_seconds": 3,
+    "minimum_quality_score": 75
   },
   "queues": {
     "visual_size": 1,
@@ -55,7 +56,9 @@
     "allow_low_quality": false
   },
   "guided_capture": {
-    "manual_capture": true,
+    "manual_capture": false,
+    "minimum_quality_score": 75,
+    "stability_frames": 3,
     "target_samples": 5,
     "policy_file": "config/guided_capture.dev.json",
     "mirrored_source": true

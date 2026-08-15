@@ -15,14 +15,15 @@ class CapturePlanStep:
 
 
 DEFAULT_STEPS = (
-    CapturePlanStep("frontal", CapturePose.FRONTAL, "Mire al frente"),
+    CapturePlanStep("frontal", CapturePose.FRONTAL, "Mire directamente a la cámara"),
     CapturePlanStep("slight_left", CapturePose.SLIGHT_LEFT,
                     "Gire ligeramente a la izquierda"),
     CapturePlanStep("slight_right", CapturePose.SLIGHT_RIGHT,
                     "Gire ligeramente a la derecha"),
-    # Neutral expression is an operator instruction, not an inferred attribute.
-    CapturePlanStep("frontal_neutral", CapturePose.FRONTAL,
-                    "Mire al frente con expresión neutra"),
+    # Pitch is not estimated by the current RGB pose evaluator. "Up" and natural
+    # therefore retain the existing frontal biometric category and are UI guidance.
+    CapturePlanStep("slight_up", CapturePose.FRONTAL, "Levante ligeramente el rostro"),
+    CapturePlanStep("natural", CapturePose.FRONTAL, "Posición natural"),
 )
 
 
@@ -53,4 +54,3 @@ class GuidedCapturePlan:
 
     def covered_poses(self) -> tuple[str, ...]:
         return tuple(self.steps[index % len(self.steps)].key for index in range(self.accepted_count))
-

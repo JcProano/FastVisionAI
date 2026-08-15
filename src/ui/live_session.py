@@ -96,6 +96,18 @@ class SessionCommand:
     camera_config: CameraConfig | None = None
 
 
+@dataclass(slots=True)
+class _EnrollmentStability:
+    observations: int = 0
+    best_guided: object | None = None
+    best_image: bytes | None = None
+    best_score: float = -1.0
+
+    def reset(self) -> None:
+        self.observations = 0; self.best_guided = None
+        self.best_image = None; self.best_score = -1.0
+
+
 class LiveFaceSession:
     def __init__(
         self, adapter: UIRuntimeAdapter, controller: LocalFaceUIController, *,
@@ -117,6 +129,9 @@ class LiveFaceSession:
         application_event_bus: ApplicationEventBus | None = None,
         identification_presentation: IdentificationPresentationController | None = None,
         manual_enrollment_capture: bool = False,
+        enrollment_minimum_quality_score: float = 75.0,
+        enrollment_stability_frames: int = 1,
+        profile_photo_after_enrollment: bool = False,
         photo_controller: PersonPhotoController | None = None,
         photo_capture_policy: AutomaticPhotoPolicy | None = None,
         stay_alive_disconnected: bool = False,
@@ -152,6 +167,14 @@ class LiveFaceSession:
         self._identification_presentation = identification_presentation
         self._identification_pause_active = False
         self.manual_enrollment_capture = manual_enrollment_capture
+        if not 0 <= enrollment_minimum_quality_score <= 100:
+            raise ValueError("enrollment minimum quality score must be within 0..100")
+        self.enrollment_minimum_quality_score = float(enrollment_minimum_quality_score)
+        if enrollment_stability_frames <= 0:
+            raise ValueError("enrollment stability frames must be positive")
+        self.enrollment_stability_frames = int(enrollment_stability_frames)
+        self._enrollment_stability = _EnrollmentStability()
+        self.profile_photo_after_enrollment = bool(profile_photo_after_enrollment)
         self._capture_requested = False
         self._photo_controller = photo_controller
         self._photo_policy = photo_capture_policy or AutomaticPhotoPolicy()
@@ -415,6 +438,7 @@ class LiveFaceSession:
                 self._additional_person_id = None
                 self._additional_samples.clear()
                 self._clear_thumbnail_samples()
+                self._enrollment_stability.reset()
                 self.adapter.set_thumbnail_capture(False)
                 self.adapter.new_evaluator()
                 self._reset_stability(emit=True)
@@ -441,6 +465,7 @@ class LiveFaceSession:
                     self.adapter.new_evaluator()
                     self._thumbnail_consent = command.form.consent_confirmed
                     self._thumbnail_samples.clear()
+                    self._enrollment_stability.reset()
                     self.adapter.set_thumbnail_capture(True)
                     self._plan = plan
                     self._event(progress)
@@ -668,7 +693,7 @@ class LiveFaceSession:
             self._reset_stability(emit=True)
             self._event(PersonPhotoCaptureDTO(
                 UIState.CAPTURE_PERSON_PHOTO, person_id,
-                "Mantenga un solo rostro frente a la cámara.", None,
+                "Preparando fotografía... Sonría o mantenga expresión natural.", None,
                 False, False, self._photo_replace,
             ))
         except Exception:
@@ -684,7 +709,8 @@ class LiveFaceSession:
         score = step.guided.face_quality_score
         quality = None if score is None else score.total_score
         ready = bool(step.face_count == 1 and step.guided.visual_quality_passed
-                     and step.aligned_face_bytes)
+                     and step.aligned_face_bytes and quality is not None
+                     and quality >= self._photo_policy.minimum_quality_score)
         if self._pending_photo_bytes is not None:
             self._event(PersonPhotoCaptureDTO(
                 UIState.CAPTURE_PERSON_PHOTO, person_id, "Fotografía capturada.",
@@ -711,7 +737,9 @@ class LiveFaceSession:
             "Acérquese un poco." if GuidedCaptureState.FACE_TOO_SMALL in reasons else
             "Centre su rostro." if (GuidedCaptureState.FACE_OFF_CENTER in reasons
                                      or GuidedCaptureState.PARTIALLY_VISIBLE in reasons) else
-            "Calidad insuficiente." if not step.guided.visual_quality_passed else
+            "Calidad insuficiente." if (not step.guided.visual_quality_passed
+                                         or quality is None or quality <
+                                         self._photo_policy.minimum_quality_score) else
             "Fotografía lista para capturar."
         )
         if self._photo_policy.mode == "automatic":
@@ -967,6 +995,50 @@ class LiveFaceSession:
         if plan is None:
             return
         score = guided.face_quality_score
+        if guided.accepted and guided.embedding is not None and (
+            score is None or score.total_score < self.enrollment_minimum_quality_score
+        ):
+            reject = getattr(self.adapter, "reject_enrollment_candidate", None)
+            if reject is not None:
+                reject(guided)
+            self._enrollment_stability.reset()
+            self._event(EnrollmentProgressDTO(
+                UIState.ENROLLING,
+                "Calidad insuficiente. No se mueva y mejore la iluminación.",
+                plan.accepted_count, plan.target_samples,
+                ("quality_below_enrollment_minimum",),
+                None if score is None else score.total_score,
+                None if score is None else score.quality_band.value, True,
+            ))
+            return
+        if guided.accepted and guided.embedding is not None and score is not None \
+                and self.enrollment_stability_frames > 1:
+            reject = getattr(self.adapter, "reject_enrollment_candidate", None)
+            if reject is not None and not reject(guided):
+                self._enrollment_stability.reset()
+                return
+            stable = self._enrollment_stability
+            stable.observations += 1
+            if score.total_score > stable.best_score:
+                stable.best_guided = guided
+                stable.best_image = aligned_face_bytes
+                stable.best_score = score.total_score
+            if stable.observations < self.enrollment_stability_frames:
+                self._event(EnrollmentProgressDTO(
+                    UIState.ENROLLMENT_CAPTURE, "Mantenga la posición...",
+                    plan.accepted_count, plan.target_samples, (), score.total_score,
+                    score.quality_band.value, True,
+                ))
+                return
+            guided = stable.best_guided
+            aligned_face_bytes = stable.best_image
+            restore = getattr(self.adapter, "restore_enrollment_candidate", None)
+            if guided is None or restore is None or not restore(guided):
+                stable.reset(); return
+            score = guided.face_quality_score
+            stable.reset()
+        elif not guided.accepted:
+            self._enrollment_stability.reset()
         if guided.accepted and guided.embedding is not None:
             sample_index = plan.accepted_count
             requested_pose = plan.current.requested_pose
@@ -1039,6 +1111,7 @@ class LiveFaceSession:
             )
             if (
                 result.enrollment_status.casefold() == "enrolled"
+                and not self.profile_photo_after_enrollment
                 and self._thumbnail_consent
                 and self._thumbnails is not None and self._thumbnails.enabled
             ):
@@ -1076,6 +1149,21 @@ class LiveFaceSession:
                 self._error(UIErrorCode.PERSISTENCE_ERROR,
                             "Registro en memoria correcto; la persistencia local falló.", True)
             self._event(result)
+            gallery = self.controller.enrollment.gallery
+            administrative_status = (
+                None if self._administrative_status_resolver is None else
+                self._administrative_status_resolver(result.person_id)
+            )
+            LOGGER.info(
+                "Post-enrollment diagnostic person_present=%s template_count=%d "
+                "gallery_identity_present=%s administrative_status=%s "
+                "recognition_state=NOT_EVALUATED similarity=None shared_gallery=%s",
+                administrative_status is not None,
+                len(gallery.templates(result.person_id)),
+                any(item.person_id == result.person_id for item in gallery.list_identities()),
+                administrative_status,
+                self.controller.monitoring.gallery is gallery,
+            )
             self._publish_application(EnrollmentFinishedEvent(
                 source="live_face_session", session_id=self._session_id,
                 run_id=self._session_id, person_id=result.person_id,
@@ -1089,8 +1177,10 @@ class LiveFaceSession:
                         "El registro no pudo completarse.", False)
         finally:
             self._plan = None
+            self._enrollment_stability.reset()
             self._capture_requested = False
-            self._event_history_suspended.clear()
+            if not self.profile_photo_after_enrollment:
+                self._event_history_suspended.clear()
             self._clear_thumbnail_samples()
             self.adapter.set_thumbnail_capture(False)
             self.adapter.new_evaluator()

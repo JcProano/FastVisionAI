@@ -82,7 +82,7 @@ from src.ui.identification import (
 from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.ui.identification import SQLiteThumbnailIdentityInfoProvider
 from src.core.person_database import (
-    PersonRepository, SQLiteIdentityDataProvider,
+    PersonRepository, SQLiteIdentityDataProvider, PersonStatus,
 )
 from src.ui.person_enrollment import PersonEnrollmentCoordinator
 from src.ui.person_profile import PersonProfileController
@@ -129,6 +129,24 @@ from src.core.audit import AuditCallbackAdapter, AuditRepository, AuditService
 from src.ui.audit import AuditController, AuditLogWindow
 
 LOGGER = logging.getLogger(__name__)
+
+GALLERY_SYNC_WARNING = (
+    "La información civil y la galería biométrica activa no están sincronizadas."
+)
+
+
+def civil_gallery_sync_warning(repository: PersonRepository | None,
+                               gallery: FaceGallery) -> str | None:
+    if repository is None: return None
+    active_ids: set[str] = set()
+    offset = 0
+    while True:
+        page = repository.list(limit=100, offset=offset)
+        active_ids.update(item.person_id for item in page if item.status is PersonStatus.ACTIVE)
+        if len(page) < 100: break
+        offset += len(page)
+    gallery_ids = {item.person_id for item in gallery.list_identities()}
+    return GALLERY_SYNC_WARNING if active_ids != gallery_ids and (active_ids or gallery_ids) else None
 
 
 def local_validation_login_bypass_enabled(settings: dict[str, object]) -> bool:
@@ -826,6 +844,9 @@ def main() -> int:
     application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
+    gallery_sync_warning = civil_gallery_sync_warning(person_repository, startup.gallery)
+    if gallery_sync_warning is not None:
+        LOGGER.warning("Civil/gallery synchronization mismatch detected")
     detection_event_service = build_detection_event_service(settings)
     attendance_controller = build_attendance(
         settings, person_repository, authorization=security.authorization,
@@ -996,6 +1017,13 @@ def main() -> int:
         manual_enrollment_capture=bool(
             settings["guided_capture"].get("manual_capture", True)
         ),
+        enrollment_minimum_quality_score=float(
+            settings["guided_capture"].get("minimum_quality_score", 75.0)
+        ),
+        enrollment_stability_frames=int(
+            settings["guided_capture"].get("stability_frames", 3)
+        ),
+        profile_photo_after_enrollment=True,
         photo_controller=photo_controller,
         photo_capture_policy=AutomaticPhotoPolicy(**settings.get("photo_capture", {})),
         stay_alive_disconnected=True,
@@ -1326,6 +1354,10 @@ def main() -> int:
         on_retake_photo=session.retake_person_photo,
         on_cancel_photo=session.cancel_person_photo,
         enrollment_target_samples=int(settings["guided_capture"]["target_samples"]),
+        manual_enrollment_capture=bool(
+            settings["guided_capture"].get("manual_capture", True)
+        ),
+        profile_photo_after_enrollment=True,
         on_close=close,
         on_people=open_people,
         on_configuration=open_configuration,
@@ -1368,6 +1400,8 @@ def main() -> int:
         audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
         local_validation_login_bypass=local_validation_bypass,
     )
+    if gallery_sync_warning is not None:
+        app.status.configure(text=f"WARNING: {gallery_sync_warning}")
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)
     if startup.error is not None:

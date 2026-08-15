@@ -31,6 +31,8 @@ class FaceCaptureQualityEvaluator:
     def __init__(self, policy: GuidedCapturePolicy) -> None:
         self.policy = policy
         self._accepted: list[FaceEmbedding] = []
+        self._accepted_records: list[tuple[FaceEmbedding, tuple[str, int, int],
+                                           tuple[str, int, float], float]] = []
         self._accepted_sequences: set[tuple[str, int, int]] = set()
         self._accepted_timestamps: set[tuple[str, int, float]] = set()
         self._last_accepted_timestamp: float | None = None
@@ -133,6 +135,9 @@ class FaceCaptureQualityEvaluator:
             else:
                 self._accepted.append(embedding)
                 sequence_key, timestamp_key = _frame_keys(face)
+                self._accepted_records.append(
+                    (embedding, sequence_key, timestamp_key, captured_monotonic)
+                )
                 self._accepted_sequences.add(sequence_key)
                 self._accepted_timestamps.add(timestamp_key)
                 self._last_accepted_timestamp = captured_monotonic
@@ -143,6 +148,44 @@ class FaceCaptureQualityEvaluator:
         return _result((GuidedCaptureState.ACCEPTED,), True, True, True, quality,
                        requested_pose, estimated_pose, face.face_index, run_id, timestamp,
                        embedding)
+
+    def reject_last_accepted(self, result: GuidedCaptureResult) -> bool:
+        """Undo a tentative acceptance rejected by the enrollment score gate."""
+        embedding = result.embedding
+        with self._lock:
+            if embedding is None or not self._accepted_records:
+                return False
+            accepted, sequence_key, timestamp_key, _captured = self._accepted_records[-1]
+            if accepted is not embedding:
+                return False
+            self._accepted_records.pop(); self._accepted.pop()
+            self._accepted_sequences.discard(sequence_key)
+            self._accepted_timestamps.discard(timestamp_key)
+            self._last_accepted_timestamp = (
+                None if not self._accepted_records else self._accepted_records[-1][3]
+            )
+            self._accepted_count -= 1
+            return True
+
+    def restore_accepted(self, result: GuidedCaptureResult) -> bool:
+        """Commit one previously rejected tentative result after UI stability."""
+        embedding = result.embedding
+        if embedding is None:
+            return False
+        sequence_key, timestamp_key = _frame_keys_from_embedding(embedding)
+        captured_monotonic = embedding.frame.monotonic_timestamp
+        with self._lock:
+            if sequence_key in self._accepted_sequences:
+                return False
+            self._accepted.append(embedding)
+            self._accepted_records.append(
+                (embedding, sequence_key, timestamp_key, captured_monotonic)
+            )
+            self._accepted_sequences.add(sequence_key)
+            self._accepted_timestamps.add(timestamp_key)
+            self._last_accepted_timestamp = captured_monotonic
+            self._accepted_count += 1
+            return True
 
     def metrics(self) -> GuidedEvaluatorMetrics:
         with self._lock:
@@ -196,6 +239,12 @@ def _cosine(left, right):
 
 def _frame_keys(face):
     frame = face.frame
+    prefix = frame.source_name, frame.connection_id
+    return (*prefix, frame.sequence_id), (*prefix, frame.monotonic_timestamp)
+
+
+def _frame_keys_from_embedding(embedding: FaceEmbedding):
+    frame = embedding.frame
     prefix = frame.source_name, frame.connection_id
     return (*prefix, frame.sequence_id), (*prefix, frame.monotonic_timestamp)
 
