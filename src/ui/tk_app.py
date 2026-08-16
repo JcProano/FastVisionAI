@@ -285,6 +285,8 @@ class LocalFaceTkApp:
 
         self._form: tk.Toplevel | None = None
         self._enrollment_video: Any | None = None
+        self._enrollment_video_item: Any | None = None
+        self._enrollment_guide_text: Any | None = None
         self._enrollment_progress: Any | None = None
         self._enrollment_quality: Any | None = None
         self._enrollment_reasons: Any | None = None
@@ -573,11 +575,18 @@ class LocalFaceTkApp:
                 text=(f"Muestras: {dto.accepted_samples} / {dto.target_samples}\n"
                       f"{_enrollment_progress_bar(dto.accepted_samples, dto.target_samples)}")
             )
+        if (getattr(self, "_enrollment_video", None) is not None
+                and self._enrollment_guide_text is not None):
+            self._enrollment_video.itemconfigure(
+                self._enrollment_guide_text,
+                text=(f"Paso {min(dto.accepted_samples + 1, dto.target_samples)}/"
+                      f"{dto.target_samples} · {dto.instruction}"),
+            )
         if getattr(self, "_enrollment_quality", None) is not None:
             quality = "No disponible" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
             self._enrollment_quality.configure(text=f"Calidad: {quality}")
         if getattr(self, "_enrollment_reasons", None) is not None:
-            reasons = (f"Muestra capturada {dto.accepted_samples}/{dto.target_samples}"
+            reasons = (f"✓ Muestra guardada {dto.accepted_samples}/{dto.target_samples}"
                        if not dto.current_reasons and dto.accepted_samples else
                        "Buena imagen detectada") if not dto.current_reasons else \
                 "No capturada: " + ", ".join(
@@ -1075,7 +1084,13 @@ class LocalFaceTkApp:
         if enrollment_video is not None:
             try:
                 if enrollment_video.winfo_exists():
-                    enrollment_video.configure(image=photo, text="")
+                    if self._enrollment_video_item is not None:
+                        area_width = max(1, enrollment_video.winfo_width())
+                        area_height = max(1, enrollment_video.winfo_height())
+                        enrollment_video.coords(
+                            self._enrollment_video_item, area_width // 2, area_height // 2,
+                        )
+                        enrollment_video.itemconfigure(self._enrollment_video_item, image=photo)
             except Exception:
                 self._enrollment_video = None
         photo_preview = getattr(self, "_photo_capture_preview", None)
@@ -1106,11 +1121,14 @@ class LocalFaceTkApp:
         if self._photo_capture_window is None:
             window = tk.Toplevel(self.root)
             self._photo_capture_window = window
-            window.title("FOTO DE PERFIL")
+            window.title("CAPTURA DE FOTO DE PERFIL")
             window.geometry("650x650")
             window.protocol("WM_DELETE_WINDOW", self._cancel_person_photo)
-            ttk.Label(window, text="FOTO DE PERFIL",
-                      font=("TkDefaultFont", 15, "bold")).pack(pady=10)
+            self._photo_capture_heading = ttk.Label(
+                window, text="CAPTURA DE FOTO DE PERFIL",
+                font=("TkDefaultFont", 15, "bold"),
+            )
+            self._photo_capture_heading.pack(pady=10)
             self._photo_capture_preview = ttk.Label(
                 window, text="Esperando video", anchor="center",
             )
@@ -1141,6 +1159,9 @@ class LocalFaceTkApp:
                 side="left", padx=4,
             )
         self._photo_capture_status.configure(text=dto.message)
+        self._photo_capture_heading.configure(
+            text="FOTO CAPTURADA" if dto.review else "CAPTURA DE FOTO DE PERFIL",
+        )
         quality = "N/D" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
         self._photo_capture_quality.configure(text=f"Calidad actual: {quality}")
         required = dto.stability_required or 5
@@ -1412,10 +1433,20 @@ class LocalFaceTkApp:
         ttk.Label(form, text="REGISTRO FACIAL", font=("TkDefaultFont", 16, "bold")).pack(
             pady=(16, 8)
         )
-        self._enrollment_video = ttk.Label(
-            form, text="Esperando video en vivo", anchor="center",
+        self._enrollment_video = tk.Canvas(
+            form, background="#202124", highlightthickness=0,
         )
         self._enrollment_video.pack(fill="both", expand=True, padx=18, pady=8)
+        self._enrollment_video_item = self._enrollment_video.create_image(
+            0, 0, anchor="center",
+        )
+        self._enrollment_video.create_oval(
+            230, 45, 530, 420, outline="#54d38a", width=3,
+        )
+        self._enrollment_guide_text = self._enrollment_video.create_text(
+            380, 24, text="Centre su rostro", fill="white",
+            font=("TkDefaultFont", 13, "bold"),
+        )
         self._enrollment_quality = ttk.Label(form, text="Calidad: No disponible")
         self._enrollment_quality.pack(pady=3)
         self._enrollment_progress = ttk.Label(
@@ -1451,6 +1482,8 @@ class LocalFaceTkApp:
         form = getattr(self, "_form", None)
         self._form = None
         self._enrollment_video = None
+        self._enrollment_video_item = None
+        self._enrollment_guide_text = None
         self._enrollment_progress = None
         self._enrollment_quality = None
         self._enrollment_reasons = None
@@ -1602,7 +1635,7 @@ def _value(value: float | str | None) -> str:
 def _enrollment_checklist(accepted: int, target: int) -> str:
     labels = (
         "Frontal", "Ligero giro izquierda", "Ligero giro derecha",
-        "Arriba", "Natural",
+        "Frontal estable", "Natural",
     )
     return "\n".join(
         f"{'✓' if index < accepted else '○'} "
@@ -1631,5 +1664,7 @@ def _enrollment_reason(reason: str) -> str:
         "pose_not_requested": "Siga la pose indicada",
         "too_soon": "No se mueva; espere un momento",
         "near_duplicate": "Cambie ligeramente la pose",
+        "low_quality": "Mejore la iluminación y mantenga el rostro estable",
+        "alignment_failed": "Centre el rostro frente a la cámara",
         "quality_below_enrollment_minimum": "Calidad insuficiente",
     }.get(reason, reason.replace("_", " ").capitalize())

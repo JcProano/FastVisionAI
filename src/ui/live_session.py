@@ -358,7 +358,10 @@ class LiveFaceSession:
                 self._commands()
                 if self._stop.is_set():
                     break
-                requested = self._plan.current.requested_pose if self._plan else CapturePose.FRONTAL
+                requested = (
+                    requested_capture_pose(self._plan.current, self.mirrored_source)
+                    if self._plan else CapturePose.FRONTAL
+                )
                 try:
                     step = self.adapter.process(requested)
                 except CameraAdapterError:
@@ -693,7 +696,7 @@ class LiveFaceSession:
             self._reset_stability(emit=True)
             self._event(PersonPhotoCaptureDTO(
                 UIState.CAPTURE_PERSON_PHOTO, person_id,
-                "Preparando fotografía... Sonría o mantenga expresión natural.", None,
+                "Centre su rostro. Buscando la mejor imagen...", None,
                 False, False, self._photo_replace,
             ))
         except Exception:
@@ -1260,19 +1263,19 @@ def _drain(target: queue.Queue) -> tuple:
 
 
 def operator_instruction(step: CapturePlanStep, mirrored_source: bool) -> str:
-    """Translate an image-coordinate pose into the operator's mirrored perspective.
-
-    CapturePose remains expressed in image coordinates. Only the human-facing
-    instruction is exchanged for LEFT/RIGHT when the preview source is mirrored.
-    FRONTAL, UNKNOWN and the logical order of GuidedCapturePlan are unchanged.
-    """
-    if not mirrored_source:
-        return step.instruction
-    if step.requested_pose is CapturePose.SLIGHT_LEFT:
-        return "Gire ligeramente a la derecha"
-    if step.requested_pose is CapturePose.SLIGHT_RIGHT:
-        return "Gire ligeramente a la izquierda"
+    """Return stable operator-facing guidance; image mirroring is mapped separately."""
     return step.instruction
+
+
+def requested_capture_pose(step: CapturePlanStep, mirrored_source: bool) -> CapturePose:
+    """Map operator-facing left/right guidance to mirrored image coordinates."""
+    if not mirrored_source:
+        return step.requested_pose
+    if step.requested_pose is CapturePose.SLIGHT_LEFT:
+        return CapturePose.SLIGHT_RIGHT
+    if step.requested_pose is CapturePose.SLIGHT_RIGHT:
+        return CapturePose.SLIGHT_LEFT
+    return step.requested_pose
 
 
 def _dashboard_quality(guided: object) -> DashboardQualityDTO:

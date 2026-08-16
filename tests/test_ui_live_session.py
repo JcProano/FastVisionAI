@@ -21,8 +21,9 @@ from src.ui.contracts import (
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 from src.ui.form_validation import validate_registration_form
-from src.ui.live_session import LiveFaceSession, operator_instruction
+from src.ui.live_session import LiveFaceSession, operator_instruction, requested_capture_pose
 from src.ui.mock_runtime import MockUIRuntimeAdapter
+from src.ui.tk_app import _enrollment_reason
 from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.people.controller import PeopleManagerController
 from src.ui.identification import (
@@ -133,6 +134,17 @@ def wait_until(predicate, timeout=.8):
 
 
 class LiveFaceSessionTests(unittest.TestCase):
+    def test_internal_enrollment_reason_codes_are_never_presented_verbatim(self):
+        codes = (
+            "pose_not_requested", "low_interocular_distance", "near_duplicate",
+            "low_quality", "alignment_failed",
+        )
+        for code in codes:
+            with self.subTest(code=code):
+                message = _enrollment_reason(code)
+                self.assertNotIn(code, message)
+                self.assertNotIn("_", message)
+
     def test_enrollment_captures_above_configured_score_without_requiring_100(self):
         class ScoreAdapter(MockUIRuntimeAdapter):
             def process(self, requested_pose):
@@ -409,8 +421,10 @@ class LiveFaceSessionTests(unittest.TestCase):
         frontal = CapturePlanStep("front", CapturePose.FRONTAL, "Mire al frente")
         self.assertEqual(operator_instruction(left, False), "Gire ligeramente a la izquierda")
         self.assertEqual(operator_instruction(right, False), "Gire ligeramente a la derecha")
-        self.assertEqual(operator_instruction(left, True), "Gire ligeramente a la derecha")
-        self.assertEqual(operator_instruction(right, True), "Gire ligeramente a la izquierda")
+        self.assertEqual(operator_instruction(left, True), "Gire ligeramente a la izquierda")
+        self.assertEqual(operator_instruction(right, True), "Gire ligeramente a la derecha")
+        self.assertEqual(requested_capture_pose(left, True), CapturePose.SLIGHT_RIGHT)
+        self.assertEqual(requested_capture_pose(right, True), CapturePose.SLIGHT_LEFT)
         self.assertEqual(operator_instruction(frontal, True), "Mire al frente")
 
     def test_mirrored_presentation_preserves_guided_plan_logical_order(self):
@@ -426,9 +440,11 @@ class LiveFaceSessionTests(unittest.TestCase):
             CapturePose.SLIGHT_RIGHT, CapturePose.FRONTAL, CapturePose.FRONTAL,
         ])
         self.assertEqual(messages, [
-            "Mire directamente a la cámara", "Gire ligeramente a la derecha",
-            "Gire ligeramente a la izquierda", "Levante ligeramente el rostro",
-            "Posición natural",
+            "Mire directamente a la cámara",
+            "Gire ligeramente el rostro hacia la izquierda",
+            "Gire ligeramente el rostro hacia la derecha",
+            "Mantenga otra posición frontal estable",
+            "Mantenga una posición natural",
         ])
 
     def test_enrollment_progress_message_uses_operator_perspective(self):
@@ -442,7 +458,7 @@ class LiveFaceSessionTests(unittest.TestCase):
             seen.extend(session.drain_events())
             return any(isinstance(item, EnrollmentProgressDTO) and
                        item.accepted_samples == 1 and
-                       item.instruction == "Gire ligeramente a la derecha"
+                       item.instruction == "Gire ligeramente el rostro hacia la izquierda"
                        for item in seen)
 
         self.assertTrue(wait_until(has_mirrored_left_step))

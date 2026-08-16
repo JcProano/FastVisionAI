@@ -1,5 +1,6 @@
 import inspect
 import json
+import dataclasses
 import unittest
 from unittest.mock import Mock, patch
 from datetime import datetime, timezone
@@ -103,7 +104,7 @@ class IdentificationPopupTests(unittest.TestCase):
         source = inspect.getsource(IdentificationPopupWindow)
         for expected in (
             "✔ IDENTIFICACIÓN EXITOSA", "PERSONA IDENTIFICADA",
-            "PERSONA NO REGISTRADA EN LA GALERÍA LOCAL",
+            "PERSONA NO REGISTRADA",
             "Estado: IDENTIFICADO", "Ver detalles", "Registrar persona",
             "Sin fotografía registrada",
             "winfo_exists", "lift",
@@ -128,6 +129,14 @@ class IdentificationPopupTests(unittest.TestCase):
         popup, _, _, _, _ = self.popup()
         popup._render(self.registered(thumbnail=False))
         self.assertIn("Sin fotografía registrada", popup.thumbnail.values["text"])
+
+    def test_unknown_popup_translates_internal_quality_codes(self):
+        popup, _, _, _, _ = self.popup()
+        dto = self.unknown()
+        dto = dataclasses.replace(dto, message="pose_not_requested")
+        popup._render(dto)
+        self.assertNotIn("pose_not_requested", popup.details.values["text"])
+        self.assertIn("centre el rostro", popup.details.values["text"])
 
     def test_missing_registered_data_is_explicitly_unavailable(self):
         popup, _, _, _, _ = self.popup()

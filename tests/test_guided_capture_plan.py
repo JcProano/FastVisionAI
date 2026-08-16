@@ -13,7 +13,7 @@ class GuidedCapturePlanTests(unittest.TestCase):
         for _ in range(5):
             poses.append(plan.accept().key)
         self.assertEqual(poses, ["frontal", "slight_left", "slight_right",
-                                 "slight_up", "natural"])
+                                 "frontal_stable", "natural"])
         self.assertTrue(plan.completed)
         self.assertEqual(plan.covered_poses(), tuple(poses))
 

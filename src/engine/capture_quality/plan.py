@@ -17,13 +17,14 @@ class CapturePlanStep:
 DEFAULT_STEPS = (
     CapturePlanStep("frontal", CapturePose.FRONTAL, "Mire directamente a la cámara"),
     CapturePlanStep("slight_left", CapturePose.SLIGHT_LEFT,
-                    "Gire ligeramente a la izquierda"),
+                    "Gire ligeramente el rostro hacia la izquierda"),
     CapturePlanStep("slight_right", CapturePose.SLIGHT_RIGHT,
-                    "Gire ligeramente a la derecha"),
-    # Pitch is not estimated by the current RGB pose evaluator. "Up" and natural
-    # therefore retain the existing frontal biometric category and are UI guidance.
-    CapturePlanStep("slight_up", CapturePose.FRONTAL, "Levante ligeramente el rostro"),
-    CapturePlanStep("natural", CapturePose.FRONTAL, "Posición natural"),
+                    "Gire ligeramente el rostro hacia la derecha"),
+    # The RGB evaluator has no vertical pitch category. This is a second frontal
+    # stability/diversity step rather than an unverifiable "look up" instruction.
+    CapturePlanStep("frontal_stable", CapturePose.FRONTAL,
+                    "Mantenga otra posición frontal estable"),
+    CapturePlanStep("natural", CapturePose.FRONTAL, "Mantenga una posición natural"),
 )
 
 

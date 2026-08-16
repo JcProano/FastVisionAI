@@ -200,9 +200,9 @@ class IdentificationPopupWindow:
             self._registered_deadline = self._monotonic() + 5.0
             self._update_registered_countdown()
         else:
-            self.title.configure(text="PERSONA NO REGISTRADA EN LA GALERÍA LOCAL")
+            self.title.configure(text="PERSONA NO REGISTRADA")
             self.right_title.configure(text="REGISTRO LOCAL")
-            self.details.configure(text=dto.message)
+            self.details.configure(text=_friendly_unknown_message(dto.message))
             self._person_id = None
             self.primary.configure(text="Registrar persona", command=self._register)
             self.secondary.configure(text="Ignorar", command=self.dismiss)
@@ -285,6 +285,17 @@ class IdentificationPopupWindow:
 
     def close(self) -> None:
         self.dismiss("application_close")
+
+
+def _friendly_unknown_message(message: str) -> str:
+    lowered = message.casefold()
+    quality_markers = (
+        "pose_not_requested", "low_interocular_distance", "low_quality",
+        "alignment_failed", "blurry", "too_dark", "too_bright",
+    )
+    if any(marker in lowered for marker in quality_markers):
+        return "Mejore la iluminación, centre el rostro y manténgase estable."
+    return "No existe una identidad registrada para este rostro."
 
 
 def _format_datetime(value) -> str:
