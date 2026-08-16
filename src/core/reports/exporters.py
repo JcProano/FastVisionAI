@@ -41,7 +41,7 @@ class ReportExporter:
 
 
 def _table(report):
-    values = report.days if isinstance(report, DateRangeReportDTO) else (report,)
+    values = getattr(report, "days", getattr(report, "people", (report,)))
     if not values or not is_dataclass(values[0]):
         raise ReportExportError("report type is not exportable")
     records = [asdict(value) for value in values]

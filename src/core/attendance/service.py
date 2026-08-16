@@ -2,14 +2,16 @@ from __future__ import annotations
 import time,uuid
 from datetime import datetime,timezone
 from typing import Callable
+from zoneinfo import ZoneInfo
+from src.core.time_provider import Clock
 from src.core.person_database import PersonRepository,PersonStatus
 from .contracts import *
 from .policy import AttendancePolicy
 from .repository import AttendanceRepository
 
 class AttendanceService:
-    def __init__(self,repository:AttendanceRepository,people:PersonRepository,policy:AttendancePolicy,*,monotonic:Callable[[],float]=time.monotonic,utcnow:Callable[[],datetime]=lambda:datetime.now(timezone.utc)):
-        self.repository=repository;self.people=people;self.policy=policy;self._monotonic=monotonic;self._utcnow=utcnow;self._observations={}
+    def __init__(self,repository:AttendanceRepository,people:PersonRepository,policy:AttendancePolicy,*,monotonic:Callable[[],float]=time.monotonic,utcnow:Callable[[],datetime]=lambda:datetime.now(timezone.utc),clock:Clock|None=None):
+        self.repository=repository;self.people=people;self.policy=policy;self._monotonic=monotonic;self._utcnow=utcnow;self._observations={};self.clock=clock or Clock()
     def manual_check_in(self,person_id,**kwargs):return self._manual(person_id,AttendanceEventType.MANUAL_CHECK_IN,**kwargs)
     def manual_check_out(self,person_id,**kwargs):return self._manual(person_id,AttendanceEventType.MANUAL_CHECK_OUT,**kwargs)
     def _manual(self,person_id,event_type,*,timestamp=None,camera_id=None,notes=None):
@@ -35,10 +37,33 @@ class AttendanceService:
             record=AttendanceRecord(str(uuid.uuid4()),person_id,proposed,moment,source_event_id,camera_id,None,self._utcnow());self.repository.create(record);self._observations.pop(person_id,None)
             return AttendanceEvaluationResult(True,proposed,"recorded",True,record)
         except Exception:return AttendanceEvaluationResult(False,proposed,"persistence_error",True)
+    def consume_detection_event(self,person_id,*,source_event_id,camera_id=None,timestamp=None):
+        if not self.policy.enabled:return AttendanceEvaluationResult(False,None,"attendance_disabled",False)
+        if not self.policy.automatic_attendance_enabled:return AttendanceEvaluationResult(False,None,"automatic_attendance_disabled",False)
+        try:
+            parsed=uuid.UUID(str(person_id))
+            if str(parsed)!=str(person_id).strip().lower():return AttendanceEvaluationResult(False,None,"invalid_person_id",True)
+        except Exception:return AttendanceEvaluationResult(False,None,"invalid_person_id",True)
+        if not source_event_id or not str(source_event_id).strip():return AttendanceEvaluationResult(False,None,"invalid_source_event",True)
+        if not self._active(person_id):return AttendanceEvaluationResult(False,None,"person_not_active",True)
+        moment=timestamp or self._utcnow()
+        if moment.tzinfo is None:return AttendanceEvaluationResult(False,None,"invalid_timestamp",True)
+        moment=moment.astimezone(timezone.utc);created=self._utcnow().astimezone(timezone.utc)
+        local_day=moment.astimezone(ZoneInfo(self.policy.timezone)).date()
+        start,end=self.clock.local_day_utc_bounds(local_day,self.policy.timezone)
+        try:
+            reason,record=self.repository.consume_automatic_toggle(
+                person_id=person_id,source_event_id=str(source_event_id),timestamp=moment,
+                camera_id=camera_id,created_at=created,day_start=start,day_end=end,
+                duplicate_cooldown_seconds=self.policy.duplicate_event_cooldown_seconds,
+                minimum_checkout_interval_seconds=self.policy.minimum_time_between_check_in_out_seconds,
+            )
+            return AttendanceEvaluationResult(record is not None,
+                None if record is None else record.event_type,reason,True,record)
+        except Exception:return AttendanceEvaluationResult(False,None,"persistence_error",True)
     def _active(self,person_id):
         try:r=self.people.get_by_person_id(person_id);return r is not None and r.status is PersonStatus.ACTIVE
         except Exception:return False
 def _next(last):
     if last in {AttendanceEventType.CHECK_IN,AttendanceEventType.MANUAL_CHECK_IN}:return AttendanceEventType.CHECK_OUT
     return AttendanceEventType.CHECK_IN
-

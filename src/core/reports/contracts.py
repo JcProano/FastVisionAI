@@ -70,6 +70,11 @@ class DateRangeDayDTO:
     unique_people: int
     check_ins: int
     check_outs: int
+    attendance_present: int = 0
+    worked_seconds: int = 0
+    late_people: int = 0
+    overtime_seconds: int = 0
+    incomplete_days: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +103,11 @@ class PersonAttendanceReportDTO:
     last_attendance_at: datetime | None
     rows_considered: int
     truncated: bool
+    days_present: int = 0
+    days_late: int = 0
+    worked_seconds: int = 0
+    overtime_seconds: int = 0
+    incomplete_days: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,3 +155,18 @@ class ReportExportResultDTO:
     display_target: str | None
     message: str
     unavailable: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class AttendanceDailyDetailReportDTO:
+    date: date
+    days: tuple[object, ...]
+    rows_considered: int
+
+
+@dataclass(frozen=True, slots=True)
+class AttendanceMonthlyReportDTO:
+    year: int
+    month: int
+    people: tuple[object, ...]
+    rows_considered: int

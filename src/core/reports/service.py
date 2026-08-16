@@ -5,10 +5,12 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from src.core.attendance import AttendanceEventType, AttendanceQuery
+from src.core.attendance import AttendancePolicy, monthly_summary, project_days
 from src.core.detection_events import DetectionEventQuery, DetectionEventType
 
 from .contracts import (
     DailyReportDTO, DateRangeDayDTO, DateRangeReportDTO, DetectionSummaryDTO,
+    AttendanceDailyDetailReportDTO, AttendanceMonthlyReportDTO,
     PersonAttendanceReportDTO, RecentAttendanceDTO, RecentDetectionDTO, ReportError,
     ReportPolicy, ReportValidationError, SystemSummaryDTO,
 )
@@ -18,10 +20,31 @@ _OUTS = {AttendanceEventType.CHECK_OUT, AttendanceEventType.MANUAL_CHECK_OUT}
 
 
 class ReportService:
-    def __init__(self, people, detections, attendance, policy: ReportPolicy) -> None:
+    def __init__(self, people, detections, attendance, policy: ReportPolicy,
+                 attendance_policy: AttendancePolicy | None = None) -> None:
         self.people = people; self.detections = detections
         self.attendance = attendance; self.policy = policy
         self.timezone = ZoneInfo(policy.presentation_timezone)
+        self.attendance_policy = attendance_policy or AttendancePolicy(
+            timezone=policy.presentation_timezone,
+        )
+
+    def attendance_daily_detail(self, day: date) -> AttendanceDailyDetailReportDTO:
+        start,end=self._bounds(day,day);rows,truncated=self._attendance_rows(start,end)
+        values=project_days(rows,self.attendance_policy,today=day)
+        return AttendanceDailyDetailReportDTO(day,values,len(rows))
+
+    def attendance_monthly(self, year: int, month: int,
+                           person_id: str | None = None) -> AttendanceMonthlyReportDTO:
+        if not 1 <= month <= 12: raise ReportValidationError("month is invalid")
+        start_day=date(year,month,1)
+        next_day=date(year+1,1,1) if month==12 else date(year,month+1,1)
+        start,end=self._bounds(start_day,next_day-timedelta(days=1))
+        rows,truncated=self._attendance_rows(start,end)
+        days=project_days(rows,self.attendance_policy,today=None)
+        people=(person_id,) if person_id else tuple(sorted({item.person_id for item in days}))
+        values=tuple(monthly_summary(days,item,year,month) for item in people)
+        return AttendanceMonthlyReportDTO(year,month,values,len(rows))
 
     def daily_report(self, day: date) -> DailyReportDTO:
         start, end = self._bounds(day, day)
@@ -67,10 +90,15 @@ class ReportService:
             while current <= date_to:
                 local_d = [row for row in detections if self._local(row.timestamp).date() == current]
                 local_a = [row for row in attendance if self._local(row.timestamp).date() == current]
+                projected = project_days(tuple(local_a), self.attendance_policy, today=date_to)
                 days.append(DateRangeDayDTO(
                     current, len(local_d), len({r.person_id for r in local_d if r.person_id}),
                     sum(r.event_type in _INS for r in local_a),
                     sum(r.event_type in _OUTS for r in local_a),
+                    len(projected), sum(r.worked_seconds for r in projected),
+                    sum(r.late_seconds > 0 for r in projected),
+                    sum(r.overtime_seconds for r in projected),
+                    sum(r.status.value == "INCOMPLETE" for r in projected),
                 ))
                 current += timedelta(days=1)
             return DateRangeReportDTO(
@@ -91,6 +119,7 @@ class ReportService:
             attendance, at = self._attendance_rows(start, end, person_id=person_id)
             detection_times = sorted(row.timestamp for row in detections)
             attendance_times = sorted(row.timestamp for row in attendance)
+            projected = project_days(attendance, self.attendance_policy, today=date_to)
             return PersonAttendanceReportDTO(
                 person.person_id, f"{person.first_name} {person.last_name}",
                 _mask(person.cedula), person.status.value, date_from, date_to,
@@ -101,6 +130,10 @@ class ReportService:
                 self._local(attendance_times[0]) if attendance_times else None,
                 self._local(attendance_times[-1]) if attendance_times else None,
                 len(detections) + len(attendance), dt or at,
+                len(projected), sum(r.late_seconds > 0 for r in projected),
+                sum(r.worked_seconds for r in projected),
+                sum(r.overtime_seconds for r in projected),
+                sum(r.status.value == "INCOMPLETE" for r in projected),
             )
         except ReportValidationError: raise
         except Exception as exc: raise ReportError("person report could not be generated") from exc

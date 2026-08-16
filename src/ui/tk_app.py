@@ -441,8 +441,8 @@ class LocalFaceTkApp:
         self.detection_events.pack(fill="both", expand=True)
         ttk.Button(events_card, text="Historial", command=on_detection_history or
                    (lambda: None), state="normal" if self._can("VIEW_DETECTION_HISTORY") else "disabled").pack(anchor="e", pady=(4, 0))
-        attendance_card=ttk.LabelFrame(side,text="Asistencia hoy",padding=6);attendance_card.pack(fill="x",pady=6)
-        self.attendance_summary=ttk.Label(attendance_card,text="Entradas: N/D\nSalidas: N/D\nPersonas únicas: N/D\nÚltima marcación: N/D");self.attendance_summary.pack(anchor="w")
+        attendance_card=ttk.LabelFrame(side,text="ASISTENCIA HOY",padding=6);attendance_card.pack(fill="x",pady=6)
+        self.attendance_summary=ttk.Label(attendance_card,text="Presentes: N/D\nCon salida: N/D\nPendientes: N/D\nRetrasos: N/D");self.attendance_summary.pack(anchor="w")
         ttk.Button(attendance_card,text="Abrir asistencia",command=on_attendance_history or (lambda:None),state="normal" if self._can("VIEW_ATTENDANCE") else "disabled").pack(anchor="e")
         reports_card = ttk.LabelFrame(side, text="Hoy", padding=6); reports_card.pack(fill="x", pady=6)
         self.report_summary = ttk.Label(
@@ -961,8 +961,9 @@ class LocalFaceTkApp:
                 self._detection_events_rendered = recent_events
         if self._get_attendance_summary is not None:
             try:
-                item=self._get_attendance_summary();last=item.last_event_at or "N/D"
-                self.attendance_summary.configure(text=f"Entradas: {item.total_check_ins}\nSalidas: {item.total_check_outs}\nPersonas únicas: {item.unique_people}\nÚltima marcación: {last}")
+                item=self._get_attendance_summary()
+                latest="\n".join(f"{name} — {'Entrada' if kind.endswith('CHECK_IN') else 'Salida'} {when.astimezone(ZoneInfo('America/Guayaquil')):%H:%M}" for name,kind,when in item.latest)
+                self.attendance_summary.configure(text=f"Presentes: {item.present}\nCon salida: {item.completed}\nPendientes: {item.pending}\nRetrasos: {item.late}"+(f"\nÚltimos:\n{latest}" if latest else ""))
             except Exception:self.attendance_summary.configure(text="Asistencia no disponible")
 
     def _refresh_stability(self) -> None:

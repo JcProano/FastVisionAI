@@ -15,3 +15,11 @@ class ValidatorTests(unittest.TestCase):
  def test_current_project_config_valid(self):
   import json
   candidate=json.loads(Path("config/local_face_validation.dev.json").read_text());self.assertTrue(ConfigurationValidator(Path.cwd()).validate(candidate,ConfigurationProfile.DEVELOPMENT).valid)
+ def test_production_automatic_attendance_requires_explicit_valid_schedule(self):
+  with TemporaryDirectory() as d:
+   validator=ConfigurationValidator(Path(d));base={"attendance":{"automatic_attendance_enabled":True}}
+   self.assertFalse(validator.validate(base,ConfigurationProfile.PRODUCTION).valid)
+   base["attendance"]["work_schedule"]={"timezone":"America/Guayaquil","workday_start":"08:00","workday_end":"17:00","late_after":"08:10","overtime_after":"17:00"}
+   self.assertTrue(validator.validate(base,ConfigurationProfile.PRODUCTION).valid)
+   base["attendance"]["work_schedule"]["late_after"]="8am"
+   self.assertFalse(validator.validate(base,ConfigurationProfile.PRODUCTION).valid)

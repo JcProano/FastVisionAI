@@ -11,6 +11,7 @@ class ReportController:
     REPORT_TYPES = (
         "Resumen diario", "Rango de fechas", "Por persona",
         "Resumen de detecciones", "Resumen del sistema",
+        "Detalle diario de asistencia", "Resumen mensual de asistencia",
     )
 
     def __init__(self, service, exporter: ReportExporter | None = None, authorization=None, audit_callback=None, clock:Clock|None=None) -> None:
@@ -40,6 +41,8 @@ class ReportController:
         elif report_type == "Resumen de detecciones":
             result = self.service.detection_summary(start, end)
         elif report_type == "Resumen del sistema": result = self.service.system_summary(start)
+        elif report_type == "Detalle diario de asistencia": result = self.service.attendance_daily_detail(start)
+        elif report_type == "Resumen mensual de asistencia": result = self.service.attendance_monthly(start.year,start.month,person_id.strip() if person_id else None)
         else: raise ReportValidationError("report type is invalid")
         self.last_report = result
         self.last_report_type = report_type

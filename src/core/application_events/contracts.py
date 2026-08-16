@@ -106,6 +106,16 @@ class DetectionEventStoredEvent(ApplicationEvent):
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class AttendanceRecordedEvent(ApplicationEvent):
+    attendance_id: str
+    person_id: str
+    attendance_event_type: str
+    camera_id: str | None
+    source_event_id: str
+    event_type: str = field(default="attendance.recorded", init=False)
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class PopupRequestedEvent(ApplicationEvent):
     popup_action: str
     person_id: str | None
@@ -119,4 +129,3 @@ class PopupDismissedEvent(ApplicationEvent):
     popup_type: str
     reason: str
     event_type: str = field(default="popup.dismissed", init=False)
-

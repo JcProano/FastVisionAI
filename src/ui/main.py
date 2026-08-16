@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.action_executor import ActionExecutor, ActionExecutorPolicy
@@ -31,7 +32,7 @@ from src.engine.stability import StabilityPolicy, StabilityTracker
 from src.core.config_manager import PROJECT_ROOT
 from src.core.application_events import (
     ApplicationEvent, ApplicationEventBus, ApplicationEventDiagnosticsStore,
-    PopupDismissedEvent,
+    AttendanceRecordedEvent, DetectionEventStoredEvent, PopupDismissedEvent,
 )
 from src.ui.controller import LocalFaceUIController
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
@@ -94,7 +95,8 @@ from src.core.attendance import AttendancePolicy, AttendanceRepository, Attendan
 from src.ui.attendance import AttendanceUIController
 from src.ui.attendance.tk_window import AttendanceHistoryWindow
 from src.ui.action_adapters import (
-    DetectionEventServiceActionAdapter, IdentificationPopupActionAdapter,
+    AutomaticAttendanceEventAdapter, DetectionEventServiceActionAdapter,
+    IdentificationPopupActionAdapter,
 )
 from src.validation.guided_face_capture import load_guided_profile
 from src.core.reports import ReportPolicy, ReportService
@@ -452,6 +454,10 @@ def build_attendance(
     # Return before even resolving a path: disabled mode must not access the database.
     if not bool(configuration.get("enabled", False)) or people is None:
         return None
+    if (settings.get("profile_name") == "local_face_validation_prod"
+            and bool(configuration.get("automatic_attendance_enabled", False))
+            and not isinstance(configuration.get("work_schedule"), dict)):
+        raise ValueError("production automatic attendance requires explicit work_schedule")
     configured = Path(str(
         configuration.get("database_path", "data/fastvision/attendance.db")
     ))
@@ -489,6 +495,17 @@ def build_attendance(
         allow_manual_events=bool(configuration.get("allow_manual_events", True)),
         policy_name=str(configuration.get("policy_name", "attendance_manual_validation")),
         policy_version=str(configuration.get("policy_version", "1.0")),
+        automatic_mode=str(configuration.get("automatic_mode", "TOGGLE_DAILY")),
+        timezone=str((configuration.get("work_schedule") or {}).get(
+            "timezone", "America/Guayaquil")),
+        workday_start=str((configuration.get("work_schedule") or {}).get(
+            "workday_start", "08:00")),
+        workday_end=str((configuration.get("work_schedule") or {}).get(
+            "workday_end", "17:00")),
+        late_after=str((configuration.get("work_schedule") or {}).get(
+            "late_after", "08:10")),
+        overtime_after=str((configuration.get("work_schedule") or {}).get(
+            "overtime_after", "17:00")),
     )
     service = AttendanceService(repository, people, policy)
     return AttendanceUIController(service, repository, people, authorization)
@@ -664,7 +681,8 @@ def build_application_events(
     return bus, diagnostics
 
 
-def build_reports(settings, people, detections, attendance, authorization=None):
+def build_reports(settings, people, detections, attendance, authorization=None,
+                  attendance_policy=None):
     configuration = settings.get("reports", {})
     if not isinstance(configuration, dict):
         raise ValueError("reports configuration must be an object")
@@ -679,7 +697,8 @@ def build_reports(settings, people, detections, attendance, authorization=None):
             configuration.get("presentation_timezone", "America/Guayaquil")
         ),
     )
-    return ReportController(ReportService(people, detections, attendance, policy), authorization=authorization)
+    return ReportController(ReportService(people, detections, attendance, policy,
+                                          attendance_policy), authorization=authorization)
 
 
 def build_people_search(settings, controller, thumbnail_manager):
@@ -851,11 +870,19 @@ def main() -> int:
     attendance_controller = build_attendance(
         settings, person_repository, authorization=security.authorization,
     )
+    automatic_attendance_adapter = None
+    if attendance_controller is not None:
+        automatic_attendance_adapter = AutomaticAttendanceEventAdapter(
+            attendance_controller.service, application_events,
+        )
+        application_events.subscribe(DetectionEventStoredEvent,
+                                     automatic_attendance_adapter)
     report_controller = build_reports(
         settings, person_repository,
         None if detection_event_service is None else detection_event_service.repository,
         None if attendance_controller is None else attendance_controller.repository,
         security.authorization,
+        None if attendance_controller is None else attendance_controller.service.policy,
     )
     stability_tracker = build_stability_tracker(settings)
     identification_policy_engine = build_identification_policy_engine(settings)
@@ -891,6 +918,8 @@ def main() -> int:
             SQLiteIdentityDataProvider(person_repository), thumbnail_manager, startup.gallery,
         )
     )
+    if attendance_controller is not None:
+        attendance_controller.identity_provider = identity_provider
     identification_controller = IdentificationPresentationController(
         IdentificationPopupPolicy(
             enabled=bool(popup_settings.get("enabled", True)),
@@ -1117,7 +1146,7 @@ def main() -> int:
         if attendance_controller is None:return
         current=attendance_window.get("window")
         if current is not None and current.window.winfo_exists():current.focus();return
-        attendance_window["window"]=AttendanceHistoryWindow(root,attendance_controller,on_close=lambda:attendance_window.pop("window",None))
+        attendance_window["window"]=AttendanceHistoryWindow(root,attendance_controller,on_close=lambda:attendance_window.pop("window",None),on_view_person=lambda person_id:open_profile(person_id))
 
     def open_reports():
         if report_controller is None: return
@@ -1342,6 +1371,26 @@ def main() -> int:
                 run_id=session.session_id, popup_type=popup_type, reason=reason,
             ))),
     )
+    if attendance_controller is not None:
+        def show_attendance_popup(event: AttendanceRecordedEvent, attempts: int = 0) -> None:
+            if identification_popup.active:
+                if attempts < 20:
+                    root.after(250, lambda: show_attendance_popup(event, attempts + 1))
+                return
+            person = identity_provider.get_person(event.person_id)
+            name = "Persona registrada" if person is None else person.display_name
+            local = event.timestamp.astimezone(ZoneInfo("America/Guayaquil"))
+            if event.attendance_event_type == "CHECK_IN":
+                title = "✓ ENTRADA REGISTRADA"
+                body = f"{name}\nHora: {local:%H:%M:%S}"
+            else:
+                title = "✓ SALIDA REGISTRADA"
+                detail = attendance_controller.detail(event.person_id, local.date())
+                worked = 0 if detail is None else detail.day.worked_seconds
+                body = f"{name}\nHora salida: {local:%H:%M:%S}\nHoras trabajadas: {worked // 3600:02d}:{worked % 3600 // 60:02d}"
+            messagebox.showinfo(title, body, parent=root)
+        application_events.subscribe(AttendanceRecordedEvent,
+            lambda event: root.after(0, lambda: show_attendance_popup(event)))
 
     app = LocalFaceTkApp(
         root,
@@ -1381,7 +1430,7 @@ def main() -> int:
                               lambda: history_controller.recent_identifications(5)),
         on_detection_history=open_detection_history,
         get_attendance_summary=(None if attendance_controller is None else
-                                attendance_controller.daily_summary),
+                                attendance_controller.attendance_today),
         on_attendance_history=open_attendance_history,
         on_reports=open_reports,
         get_daily_report=(None if report_controller is None else

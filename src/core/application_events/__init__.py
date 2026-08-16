@@ -6,6 +6,7 @@ from .diagnostics import ApplicationEventDiagnostic, ApplicationEventDiagnostics
 
 __all__ = [
     "ActionExecutionUpdatedEvent", "ApplicationEvent", "ApplicationEventBus",
+    "AttendanceRecordedEvent",
     "ApplicationEventDiagnostic", "ApplicationEventDiagnosticsStore",
     "ApplicationEventValidationError", "DecisionUpdatedEvent",
     "DetectionEventStoredEvent", "EnrollmentCancelledEvent", "EnrollmentFinishedEvent",

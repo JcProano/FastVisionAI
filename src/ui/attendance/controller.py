@@ -8,11 +8,12 @@ from src.core.time_provider import Clock
 
 from src.core.attendance import (
     AttendanceDTO, AttendanceEventType, AttendancePolicy, AttendanceQuery,
-    AttendanceRepository, AttendanceService,
+    AttendanceRepository, AttendanceService, project_days, today_summary,
 )
 from src.core.person_database import PersonRepository
 
-from .contracts import AttendanceListDTO, AttendanceUIResult, PersonAttendanceSummaryDTO
+from .contracts import (AttendanceDashboardDTO, AttendanceDayDTO, AttendanceDayListDTO, AttendanceDetailDTO,
+                        AttendanceListDTO, AttendanceUIResult, PersonAttendanceSummaryDTO)
 
 
 class AttendanceUIController:
@@ -27,6 +28,7 @@ class AttendanceUIController:
         self.authorization = authorization
         self.audit_callback = audit_callback
         self.clock=clock or Clock();self.presentation_timezone=presentation_timezone
+        self.identity_provider = None
 
     def manual_check_in(self, person_id: str, **kwargs: object) -> AttendanceUIResult:
         self._require("MANUAL_ATTENDANCE")
@@ -63,6 +65,54 @@ class AttendanceUIController:
 
     def daily_summary(self, day: date | None = None):
         selected=day or self.clock.local_today(self.presentation_timezone);start,end=self.clock.local_day_utc_bounds(selected,self.presentation_timezone);return self.repository.summary_between(selected,start,end)
+
+    def day_list(self, *, day: date | None = None, name: str | None = None,
+                 cedula: str | None = None, status: str | None = None) -> AttendanceDayListDTO:
+        self._require("VIEW_ATTENDANCE")
+        selected = day or self.clock.local_today(self.presentation_timezone)
+        start,end=self.clock.local_day_utc_bounds(selected,self.presentation_timezone)
+        from datetime import timedelta
+        rows=self.repository.query(AttendanceQuery(date_from=start,date_to=end-timedelta(microseconds=1),limit=500))
+        values=[]
+        for item in project_days(rows,self.service.policy,today=self.clock.local_today(self.presentation_timezone)):
+            person=self.people.get_by_person_id(item.person_id)
+            display=None if person is None else f"{person.first_name} {person.last_name}"
+            masked=None if person is None else "******"+person.cedula[-4:]
+            if name and (display is None or name.casefold().strip() not in display.casefold()):continue
+            if cedula and (person is None or person.cedula != cedula.strip()):continue
+            if status and item.status.value != status:continue
+            values.append(AttendanceDayDTO(item.person_id,item.local_date,display,masked,
+                item.check_in_utc,item.check_out_utc,item.worked_seconds,item.late_seconds,
+                item.overtime_seconds,item.status.value,item.check_in_source,item.check_out_source,
+                item.check_in_camera,item.check_out_camera))
+        return AttendanceDayListDTO(tuple(values),len(values),f"{len(values)} jornadas")
+
+    def attendance_today(self):
+        self._require("VIEW_ATTENDANCE")
+        selected=self.clock.local_today(self.presentation_timezone)
+        start,end=self.clock.local_day_utc_bounds(selected,self.presentation_timezone)
+        from datetime import timedelta
+        rows=self.repository.query(AttendanceQuery(date_from=start,date_to=end-timedelta(microseconds=1),limit=500))
+        days=project_days(rows,self.service.policy,today=selected)
+        summary=today_summary(days,rows,selected)
+        latest=[]
+        for row in rows[:5]:
+            person=self.people.get_by_person_id(row.person_id)
+            name="Persona" if person is None else f"{person.first_name} {person.last_name}"
+            latest.append((name,row.event_type.value,row.timestamp))
+        return AttendanceDashboardDTO(summary.present,summary.completed,summary.pending,
+                                      summary.late,tuple(latest))
+
+    def detail(self, person_id: str, day: date) -> AttendanceDetailDTO | None:
+        self._require("VIEW_ATTENDANCE")
+        selected=next((item for item in self.day_list(day=day).days
+                       if item.person_id==person_id),None)
+        if selected is None:return None
+        person=thumbnail=None
+        if self.identity_provider is not None:
+            person=self.identity_provider.get_person(person_id)
+            thumbnail=self.identity_provider.get_thumbnail(person_id)
+        return AttendanceDetailDTO(selected,person,thumbnail)
 
     def person_summary(
         self, person_id: str, day: date | None = None,

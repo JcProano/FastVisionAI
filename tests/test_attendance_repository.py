@@ -16,7 +16,7 @@ class AttendanceRepositoryTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.repository = AttendanceRepository(self.root / "nested" / "attendance.db")
-        self.assertEqual(self.repository.initialize(), 1)
+        self.assertEqual(self.repository.initialize(), 2)
         self.now = datetime(2026, 1, 2, 12, tzinfo=timezone.utc)
 
     def tearDown(self):

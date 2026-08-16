@@ -25,8 +25,8 @@ def run(configs:tuple[Path,...],*,require_clean=False,run_tests=False,backup:Pat
   __import__("src.ui.main");__import__("src.core.backup");__import__("src.core.audit");messages.append("OK imports esenciales")
  except Exception:ok=False;messages.append("FAIL imports esenciales")
  schemas=(PEOPLE_SCHEMA,EVENTS_SCHEMA,ATTENDANCE_SCHEMA,USERS_SCHEMA,AUDIT_SCHEMA,BACKUP_FORMAT_VERSION)
- if schemas!=(1,1,1,1,1,1):ok=False;messages.append("FAIL schemas incompatibles")
- else:messages.append("OK schemas SQLite/backup versión 1")
+ if schemas!=(1,1,2,1,1,1):ok=False;messages.append("FAIL schemas incompatibles")
+ else:messages.append("OK schemas SQLite; attendance versión 2")
  loader=ConfigurationLoader(ConfigurationValidator(ROOT))
  for path in configs:
   try:

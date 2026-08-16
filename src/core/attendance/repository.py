@@ -127,6 +127,86 @@ class AttendanceRepository:
         rows = self.query(AttendanceQuery(person_id=person_id, limit=1))
         return rows[0] if rows else None
 
+    def consume_automatic_toggle(
+        self, *, person_id: str, source_event_id: str, timestamp: datetime,
+        camera_id: str | None, created_at: datetime, day_start: datetime,
+        day_end: datetime, duplicate_cooldown_seconds: float,
+        minimum_checkout_interval_seconds: float,
+    ) -> tuple[str, AttendanceRecord | None]:
+        """Atomically consume one persisted recognition and toggle its local day."""
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            consumed = connection.execute(
+                "SELECT 1 FROM attendance_consumed_events WHERE source_event_id = ?",
+                (source_event_id,),
+            ).fetchone()
+            if consumed:
+                connection.rollback(); return "event_already_consumed", None
+            rows = tuple(_record(row) for row in connection.execute(
+                """SELECT * FROM attendance_records
+                   WHERE person_id = ? AND timestamp >= ? AND timestamp < ?
+                   ORDER BY timestamp ASC, attendance_id ASC""",
+                (person_id, day_start.isoformat(), day_end.isoformat()),
+            ).fetchall())
+            check_ins = tuple(row for row in rows if row.event_type in {
+                AttendanceEventType.CHECK_IN, AttendanceEventType.MANUAL_CHECK_IN,
+            })
+            check_outs = tuple(row for row in rows if row.event_type in {
+                AttendanceEventType.CHECK_OUT, AttendanceEventType.MANUAL_CHECK_OUT,
+            })
+            proposed = None; reason = "day_complete"
+            if check_outs and not check_ins:
+                reason = "manual_checkout_without_checkin"
+            elif not check_ins and not check_outs:
+                proposed = AttendanceEventType.CHECK_IN; reason = "recorded"
+            elif check_ins and not check_outs:
+                elapsed = (timestamp - check_ins[0].timestamp).total_seconds()
+                latest_elapsed = (timestamp - rows[-1].timestamp).total_seconds()
+                if latest_elapsed < duplicate_cooldown_seconds:
+                    reason = "duplicate_cooldown"
+                elif elapsed < minimum_checkout_interval_seconds:
+                    reason = "minimum_interval"
+                else:
+                    proposed = AttendanceEventType.CHECK_OUT; reason = "recorded"
+            record = None
+            if proposed is not None:
+                import uuid
+                record = AttendanceRecord(
+                    str(uuid.uuid4()), person_id, proposed, timestamp, source_event_id,
+                    camera_id, None, created_at,
+                )
+                connection.execute(
+                    """INSERT INTO attendance_records(
+                      attendance_id,person_id,event_type,timestamp,source_event_id,
+                      camera_id,session_id,created_at,notes) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (record.attendance_id, record.person_id, record.event_type.value,
+                     record.timestamp.isoformat(), record.source_event_id, record.camera_id,
+                     record.session_id, record.created_at.isoformat(), record.notes),
+                )
+            connection.execute(
+                "INSERT INTO attendance_consumed_events(source_event_id,attendance_id,consumed_at) VALUES (?,?,?)",
+                (source_event_id, None if record is None else record.attendance_id,
+                 created_at.isoformat()),
+            )
+            connection.commit(); return reason, record
+        except Exception as exc:
+            connection.rollback()
+            raise AttendanceRepositoryError("automatic attendance transaction failed") from exc
+        finally:
+            connection.close()
+
+    def is_source_event_consumed(self, source_event_id: str) -> bool:
+        connection = self._connect()
+        try:
+            return connection.execute(
+                "SELECT 1 FROM attendance_consumed_events WHERE source_event_id = ?",
+                (source_event_id,),
+            ).fetchone() is not None
+        except Exception as exc:
+            raise AttendanceRepositoryError("attendance consumption lookup failed") from exc
+        finally: connection.close()
+
     def daily_summary(self, day: date) -> AttendanceDailySummary:
         start = datetime.combine(day, time.min, tzinfo=timezone.utc)
         end = datetime.combine(day, time.max, tzinfo=timezone.utc)

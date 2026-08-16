@@ -17,6 +17,7 @@
   "attendance": {
     "allow_manual_events": true,
     "automatic_attendance_enabled": false,
+    "automatic_mode": "TOGGLE_DAILY",
     "database_path": "data/fastvision/attendance.db",
     "duplicate_event_cooldown_seconds": 60.0,
     "enabled": true,
@@ -25,7 +26,14 @@
     "minimum_time_between_check_in_out_seconds": 60.0,
     "policy_name": "attendance_manual_validation",
     "policy_version": "1.0",
-    "timeout_seconds": 5.0
+    "timeout_seconds": 5.0,
+    "work_schedule": {
+      "timezone": "America/Guayaquil",
+      "workday_start": "08:00",
+      "workday_end": "17:00",
+      "late_after": "08:10",
+      "overtime_after": "17:00"
+    }
   },
   "audit": {
     "dashboard_refresh_seconds": 30.0,

@@ -30,6 +30,14 @@ class AttendanceEventType(str, Enum):
     MANUAL_CHECK_OUT = "MANUAL_CHECK_OUT"
 
 
+class AttendanceDayStatus(str, Enum):
+    PRESENT = "PRESENT"
+    LATE = "LATE"
+    COMPLETED = "COMPLETED"
+    INCOMPLETE = "INCOMPLETE"
+    MANUAL_ADJUSTMENT = "MANUAL_ADJUSTMENT"
+
+
 @dataclass(frozen=True, slots=True)
 class AttendanceRecord:
     attendance_id: str
@@ -116,3 +124,43 @@ class AttendanceEvaluationResult:
     reason: str
     evaluated: bool
     record: AttendanceRecord | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AttendanceDayRecord:
+    person_id: str
+    local_date: date
+    check_in_utc: datetime | None
+    check_out_utc: datetime | None
+    check_in_source: str | None
+    check_out_source: str | None
+    worked_seconds: int
+    late_seconds: int
+    overtime_seconds: int
+    status: AttendanceDayStatus
+    created_at: datetime
+    updated_at: datetime
+    check_in_camera: str | None = None
+    check_out_camera: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AttendanceTodaySummary:
+    date: date
+    present: int
+    completed: int
+    pending: int
+    late: int
+    latest: tuple[AttendanceRecord, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AttendanceMonthlyPersonSummary:
+    person_id: str
+    year: int
+    month: int
+    days_present: int
+    days_late: int
+    worked_seconds: int
+    overtime_seconds: int
+    incomplete_days: int

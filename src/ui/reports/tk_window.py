@@ -55,7 +55,7 @@ class ReportWindow:
             self.status.configure(text="No se pudo generar el reporte")
 
     def _render(self, report) -> None:
-        values = getattr(report, "days", (report,))
+        values = getattr(report, "days", getattr(report, "people", (report,)))
         if not values or not is_dataclass(values[0]): return
         records = [asdict(item) for item in values]
         columns = tuple(records[0]); self.table.configure(columns=columns)
