@@ -65,12 +65,20 @@ from src.core.application_events import (
 from datetime import datetime, timezone
 from collections.abc import Callable
 from src.camera.camera_types import CameraConfig, CameraType
+from src.camera.source_discovery import redact_url
 
 LOGGER = logging.getLogger(__name__)
 UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDTO |
            RuntimeStatusDTO | PeopleOperationResultDTO | StabilityDTO |
            EnrollmentConflictDTO | IdentificationPolicyDTO | DecisionOrchestratorDTO |
            ActionExecutorDTO | PersonPhotoCaptureDTO)
+
+
+def _safe_camera_reference(display_name: str | None, source_id: str | None) -> str | None:
+    value = (display_name if display_name and display_name != "N/D" else source_id)
+    if not value: return None
+    cleaned = " ".join(str(value).split())[:160]
+    return redact_url(cleaned) if "://" in cleaned else cleaned
 
 
 class SessionCommandType(str, Enum):
@@ -864,7 +872,12 @@ class LiveFaceSession:
                 event_type = DetectionEventType.MULTIPLE_FACES
             elif dto.recognition_state == "INCOMPATIBLE":
                 event_type = DetectionEventType.INCOMPATIBLE
-            elif dto.candidate_person_id is not None:
+            elif (dto.candidate_person_id is not None and (
+                  stability is None or (
+                      stability_result is not None
+                      and stability_result.state.value == "STABLE"
+                      and identification.eligible
+                      and identification.administrative_status == "ACTIVE"))):
                 event_type = DetectionEventType.REGISTERED_CANDIDATE
             elif dto.state is not UIState.NO_FACE and dto.recognition_state in {
                 "NO_GALLERY", "NOT_EVALUATED",
@@ -877,8 +890,12 @@ class LiveFaceSession:
                     try: status = self._administrative_status_resolver(dto.candidate_person_id)
                     except Exception: status = None
                 self._detection_events.observe(DetectionEventInput(
-                    event_type, dto.candidate_person_id, datetime.now(timezone.utc),
-                    self._camera_id, dto.candidate_display_name, dto.similarity,
+                    event_type, (dto.candidate_person_id if event_type is
+                                 DetectionEventType.REGISTERED_CANDIDATE else None),
+                    datetime.now(timezone.utc),
+                    _safe_camera_reference(getattr(self, "_camera_display_name", None),
+                                           self._camera_id),
+                    dto.candidate_display_name, dto.similarity,
                     dto.quality_score, "NOT_EVALUATED" if event_type is
                     DetectionEventType.REGISTERED_CANDIDATE else dto.recognition_state,
                     status, self._session_id,
@@ -968,9 +985,16 @@ class LiveFaceSession:
         suspension = getattr(self, "_event_history_suspended", None)
         if executor is None or (suspension is not None and suspension.is_set()):
             return self._action_not_evaluated_dto()
+        administrative_status = None
+        resolver = getattr(self, "_administrative_status_resolver", None)
+        if monitoring is not None and monitoring.candidate_person_id and resolver is not None:
+            try: administrative_status = resolver(monitoring.candidate_person_id)
+            except Exception: administrative_status = None
         event_data = None if monitoring is None else DetectionEventActionData(
             monitoring.recognition_state, monitoring.candidate_display_name,
-            monitoring.similarity, monitoring.quality_score, self._camera_id, face_count,
+            monitoring.similarity, monitoring.quality_score,
+            _safe_camera_reference(getattr(self, "_camera_display_name", None),
+                                   self._camera_id), face_count, administrative_status,
         )
         popup_data = None if monitoring is None else PopupActionData(
             monitoring.recognition_state, monitoring.similarity, monitoring.message,

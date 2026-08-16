@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import math
 import time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 try:  # Tk is an optional OS component and is not required by headless tests.
     import tkinter as tk
@@ -433,11 +434,12 @@ class LocalFaceTkApp:
         self.history = tk.Listbox(history_card, height=6, activestyle="none")
         self.history.pack(fill="both", expand=True)
 
-        events_card = ttk.LabelFrame(side, text="Últimos eventos", padding=6)
+        # The former "Últimos eventos" card now contains only registered recognitions.
+        events_card = ttk.LabelFrame(side, text="Últimas identificaciones", padding=6)
         events_card.pack(fill="both", expand=True, pady=6)
         self.detection_events = tk.Listbox(events_card, height=5, activestyle="none")
         self.detection_events.pack(fill="both", expand=True)
-        ttk.Button(events_card, text="Abrir historial", command=on_detection_history or
+        ttk.Button(events_card, text="Historial", command=on_detection_history or
                    (lambda: None), state="normal" if self._can("VIEW_DETECTION_HISTORY") else "disabled").pack(anchor="e", pady=(4, 0))
         attendance_card=ttk.LabelFrame(side,text="Asistencia hoy",padding=6);attendance_card.pack(fill="x",pady=6)
         self.attendance_summary=ttk.Label(attendance_card,text="Entradas: N/D\nSalidas: N/D\nPersonas únicas: N/D\nÚltima marcación: N/D");self.attendance_summary.pack(anchor="w")
@@ -951,8 +953,10 @@ class LocalFaceTkApp:
                 self.detection_events.delete(0, "end")
                 for item in recent_events:
                     person = item.display_name or "No registrada"
+                    similarity = ("N/D" if item.similarity is None
+                                  else f"{item.similarity * 100:.0f}%")
                     self.detection_events.insert(
-                        "end", f"{item.timestamp:%H:%M:%S} {person} — {item.event_type}"
+                        "end", f"{person} — {item.timestamp.astimezone(ZoneInfo('America/Guayaquil')):%H:%M} — {similarity}"
                     )
                 self._detection_events_rendered = recent_events
         if self._get_attendance_summary is not None:

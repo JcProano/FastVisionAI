@@ -86,6 +86,8 @@ class DetectionEventQuery:
     event_type: DetectionEventType | None = None
     limit: int = 100
     offset: int = 0
+    camera_id: str | None = None
+    administrative_status: str | None = None
 
     def __post_init__(self) -> None:
         if not 1 <= self.limit <= 500 or self.offset < 0:
@@ -103,4 +105,3 @@ class DetectionEventWriteResult:
     recorded: bool
     event: DetectionEventRecord | None
     message: str
-

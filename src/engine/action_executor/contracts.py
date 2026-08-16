@@ -62,6 +62,7 @@ class DetectionEventActionData:
     quality_score: float | None = None
     camera_id: str | None = None
     face_count: int = 1
+    administrative_status: str | None = None
 
     def __post_init__(self) -> None:
         if not self.recognition_state.strip():

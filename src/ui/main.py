@@ -1100,6 +1100,7 @@ def main() -> int:
     history_controller = (None if detection_event_service is None else
         DetectionHistoryController(
             detection_event_service.repository, person_repository, detection_event_service,
+            identity_provider, security.authorization,
         ))
 
     def open_detection_history() -> None:
@@ -1109,6 +1110,7 @@ def main() -> int:
             current.focus(); return
         history_window["window"] = DetectionHistoryWindow(
             root, history_controller, on_close=lambda: history_window.pop("window", None),
+            on_view_person=lambda person_id: open_profile(person_id),
         )
 
     def open_attendance_history():
@@ -1376,7 +1378,7 @@ def main() -> int:
         clear_popup_requests=popup_action_adapter.clear,
         on_registration_form_state=session.set_event_history_suspended,
         get_detection_events=(None if history_controller is None else
-                              lambda: history_controller.recent(10)),
+                              lambda: history_controller.recent_identifications(5)),
         on_detection_history=open_detection_history,
         get_attendance_summary=(None if attendance_controller is None else
                                 attendance_controller.daily_summary),

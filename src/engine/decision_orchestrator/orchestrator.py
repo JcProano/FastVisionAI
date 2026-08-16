@@ -44,7 +44,8 @@ class DecisionOrchestrator:
             reasons.append("incompatible")
 
         relevant_observation = value.face_count > 0
-        if policy.allow_detection_event_proposal and relevant_observation:
+        if (policy.allow_detection_event_proposal and relevant_observation
+                and value.person_id is None):
             proposals.append(ProposedAction.LOG_DETECTION_EVENT)
 
         if structural_state is None and value.person_id is None:
@@ -80,6 +81,18 @@ class DecisionOrchestrator:
                 and (not policy.require_stable_for_registered_popup
                      or stability == "STABLE")
             )
+            registered_history_eligible = (
+                value.face_count == 1
+                and value.administrative_status == "ACTIVE"
+                and value.policy_eligible
+                and identification == "ELIGIBLE"
+                and stability == "STABLE"
+            )
+            # NO_OBSERVATION preserves the explicitly tracker-less legacy mode;
+            # whenever stability is wired, only the stable eligible branch records.
+            if (policy.allow_detection_event_proposal and
+                    (registered_history_eligible or stability == "NO_OBSERVATION")):
+                proposals.append(ProposedAction.LOG_DETECTION_EVENT)
             if policy.allow_registered_popup_proposal:
                 if registered_eligible:
                     proposals.append(ProposedAction.SHOW_REGISTERED_POPUP)

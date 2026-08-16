@@ -45,6 +45,14 @@ class DetectionEventRepositoryTests(unittest.TestCase):
             connection.execute("UPDATE schema_version SET version=99")
         with self.assertRaises(DetectionEventRepositoryError): self.repository.initialize()
 
+    def test_filters_camera_and_administrative_status(self):
+        self.repository.create(record("front", camera="Entrada principal"))
+        self.repository.create(record("other", camera="USB Camera"))
+        result = self.repository.query(DetectionEventQuery(
+            camera_id="Entrada principal", administrative_status="ACTIVE",
+        ))
+        self.assertEqual(tuple(item.event_id for item in result), ("front",))
+
     def test_csv_contains_only_allowlisted_columns(self):
         self.repository.create(record())
         destination = self.root / "events.csv"

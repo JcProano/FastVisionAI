@@ -41,7 +41,7 @@ class DetectionEventServiceActionAdapter:
             similarity=event.similarity,
             quality_score=event.quality_score,
             recognition_state=event.recognition_state,
-            administrative_status=None,
+            administrative_status=event.administrative_status,
             session_id=context.session_id,
         ))
         if not result.success:

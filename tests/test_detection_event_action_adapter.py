@@ -98,7 +98,7 @@ class DetectionEventActionAdapterTests(unittest.TestCase):
         self.assertEqual(
             {field.name for field in dataclasses.fields(DetectionEventActionData)},
             {"recognition_state", "display_name_snapshot", "similarity", "quality_score",
-             "camera_id", "face_count"},
+             "camera_id", "face_count", "administrative_status"},
         )
         forbidden = {"cedula", "address", "phone", "email", "thumbnail", "embedding",
                      "template", "ndarray", "model", "gallery"}

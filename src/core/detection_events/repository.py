@@ -73,6 +73,11 @@ class DetectionEventRepository:
             clauses.append("person_id = ?"); parameters.append(query.person_id)
         if query.event_type is not None:
             clauses.append("event_type = ?"); parameters.append(query.event_type.value)
+        if query.camera_id is not None:
+            clauses.append("camera_id = ?"); parameters.append(query.camera_id)
+        if query.administrative_status is not None:
+            clauses.append("administrative_status = ?")
+            parameters.append(query.administrative_status)
         where = " WHERE " + " AND ".join(clauses) if clauses else ""
         parameters.extend((query.limit, query.offset))
         connection = self._connect()
