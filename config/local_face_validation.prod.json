@@ -38,7 +38,9 @@
     "minimum_height": 600,
     "history_limit": 100,
     "event_debounce_seconds": 2,
-    "metrics_refresh_ms": 250
+    "metrics_refresh_ms": 250,
+    "refresh_seconds": 5,
+    "statistics_refresh_seconds": 10
   },
   "matcher": {
     "top_k": 3,

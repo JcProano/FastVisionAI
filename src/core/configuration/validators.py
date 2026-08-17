@@ -14,6 +14,7 @@ KNOWN_FIELDS["photo_capture"]={"mode","stability_frames","countdown_seconds","mi
 KNOWN_FIELDS["guided_capture"].add("manual_capture")
 KNOWN_FIELDS["guided_capture"].add("minimum_quality_score")
 KNOWN_FIELDS["guided_capture"].add("stability_frames")
+KNOWN_FIELDS["dashboard"].update({"refresh_seconds","statistics_refresh_seconds"})
 KNOWN_FIELDS["security"].add("skip_login_for_local_validation")
 KNOWN_FIELDS["audit"]={"enabled","database_path","sqlite_timeout_seconds","dashboard_refresh_seconds","default_query_limit","max_query_limit","metadata_max_items","metadata_value_max_length","message_max_length"}
 ROOT_FIELDS={"config_schema_version","profile_name","profile_version",*KNOWN_FIELDS}
@@ -58,6 +59,13 @@ class ConfigurationValidator:
     if field in audit and (isinstance(audit[field],bool) or not isinstance(audit[field],(int,float)) or not math.isfinite(float(audit[field])) or audit[field]<=0):issues.append(ConfigurationValidationIssue(f"audit.{field}",ValidationSeverity.ERROR,"El valor debe ser positivo y finito."))
    if isinstance(audit.get("default_query_limit"),int) and isinstance(audit.get("max_query_limit"),int) and audit["default_query_limit"]>audit["max_query_limit"]:issues.append(ConfigurationValidationIssue("audit.default_query_limit",ValidationSeverity.ERROR,"El límite predeterminado no puede superar el máximo."))
   guided=candidate.get("guided_capture",{})
+  dashboard=candidate.get("dashboard",{})
+  if isinstance(dashboard,dict):
+   for field in ("refresh_seconds","statistics_refresh_seconds"):
+    value=dashboard.get(field)
+    if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)) or value<=0):issues.append(ConfigurationValidationIssue(f"dashboard.{field}",ValidationSeverity.ERROR,"El intervalo debe ser positivo y finito."))
+   operational=dashboard.get("refresh_seconds");statistics=dashboard.get("statistics_refresh_seconds")
+   if isinstance(operational,(int,float)) and not isinstance(operational,bool) and isinstance(statistics,(int,float)) and not isinstance(statistics,bool) and statistics<operational:issues.append(ConfigurationValidationIssue("dashboard.statistics_refresh_seconds",ValidationSeverity.ERROR,"Las estadísticas no pueden refrescarse más rápido que el dashboard."))
   if isinstance(guided,dict) and "minimum_quality_score" in guided:
    minimum=guided["minimum_quality_score"]
    if isinstance(minimum,bool) or not isinstance(minimum,(int,float)) or not math.isfinite(float(minimum)) or not 0<=float(minimum)<=100:issues.append(ConfigurationValidationIssue("guided_capture.minimum_quality_score",ValidationSeverity.ERROR,"El umbral debe estar entre 0 y 100."))

@@ -87,6 +87,8 @@
     "initial_height": 720,
     "initial_width": 1100,
     "metrics_refresh_ms": 250,
+    "refresh_seconds": 5,
+    "statistics_refresh_seconds": 10,
     "minimum_height": 600,
     "minimum_width": 820
   },

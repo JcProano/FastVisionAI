@@ -54,6 +54,9 @@ from src.ui.people.tk_window import PeopleManagerWindow
 from src.ui.people.database_controller import DatabasePeopleManagerController
 from src.ui.dashboard.config_window import DashboardConfigurationWindow
 from src.ui.dashboard.contracts import DashboardConfigurationDTO, DashboardGalleryDTO
+from src.ui.dashboard import (
+    DashboardRefreshCoordinator, ProfessionalDashboardController,
+)
 from src.ui.thumbnails import ThumbnailManager
 from src.ui.photo_capture import PersonPhotoController
 from src.ui.photo_capture import AutomaticPhotoPolicy
@@ -1451,6 +1454,22 @@ def main() -> int:
         audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
         local_validation_login_bypass=local_validation_bypass,
     )
+    dashboard_coordinator = None
+    if history_controller is not None and attendance_controller is not None and report_controller is not None:
+        professional_dashboard = ProfessionalDashboardController(
+            history_controller,attendance_controller,report_controller,identity_provider,
+            security.authorization,system_health_service,
+        )
+        dashboard_settings=settings.get("dashboard",{})
+        dashboard_coordinator=DashboardRefreshCoordinator(
+            root,professional_dashboard,app.professional_live_state,
+            app.show_professional_dashboard,
+            dashboard_seconds=float(dashboard_settings.get("refresh_seconds",5.0)),
+            statistics_seconds=float(dashboard_settings.get("statistics_refresh_seconds",10.0)),
+        )
+        application_events.subscribe(DetectionEventStoredEvent,dashboard_coordinator.invalidate)
+        application_events.subscribe(AttendanceRecordedEvent,dashboard_coordinator.invalidate)
+        app.set_dashboard_refresh_coordinator(dashboard_coordinator)
     if gallery_sync_warning is not None:
         app.status.configure(text=f"WARNING: {gallery_sync_warning}")
     app.show_monitoring(controller.monitoring.empty())
