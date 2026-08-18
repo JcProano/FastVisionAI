@@ -35,7 +35,7 @@ class UIContractTests(unittest.TestCase):
         view = monitoring_text(dto)
         self.assertEqual(view.headline, "Candidato experimental")
         self.assertEqual(view.similarity, "0.9123")
-        self.assertEqual(view.decision, "Decisión automática: deshabilitada / NOT_EVALUATED")
+        self.assertEqual(view.decision, "Threshold: N/D | Estado: NOT_EVALUATED")
         self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
 
     def test_presenter_uses_safe_structural_messages(self):
@@ -52,7 +52,7 @@ class UIContractTests(unittest.TestCase):
             self.assertEqual(view.headline, message)
             self.assertEqual(view.candidate, message)
             self.assertEqual(
-                view.decision, "Decisión automática: deshabilitada / NOT_EVALUATED"
+                view.decision, f"Threshold: N/D | Estado: {state}"
             )
 
     def test_dto_instances_do_not_contain_numpy_arrays(self):

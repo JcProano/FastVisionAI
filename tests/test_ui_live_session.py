@@ -573,7 +573,7 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertLessEqual(session.visual_queue.qsize(), 1)
         self.assertLessEqual(len(events), 3)
         self.assertTrue(any(isinstance(item, MonitoringDTO) and
-                            item.message == "Sin candidatos registrados" for item in events))
+                            item.message == "GALERÍA VACÍA" for item in events))
         for event in events:
             if dataclasses.is_dataclass(event):
                 self.assertFalse(any(isinstance(value, np.ndarray)
@@ -592,7 +592,7 @@ class LiveFaceSessionTests(unittest.TestCase):
             seen.extend(session.drain_events())
             return (any(isinstance(item, EnrollmentResultDTO) for item in seen) and
                     any(isinstance(item, MonitoringDTO) and
-                        item.message == "Candidato experimental" for item in seen))
+                        "AÚN NO CALIBRADO" in item.message for item in seen))
 
         self.assertTrue(wait_until(completed, 1.5))
         session.close()
@@ -600,7 +600,7 @@ class LiveFaceSessionTests(unittest.TestCase):
         result = next(item for item in seen if isinstance(item, EnrollmentResultDTO))
         self.assertEqual(result.templates_registered, 3)
         candidate = next(item for item in seen if isinstance(item, MonitoringDTO) and
-                         item.message == "Candidato experimental")
+                         "AÚN NO CALIBRADO" in item.message)
         self.assertEqual(candidate.automatic_decision, "NOT_EVALUATED")
 
     def test_cancel_discards_temporary_samples(self):

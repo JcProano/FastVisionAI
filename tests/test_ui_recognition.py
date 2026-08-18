@@ -47,7 +47,7 @@ class UIRecognitionTests(GalleryTestCase):
 
     def test_no_gallery_keeps_registration_enabled(self):
         dto, error = self.session(FaceGallery()).query(self.embedding([1, 0]))
-        self.assertEqual(dto.message, "Sin candidatos registrados")
+        self.assertEqual(dto.message, "GALERÍA VACÍA")
         self.assertEqual(dto.recognition_state, "NO_GALLERY")
         self.assertTrue(dto.registration_enabled)
         self.assertIsNone(error)
@@ -57,7 +57,7 @@ class UIRecognitionTests(GalleryTestCase):
         gallery.register_identity(FaceIdentity("temporary", "Temporary 1"))
         gallery.add_template("temporary", self.embedding([1, 0]))
         dto, error = self.session(gallery).query(self.embedding([1, 0], model="other"))
-        self.assertEqual(dto.message, "Sin candidatos compatibles")
+        self.assertEqual(dto.message, "MODELO BIOMÉTRICO INCOMPATIBLE")
         self.assertEqual(dto.recognition_state, "INCOMPATIBLE")
         self.assertTrue(dto.registration_enabled)
         self.assertIsNone(error)
@@ -67,7 +67,8 @@ class UIRecognitionTests(GalleryTestCase):
         gallery.register_identity(FaceIdentity("temporary", "Temporary 1"))
         gallery.add_template("temporary", self.embedding([1, 0]))
         dto, error = self.session(gallery).query(self.embedding([1, 0]))
-        self.assertEqual(dto.message, "Candidato experimental")
+        self.assertEqual(dto.message,
+                         "CANDIDATO DETECTADO — RECONOCIMIENTO AÚN NO CALIBRADO")
         self.assertEqual(dto.automatic_decision, "NOT_EVALUATED")
         self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
         self.assertAlmostEqual(dto.similarity, 1.0)
@@ -80,13 +81,13 @@ class UIRecognitionTests(GalleryTestCase):
         matcher = FailingMatcher(top_k=1, policy=MatchPolicy(False, None))
         dto, error = self.session(gallery, matcher).query(self.embedding([1, 0]))
         self.assertTrue(dto.registration_enabled)
-        self.assertEqual(dto.message, "Sin candidatos compatibles")
+        self.assertEqual(dto.message, "RECONOCIMIENTO DESACTIVADO — CALIBRACIÓN INVÁLIDA")
         self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
         self.assertIsNotNone(error)
         self.assertEqual(error.operation, UIErrorCode.MATCHER_ERROR)
         self.assertTrue(error.recoverable)
 
-    def test_future_decision_states_are_blocked_by_experimental_ui(self):
+    def test_evaluated_decision_states_are_visible(self):
         gallery = FaceGallery()
         gallery.register_identity(FaceIdentity("temporary", "Temporary"))
         gallery.add_template("temporary", self.embedding([1, 0]))
@@ -95,14 +96,11 @@ class UIRecognitionTests(GalleryTestCase):
                       RecognitionState.AMBIGUOUS):
             session = ExperimentalRecognitionSession(StubRecognitionService(base, state))
             dto, error = session.query(self.embedding([1, 0]))
-            self.assertEqual(dto.message, "Sin candidatos compatibles")
-            self.assertEqual(dto.recognition_state, "NOT_EVALUATED")
+            self.assertEqual(dto.recognition_state, state.name)
             self.assertTrue(dto.registration_enabled)
-            self.assertIsNotNone(error)
-            self.assertNotIn("reconoc", dto.message.casefold())
-            self.assertNotIn("desconoc", dto.message.casefold())
+            self.assertIsNone(error)
 
-    def test_automatic_or_threshold_configuration_is_prohibited(self):
+    def test_automatic_policy_is_supported_by_the_rc17_ui_boundary(self):
         gallery = FaceGallery()
         policies = (
             RecognitionPolicy(True, .5, None, 1),
@@ -111,10 +109,10 @@ class UIRecognitionTests(GalleryTestCase):
         )
         for policy in policies:
             service = self.service(gallery, policy=policy)
-            with self.assertRaises(ValueError):
-                ExperimentalRecognitionSession(service)
+            self.assertIsInstance(ExperimentalRecognitionSession(service),
+                                  ExperimentalRecognitionSession)
 
-    def test_composition_root_rejects_automatic_threshold_or_margin(self):
+    def test_composition_root_requires_artifact_for_automatic_and_nulls_when_disabled(self):
         base = json.loads(Path("config/local_face_validation.dev.json").read_text(
             encoding="utf-8"
         ))
@@ -129,8 +127,14 @@ class UIRecognitionTests(GalleryTestCase):
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "config.json"
                 path.write_text(json.dumps(config), encoding="utf-8")
-                with self.assertRaisesRegex(ValueError, key):
-                    build_controller(path)
+                if key == "automatic_decision_enabled":
+                    built = build_controller(path)
+                    dto, error = built.monitoring.query(self.embedding([1, 0]))
+                    self.assertIn("CALIBRACIÓN INVÁLIDA", dto.message)
+                    self.assertIsNone(error)
+                else:
+                    with self.assertRaisesRegex(ValueError, "null"):
+                        build_controller(path)
 
     def test_gallery_property_is_read_only_and_public_dto_is_safe(self):
         gallery = FaceGallery()

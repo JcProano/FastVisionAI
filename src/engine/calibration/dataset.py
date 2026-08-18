@@ -15,7 +15,10 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 
 from src.engine.alignment.contracts import AlignmentQuality
-from src.engine.calibration.contracts import CalibrationSample, CalibrationSampleMetadata
+from src.engine.calibration.contracts import (
+    CalibrationDistance, CalibrationIllumination, CalibrationPose, CalibrationSample,
+    CalibrationSampleMetadata, CalibrationSampleType,
+)
 
 SCHEMA_VERSION = 1
 
@@ -89,6 +92,14 @@ class CalibrationDatasetStore:
                     "face_quality_band": meta.face_quality_band,
                     "quality_profile_name": meta.quality_profile_name,
                     "quality_profile_version": meta.quality_profile_version,
+                    "sample_type": None if meta.sample_type is None else meta.sample_type.value,
+                    "expected_identity": meta.expected_identity,
+                    "calibration_session_id": meta.calibration_session_id,
+                    "evaluation_sample_id": meta.evaluation_sample_id,
+                    "condition_id": meta.condition_id,
+                    "illumination": None if meta.illumination is None else meta.illumination.value,
+                    "distance": None if meta.distance is None else meta.distance.value,
+                    "pose": None if meta.pose is None else meta.pose.value,
                 })
         if len(groups) > self.limits.max_identities or len(records) > self.limits.max_samples:
             raise CalibrationDatasetError("calibration dataset exceeds configured limits")
@@ -183,6 +194,24 @@ class CalibrationDatasetStore:
                             None if raw.get("quality_profile_version") is None
                             else str(raw["quality_profile_version"])
                         ),
+                        sample_type=(None if raw.get("sample_type") is None else
+                                     CalibrationSampleType(str(raw["sample_type"]))),
+                        expected_identity=(None if raw.get("expected_identity") is None else
+                                           str(raw["expected_identity"])),
+                        calibration_session_id=(
+                            None if raw.get("calibration_session_id") is None else
+                            str(raw["calibration_session_id"])),
+                        evaluation_sample_id=(
+                            None if raw.get("evaluation_sample_id") is None else
+                            str(raw["evaluation_sample_id"])),
+                        condition_id=(None if raw.get("condition_id") is None else
+                                      str(raw["condition_id"])),
+                        illumination=(None if raw.get("illumination") is None else
+                                      CalibrationIllumination(str(raw["illumination"]))),
+                        distance=(None if raw.get("distance") is None else
+                                  CalibrationDistance(str(raw["distance"]))),
+                        pose=(None if raw.get("pose") is None else
+                              CalibrationPose(str(raw["pose"]))),
                     )
                     staged.setdefault(identity, []).append(CalibrationSample(vector, metadata))
                 if keys != set(archive.files):

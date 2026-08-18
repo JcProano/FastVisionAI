@@ -1,0 +1,10 @@
+{
+  "maximum_far": 0.01,
+  "maximum_frr": 0.1,
+  "minimum_distribution_margin": 0.02,
+  "minimum_genuine_samples": 12,
+  "minimum_genuine_sessions": 2,
+  "minimum_impostor_samples": 20,
+  "minimum_impostor_subjects": 2,
+  "policy_version": "rc17-1.0"
+}

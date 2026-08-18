@@ -90,6 +90,8 @@ class MonitoringDTO:
     quality_band: str | None = None
     recognition_state: str = "NOT_EVALUATED"
     candidate_person_id: str | None = None
+    evaluated: bool | None = None
+    match_threshold: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

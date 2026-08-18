@@ -13,3 +13,14 @@ __all__ = [
     "CalibrationService", "CalibrationWarning", "DistributionStatistics",
     "EstimatedEER", "ThresholdRates",
 ]
+from .recognition import (
+    RecognitionCalibrationError, RecognitionCalibrationPolicy,
+    analyze_recognition_calibration, sha256_file, validate_approved_calibration,
+    write_json_atomic,
+)
+
+__all__ = [
+    "RecognitionCalibrationError", "RecognitionCalibrationPolicy",
+    "analyze_recognition_calibration", "sha256_file", "validate_approved_calibration",
+    "write_json_atomic",
+]

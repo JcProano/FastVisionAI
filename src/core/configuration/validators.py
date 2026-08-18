@@ -22,7 +22,8 @@ KNOWN_FIELDS["web_dashboard"]={"enabled","host","port","open_browser_on_start","
 KNOWN_FIELDS["ui"]={"tk_enabled","startup_mode"}
 KNOWN_FIELDS["data_namespace"]={"root"}
 KNOWN_FIELDS["audit"]={"enabled","database_path","sqlite_timeout_seconds","dashboard_refresh_seconds","default_query_limit","max_query_limit","metadata_max_items","metadata_value_max_length","message_max_length"}
-ROOT_FIELDS={"config_schema_version","profile_name","profile_version",*KNOWN_FIELDS}
+ROOT_FIELDS={"config_schema_version","profile_name","profile_version",
+             "recognition_calibration_file",*KNOWN_FIELDS}
 PATH_FIELDS={("guided_capture","policy_file"),("quality","profile_file"),("persistence","directory"),("thumbnails","directory"),("person_database","path"),("event_history","database_path"),("attendance","database_path"),("security","database_path"),("backup","directory")}
 PATH_FIELDS.add(("audit","database_path"))
 PATH_FIELDS.add(("data_namespace","root"))

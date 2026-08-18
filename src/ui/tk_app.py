@@ -154,9 +154,7 @@ def stability_text(dto: StabilityDTO | None) -> StabilityText:
 
 def monitoring_text(dto: MonitoringDTO) -> MonitoringText:
     candidate = dto.candidate_display_name or (
-        dto.message if dto.message in {
-            "Sin candidatos registrados", "Sin candidatos compatibles",
-        } else "Sin candidatos registrados"
+        dto.message if dto.candidate_display_name is None else dto.candidate_display_name
     )
     similarity = "—" if dto.similarity is None else f"{dto.similarity:.4f}"
     quality = "—" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
@@ -165,7 +163,8 @@ def monitoring_text(dto: MonitoringDTO) -> MonitoringText:
         dto.message,
         candidate,
         similarity,
-        "Decisión automática: deshabilitada / NOT_EVALUATED",
+        (f"Threshold: {'N/D' if dto.match_threshold is None else format(dto.match_threshold, '.4f')}"
+         f" | Estado: {dto.recognition_state}"),
         quality,
     )
 

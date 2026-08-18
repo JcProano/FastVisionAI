@@ -105,6 +105,12 @@ class RecognitionResult:
             value is not None for value in (self.display_name, self.person_id, self.similarity)
         ):
             raise ValueError("candidate summary requires a primary_candidate")
+        if self.state in {RecognitionState.MATCH, RecognitionState.UNKNOWN,
+                          RecognitionState.AMBIGUOUS} and not self.evaluated:
+            raise ValueError("decision states require evaluated=true")
+        if self.state in {RecognitionState.NOT_EVALUATED, RecognitionState.INCOMPATIBLE,
+                          RecognitionState.NO_GALLERY} and self.evaluated:
+            raise ValueError("non-decision states require evaluated=false")
 
 
 def _bounded(value: float, minimum: float, maximum: float) -> bool:

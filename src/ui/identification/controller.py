@@ -75,6 +75,9 @@ class IdentificationPresentationController:
                 UIState.MONITORING, message or "Candidato experimental", "candidate",
                 similarity, "deshabilitada / NOT_EVALUATED", True,
                 recognition_state=recognition_state, candidate_person_id=person_id,
+                evaluated=(True if recognition_state == "MATCH" else False
+                           if message == "CANDIDATO DETECTADO — RECONOCIMIENTO AÚN NO CALIBRADO"
+                           else None),
             )
         elif action == "SHOW_UNREGISTERED_POPUP":
             if person_id is not None:
@@ -83,6 +86,10 @@ class IdentificationPresentationController:
                 UIState.MONITORING, message or "Sin candidato registrado", None,
                 similarity, "deshabilitada / NOT_EVALUATED", True,
                 recognition_state=recognition_state,
+                evaluated=(True if recognition_state == "UNKNOWN" else False
+                           if message in {"GALERÍA VACÍA", "MODELO BIOMÉTRICO INCOMPATIBLE",
+                                          "CANDIDATO DETECTADO — RECONOCIMIENTO AÚN NO CALIBRADO"}
+                           else None),
             )
         else:
             raise ValueError("unsupported popup action")
@@ -102,15 +109,17 @@ class IdentificationPresentationController:
             return self._suppressed(event, "Se requiere exactamente un rostro")
 
         registered = (
-            event.recognition_state == "NOT_EVALUATED"
+            ((event.recognition_state == "MATCH" and event.evaluated is True)
+             or (event.recognition_state == "NOT_EVALUATED" and event.evaluated is None))
             and event.candidate_person_id is not None
             and event.candidate_display_name is not None
         )
         unregistered = (
             event.candidate_person_id is None
-            and event.recognition_state in {
-                "UNKNOWN", "NO_GALLERY", "INCOMPATIBLE", "NOT_EVALUATED",
-            }
+            and ((event.recognition_state == "UNKNOWN" and event.evaluated is True)
+                 or (event.recognition_state in {
+                     "UNKNOWN", "NO_GALLERY", "INCOMPATIBLE", "NOT_EVALUATED",
+                 } and event.evaluated is None))
         )
         if not registered and not unregistered:
             self._reset_stability()
@@ -143,8 +152,8 @@ class IdentificationPresentationController:
             return IdentificationPopupDTO(
                 IdentificationPopupType.REGISTERED_CANDIDATE,
                 person.person_id, person.display_name, person.external_identifier,
-                event.similarity, "NOT_EVALUATED", thumbnail.available,
-                "Candidato experimental registrado", self._utcnow(),
+                event.similarity, "MATCH", thumbnail.available,
+                "Persona identificada", self._utcnow(),
                 getattr(person, "address", None), getattr(person, "phone", None),
                 getattr(person, "email", None), getattr(person, "status", None),
                 getattr(person, "department", None), getattr(person, "position", None),

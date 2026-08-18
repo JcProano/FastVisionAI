@@ -19,6 +19,29 @@ class CalibrationWarning(str, Enum):
     HOMOGENEOUS_CAPTURE_CONDITIONS = "homogeneous_capture_conditions"
 
 
+class CalibrationSampleType(str, Enum):
+    GENUINE = "GENUINE"
+    IMPOSTOR = "IMPOSTOR"
+
+
+class CalibrationIllumination(str, Enum):
+    NORMAL = "NORMAL"
+    LOW = "LOW"
+    SIDE = "SIDE"
+
+
+class CalibrationDistance(str, Enum):
+    NEAR = "NEAR"
+    OPERATIONAL = "OPERATIONAL"
+    FAR = "FAR"
+
+
+class CalibrationPose(str, Enum):
+    FRONTAL = "FRONTAL"
+    SLIGHT_LEFT = "SLIGHT_LEFT"
+    SLIGHT_RIGHT = "SLIGHT_RIGHT"
+
+
 @dataclass(frozen=True, slots=True)
 class CalibrationPolicy:
     min_identities: int = 2
@@ -57,6 +80,14 @@ class CalibrationSampleMetadata:
     face_quality_band: str | None = None
     quality_profile_name: str | None = None
     quality_profile_version: str | None = None
+    sample_type: CalibrationSampleType | None = None
+    expected_identity: str | None = None
+    calibration_session_id: str | None = None
+    evaluation_sample_id: str | None = None
+    condition_id: str | None = None
+    illumination: CalibrationIllumination | None = None
+    distance: CalibrationDistance | None = None
+    pose: CalibrationPose | None = None
 
     def __post_init__(self) -> None:
         if not all((self.session_id, self.temporary_identity_id, self.source_identifier,
@@ -74,6 +105,15 @@ class CalibrationSampleMetadata:
             not math.isfinite(self.face_quality_score) or not 0 <= self.face_quality_score <= 100
         ):
             raise ValueError("face_quality_score must be finite and within 0..100")
+        identifiers = (
+            self.calibration_session_id, self.evaluation_sample_id, self.condition_id,
+        )
+        if any(value is not None for value in identifiers) and not all(identifiers):
+            raise ValueError("RC17 calibration identifiers must be provided together")
+        if self.sample_type is CalibrationSampleType.GENUINE and not self.expected_identity:
+            raise ValueError("genuine evaluation requires expected_identity")
+        if self.sample_type is CalibrationSampleType.IMPOSTOR and self.expected_identity is not None:
+            raise ValueError("impostor evaluation cannot have expected_identity")
 
 
 @dataclass(frozen=True, slots=True)

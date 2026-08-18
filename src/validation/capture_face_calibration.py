@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import signal
 import threading
 import time
@@ -18,7 +19,10 @@ from src.camera.camera_types import CameraConfig, CameraType, ReadStatus, Reconn
 from src.core.config_manager import PROJECT_ROOT, load_config
 from src.engine.alignment import AlignmentQuality, FaceAligner
 from src.engine.benchmark.manager import BenchmarkManager
-from src.engine.calibration.contracts import CalibrationSample, CalibrationSampleMetadata
+from src.engine.calibration.contracts import (
+    CalibrationDistance, CalibrationIllumination, CalibrationPose, CalibrationSample,
+    CalibrationSampleMetadata, CalibrationSampleType,
+)
 from src.engine.calibration.dataset import CalibrationDatasetStore, require_capture_consent
 from src.engine.contracts.inference_context import InferenceContext
 from src.engine.embedding import FaceEmbeddingPlugin
@@ -78,12 +82,37 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
         save_data=args.save_data, save_images=args.save_images,
         consent_confirmed=args.consent_confirmed,
     )
+    sample_type = CalibrationSampleType(args.sample_type)
+    expected_identity = args.expected_identity
+    if sample_type is CalibrationSampleType.GENUINE and not expected_identity:
+        raise ValueError("--expected-identity is required for GENUINE capture")
+    if sample_type is CalibrationSampleType.IMPOSTOR and expected_identity is not None:
+        raise ValueError("--expected-identity is forbidden for IMPOSTOR capture")
+    expected_confirmation = f"CONFIRM {sample_type.value}"
+    if args.confirm_sample_type != expected_confirmation:
+        raise ValueError(f"explicit confirmation required: {expected_confirmation}")
+    print(f"TIPO DE MUESTRA: {sample_type.value}")
+    gallery_manifest = json.loads(args.gallery_manifest.read_text(encoding="utf-8"))
+    registered_ids = {str(item["person_id"])
+                      for item in gallery_manifest.get("identities", [])}
+    gallery_sources = {str(item["source_reference"])
+                       for item in gallery_manifest.get("templates", [])
+                       if item.get("source_reference")}
+    if sample_type is CalibrationSampleType.GENUINE and expected_identity not in registered_ids:
+        raise ValueError("--expected-identity is not registered in the reference gallery")
+    if sample_type is CalibrationSampleType.IMPOSTOR and args.temporary_id in registered_ids:
+        raise ValueError("impostor temporary id cannot be a registered identity")
     policy = CapturePolicy(
         args.min_samples, args.target_samples, args.min_capture_interval,
         args.max_near_duplicate_similarity, args.allow_low_quality,
     )
     selector = CaptureSampleSelector(policy)
     session_id = args.session_id or f"calibration-{uuid.uuid4()}"
+    if session_id in gallery_sources or str(args.source) in gallery_sources:
+        raise ValueError("evaluation run/source_reference overlaps enrollment")
+    condition_id = args.condition_id or (
+        f"{args.illumination}-{args.distance}-{args.pose}"
+    )
     cancelled = threading.Event()
     previous = signal.signal(signal.SIGINT, lambda _sig, _frame: cancelled.set())
     camera = CameraManager(
@@ -138,6 +167,12 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
                         str(args.source), (frame.width, frame.height),
                         embedding.alignment_quality, embedding.model, embedding.version,
                         embedding.weights_sha256,
+                        sample_type=sample_type, expected_identity=expected_identity,
+                        calibration_session_id=session_id,
+                        evaluation_sample_id=str(uuid.uuid4()), condition_id=condition_id,
+                        illumination=CalibrationIllumination(args.illumination),
+                        distance=CalibrationDistance(args.distance),
+                        pose=CalibrationPose(args.pose),
                     )
                     samples.append(CalibrationSample(embedding.embedding, metadata))
                     if args.save_images:
@@ -174,14 +209,31 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
             cv2.imwrite(str(image_dir / f"aligned_{index:04d}.jpg"), image[1])
     return {
         "session_id": session_id, "temporary_identity_id": args.temporary_id,
+        "sample_type": sample_type.value, "expected_identity": expected_identity,
+        "condition_id": condition_id,
         "samples_accepted": len(samples), "operator_same_person_responsibility": True,
         "data_saved": bool(args.save_data), "images_saved": bool(args.save_images),
     }
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(sample_type: CalibrationSampleType | None = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Operator-supervised face calibration capture")
     parser.add_argument("--temporary-id", required=True)
+    parser.add_argument("--gallery-manifest", type=Path, required=True)
+    if sample_type is None:
+        parser.add_argument("--sample-type", choices=[item.value for item in CalibrationSampleType],
+                            required=True)
+    else:
+        parser.set_defaults(sample_type=sample_type.value)
+    parser.add_argument("--expected-identity")
+    parser.add_argument("--confirm-sample-type", required=True,
+                        help='Must be exactly "CONFIRM GENUINE" or "CONFIRM IMPOSTOR"')
+    parser.add_argument("--condition-id")
+    parser.add_argument("--illumination", choices=[item.value for item in CalibrationIllumination],
+                        required=True)
+    parser.add_argument("--distance", choices=[item.value for item in CalibrationDistance],
+                        required=True)
+    parser.add_argument("--pose", choices=[item.value for item in CalibrationPose], required=True)
     parser.add_argument("--session-id")
     parser.add_argument("--source", type=int, default=0)
     parser.add_argument("--min-samples", type=int, default=5)

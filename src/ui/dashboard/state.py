@@ -65,7 +65,9 @@ class DashboardStateStore:
         if isinstance(event, MonitoringDTO):
             self.recognition = DashboardRecognitionDTO(
                 event.message, event.candidate_display_name, event.similarity,
-                event.recognition_state, "NOT_EVALUATED", event.candidate_person_id,
+                event.recognition_state,
+                "EVALUATED" if event.evaluated else "NOT_EVALUATED",
+                event.candidate_person_id,
             )
             self.system = DashboardSystemDTO(
                 self.system.camera_state, self.system.runtime_state, self.system.yunet_state,

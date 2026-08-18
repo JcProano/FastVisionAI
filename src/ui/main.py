@@ -455,21 +455,38 @@ def build_controller(
     recognition_config = config["recognition"]
     if not isinstance(recognition_config, dict):
         raise ValueError("recognition configuration must be an object")
-    if recognition_config.get("automatic_decision_enabled") is not False:
-        raise ValueError("experimental UI requires automatic_decision_enabled=false")
-    if recognition_config.get("match_threshold") is not None:
-        raise ValueError("experimental UI requires match_threshold=null")
-    if recognition_config.get("ambiguity_margin") is not None:
-        raise ValueError("experimental UI requires ambiguity_margin=null")
     gallery = gallery if gallery is not None else FaceGallery()
+    automatic_recognition = bool(recognition_config.get("automatic_decision_enabled"))
+    if not automatic_recognition and (
+        recognition_config.get("match_threshold") is not None
+        or recognition_config.get("ambiguity_margin") is not None
+    ):
+        raise ValueError("disabled recognition requires null threshold and ambiguity_margin")
+    calibration_invalid = False
+    if automatic_recognition:
+        from src.engine.calibration import validate_approved_calibration
+        calibration_file = config.get("recognition_calibration_file")
+        try:
+            if not isinstance(calibration_file, str) or not calibration_file.strip():
+                raise ValueError("missing calibration file")
+            calibration_path = Path(calibration_file)
+            if not calibration_path.is_absolute():
+                calibration_path = PROJECT_ROOT / calibration_path
+            validate_approved_calibration(calibration_path, gallery, recognition_config)
+        except Exception:
+            LOGGER.error("RECONOCIMIENTO DESACTIVADO — CALIBRACIÓN INVÁLIDA")
+            automatic_recognition = False
+            calibration_invalid = True
     matcher = FaceMatcher(
         top_k=int(config["matcher"]["top_k"]),
         policy=MatchPolicy(automatic_decision_enabled=False, threshold=None),
     )
     recognition_policy = RecognitionPolicy(
-        automatic_decision_enabled=False,
-        match_threshold=None,
-        ambiguity_margin=None,
+        automatic_decision_enabled=automatic_recognition,
+        match_threshold=(recognition_config.get("match_threshold")
+                         if automatic_recognition else None),
+        ambiguity_margin=(recognition_config.get("ambiguity_margin")
+                          if automatic_recognition else None),
         top_k=int(recognition_config["top_k"]),
         minimum_quality_score=recognition_config["minimum_quality_score"],
         allow_low_quality=bool(recognition_config["allow_low_quality"]),
@@ -492,7 +509,8 @@ def build_controller(
     coordinator = (None if person_repository is None else
                    PersonEnrollmentCoordinator(person_repository, gallery, workflow))
     return LocalFaceUIController(
-        ExperimentalRecognitionSession(recognition_service), workflow, coordinator,
+        ExperimentalRecognitionSession(
+            recognition_service, calibration_invalid=calibration_invalid), workflow, coordinator,
     )
 
 

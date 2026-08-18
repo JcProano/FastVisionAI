@@ -10,15 +10,9 @@ from src.ui.contracts import ErrorDTO, MonitoringDTO, UIErrorCode, UIState
 
 
 class ExperimentalRecognitionSession:
-    def __init__(self, service: RecognitionService) -> None:
-        policy = service.policy
-        if policy.automatic_decision_enabled:
-            raise ValueError("experimental UI requires automatic decisions to remain disabled")
-        if policy.match_threshold is not None:
-            raise ValueError("experimental UI requires match_threshold=null")
-        if policy.ambiguity_margin is not None:
-            raise ValueError("experimental UI requires ambiguity_margin=null")
+    def __init__(self, service: RecognitionService, *, calibration_invalid: bool = False) -> None:
         self._service = service
+        self._calibration_invalid = calibration_invalid
 
     @property
     def gallery(self) -> FaceGallery:
@@ -28,6 +22,8 @@ class ExperimentalRecognitionSession:
     def query(
         self, embedding: FaceEmbedding, score: FaceQualityScore | None = None
     ) -> tuple[MonitoringDTO, ErrorDTO | None]:
+        if self._calibration_invalid:
+            return self.unavailable(), None
         try:
             result = self._service.recognize(embedding, score)
         except Exception:
@@ -39,43 +35,55 @@ class ExperimentalRecognitionSession:
             return self.empty(), None
         if result.state is RecognitionState.INCOMPATIBLE:
             return self.incompatible(), None
-        if result.state is not RecognitionState.NOT_EVALUATED:
-            return self.unavailable(), ErrorDTO(
-                UIState.ERROR, UIErrorCode.MATCHER_ERROR,
-                "La política experimental devolvió un estado no permitido.", True,
-            )
         best = result.primary_candidate
+        if result.state is RecognitionState.UNKNOWN:
+            return MonitoringDTO(
+                UIState.MONITORING, "PERSONA NO REGISTRADA", None, result.similarity,
+                "EVALUATED", True, None if score is None else score.total_score,
+                None if score is None else score.quality_band.value, "UNKNOWN", None,
+                result.evaluated, self._service.policy.match_threshold,
+            ), None
         if best is None:
-            return self.incompatible(), None
+            return self.unavailable(), None
+        message = {
+            RecognitionState.NOT_EVALUATED:
+                "CANDIDATO DETECTADO — RECONOCIMIENTO AÚN NO CALIBRADO",
+            RecognitionState.MATCH: "IDENTIFICADO",
+            RecognitionState.AMBIGUOUS: "COINCIDENCIA AMBIGUA",
+        }[result.state]
         return MonitoringDTO(
-            UIState.MONITORING, "Candidato experimental",
-            best.display_name, best.similarity, "NOT_EVALUATED",
+            UIState.MONITORING, message,
+            best.display_name, best.similarity,
+            "EVALUATED" if result.evaluated else "NOT_EVALUATED",
             True, None if score is None else score.total_score,
             None if score is None else score.quality_band.value,
-            RecognitionState.NOT_EVALUATED.name,
-            best.person_id,
+            result.state.name, best.person_id, result.evaluated,
+            self._service.policy.match_threshold,
         ), None
 
     @staticmethod
     def empty() -> MonitoringDTO:
         return MonitoringDTO(
-            UIState.MONITORING, "Sin candidatos registrados", None, None,
+            UIState.MONITORING, "GALERÍA VACÍA", None, None,
             "deshabilitada / NOT_EVALUATED", True,
             recognition_state=RecognitionState.NO_GALLERY.name,
+            evaluated=False,
         )
 
     @staticmethod
     def incompatible() -> MonitoringDTO:
         return MonitoringDTO(
-            UIState.MONITORING, "Sin candidatos compatibles", None, None,
+            UIState.MONITORING, "MODELO BIOMÉTRICO INCOMPATIBLE", None, None,
             "deshabilitada / NOT_EVALUATED", True,
             recognition_state=RecognitionState.INCOMPATIBLE.name,
+            evaluated=False,
         )
 
     @staticmethod
     def unavailable() -> MonitoringDTO:
         return MonitoringDTO(
-            UIState.MONITORING, "Sin candidatos compatibles", None, None,
+            UIState.MONITORING, "RECONOCIMIENTO DESACTIVADO — CALIBRACIÓN INVÁLIDA", None, None,
             "deshabilitada / NOT_EVALUATED", True,
             recognition_state=RecognitionState.NOT_EVALUATED.name,
+            evaluated=False,
         )
