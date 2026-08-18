@@ -18,7 +18,7 @@
     "allow_manual_events": true,
     "automatic_attendance_enabled": false,
     "automatic_mode": "TOGGLE_DAILY",
-    "database_path": "data/ui_validation/attendance.db",
+    "database_path": "data/fastvision/attendance.db",
     "duplicate_event_cooldown_seconds": 60.0,
     "enabled": true,
     "minimum_observation_seconds": 2.0,
@@ -37,7 +37,7 @@
   },
   "audit": {
     "dashboard_refresh_seconds": 30.0,
-    "database_path": "data/ui_validation/audit.db",
+    "database_path": "data/fastvision/audit.db",
     "default_query_limit": 200,
     "enabled": true,
     "max_query_limit": 1000,
@@ -48,9 +48,9 @@
   },
   "backup": {
     "allowed_configuration_files": [
-      "config/local_face_validation.dev.json"
+      "config/local_face_validation.pc.json"
     ],
-    "directory": "data/ui_validation/backups",
+    "directory": "data/fastvision/backups",
     "enabled": true,
     "include_configuration": true,
     "maximum_archive_size_bytes": 2147483648,
@@ -75,7 +75,7 @@
   },
   "config_schema_version": 1,
   "data_namespace": {
-    "root": "data/ui_validation"
+    "root": "data/fastvision"
   },
   "configuration_manager": {
     "allow_export": true,
@@ -117,7 +117,7 @@
     "reject_exact_duplicates": true
   },
   "event_history": {
-    "database_path": "data/ui_validation/events.db",
+    "database_path": "data/fastvision/events.db",
     "enabled": true,
     "history_limit": 500,
     "registered_cooldown_seconds": 60.0,
@@ -172,9 +172,9 @@
     "presentation_timezone": "America/Guayaquil"
   },
   "persistence": {
-    "directory": "data/ui_validation",
+    "directory": "data/fastvision/gallery",
     "enabled_by_default": false,
-    "load_on_startup": false
+    "load_on_startup": true
   },
   "photo_capture": {
     "mode": "automatic",
@@ -184,10 +184,10 @@
   },
   "person_database": {
     "enabled": true,
-    "path": "data/ui_validation/people.db",
+    "path": "data/fastvision/people.db",
     "timeout_seconds": 5.0
   },
-  "profile_name": "local_face_validation_dev",
+  "profile_name": "local_face_validation_pc",
   "profile_version": "1.0",
   "quality": {
     "profile_file": "config/face_quality.dev.json"
@@ -217,7 +217,7 @@
   "security": {
     "appliance_mode": false,
     "bootstrap_admin_enabled": true,
-    "database_path": "data/ui_validation/users.db",
+    "database_path": "data/fastvision/users.db",
     "enabled": true,
     "lockout_seconds": 300,
     "max_failed_attempts": 5,
@@ -258,7 +258,7 @@
     "stale_frame_seconds": 3
   },
   "thumbnails": {
-    "directory": "data/ui_validation/thumbnails",
+    "directory": "data/fastvision/thumbnails",
     "enabled": true,
     "format": "jpeg",
     "height": 224,

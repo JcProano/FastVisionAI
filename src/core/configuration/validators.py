@@ -20,10 +20,12 @@ KNOWN_FIELDS["security"].add("skip_login_for_local_validation")
 KNOWN_FIELDS["security"].add("appliance_mode")
 KNOWN_FIELDS["web_dashboard"]={"enabled","host","port","open_browser_on_start","allow_remote_lan","video_max_fps","video_jpeg_quality","max_stream_clients"}
 KNOWN_FIELDS["ui"]={"tk_enabled","startup_mode"}
+KNOWN_FIELDS["data_namespace"]={"root"}
 KNOWN_FIELDS["audit"]={"enabled","database_path","sqlite_timeout_seconds","dashboard_refresh_seconds","default_query_limit","max_query_limit","metadata_max_items","metadata_value_max_length","message_max_length"}
 ROOT_FIELDS={"config_schema_version","profile_name","profile_version",*KNOWN_FIELDS}
 PATH_FIELDS={("guided_capture","policy_file"),("quality","profile_file"),("persistence","directory"),("thumbnails","directory"),("person_database","path"),("event_history","database_path"),("attendance","database_path"),("security","database_path"),("backup","directory")}
 PATH_FIELDS.add(("audit","database_path"))
+PATH_FIELDS.add(("data_namespace","root"))
 SECRET=re.compile(r"password|secret|token|api_key|credential|private_key",re.I)
 
 class ConfigurationValidator:
@@ -54,6 +56,7 @@ class ConfigurationValidator:
     issue=self._path(value,f"backup.allowed_configuration_files[{index}]")
     if issue:issues.append(issue)
   self._positive_sections(candidate,issues)
+  self._data_namespace(candidate,issues)
   if "camera" in candidate and isinstance(candidate.get("camera"),dict):
    try:parse_discovery_config(candidate["camera"])
    except ValueError as exc:issues.append(ConfigurationValidationIssue("camera",ValidationSeverity.ERROR,str(exc)))
@@ -131,6 +134,27 @@ class ConfigurationValidator:
    if not isinstance(values,dict):continue
    for field in fields:
     if field in values and (isinstance(values[field],bool) or not isinstance(values[field],(int,float)) or not math.isfinite(float(values[field])) or values[field]<=0):issues.append(ConfigurationValidationIssue(f"{section}.{field}",ValidationSeverity.ERROR,"El valor debe ser positivo y finito."))
+
+ def _data_namespace(self,candidate,issues):
+  message="La base de personas, la galería biométrica y los thumbnails deben pertenecer al mismo namespace de datos."
+  values=(
+   candidate.get("person_database",{}).get("path") if isinstance(candidate.get("person_database",{}),dict) else None,
+   candidate.get("persistence",{}).get("directory") if isinstance(candidate.get("persistence",{}),dict) else None,
+   candidate.get("thumbnails",{}).get("directory") if isinstance(candidate.get("thumbnails",{}),dict) else None,
+  )
+  if any(value is None for value in values):return
+  inferred=[]
+  for index,value in enumerate(values):
+   if not isinstance(value,str):return
+   path=Path(value);parts=path.parts
+   if len(parts)>=2 and parts[0]=="data":inferred.append(Path(*parts[:2]))
+   elif index==0:inferred.append(path.parent)
+   elif path.name in {"gallery","thumbnails"}:inferred.append(path.parent)
+   else:inferred.append(path)
+  namespace=candidate.get("data_namespace",{})
+  explicit=namespace.get("root") if isinstance(namespace,dict) else None
+  if len(set(inferred))!=1 or (explicit is not None and Path(str(explicit))!=inferred[0]):
+   issues.append(ConfigurationValidationIssue("data_namespace",ValidationSeverity.ERROR,message))
 
 def redact(value:Any,key:str="")->Any:
  if SECRET.search(key):return "[REDACTED]"

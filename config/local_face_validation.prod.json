@@ -1,5 +1,6 @@
 {
   "config_schema_version": 1,
+  "data_namespace": {"root": "data/fastvision"},
   "profile_name": "local_face_validation_prod",
   "profile_version": "1.0",
   "camera": {

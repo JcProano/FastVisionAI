@@ -1,5 +1,6 @@
 {
   "config_schema_version": 1,
+  "data_namespace": {"root": "data/fastvision"},
   "profile_name": "local_face_validation_jetson",
   "profile_version": "1.0",
   "camera": {"source": 0, "presentation": {"rotation": 0, "mirror_horizontal": false}, "presentation_crop": {"enabled": false, "top_percent": 0, "bottom_percent": 0, "left_percent": 0, "right_percent": 0}},

@@ -190,20 +190,45 @@ def ask_startup_mode(root: object) -> StartupMode | None:
 GALLERY_SYNC_WARNING = (
     "La información civil y la galería biométrica activa no están sincronizadas."
 )
+GALLERY_SYNC_ERROR = (
+    "La sincronización entre personas ACTIVE y la galería biométrica es incompatible; "
+    "revise el perfil de datos. No se realizó ninguna reparación automática."
+)
+
+@dataclass(frozen=True, slots=True)
+class StorageSynchronizationDiagnostic:
+    gallery_loaded: bool
+    identity_count: int
+    template_count: int
+    active_person_count: int
+    matched_person_ids: tuple[str, ...]
+    synchronization_ok: bool
+
+def storage_synchronization_diagnostic(
+    repository: PersonRepository | None, gallery: FaceGallery, *, gallery_loaded: bool,
+) -> StorageSynchronizationDiagnostic:
+    active_ids: set[str] = set()
+    if repository is not None:
+        offset = 0
+        while True:
+            page = repository.list(limit=100, offset=offset)
+            active_ids.update(item.person_id for item in page if item.status is PersonStatus.ACTIVE)
+            if len(page) < 100: break
+            offset += len(page)
+    gallery_ids = {item.person_id for item in gallery.list_identities()}
+    return StorageSynchronizationDiagnostic(
+        gallery_loaded, len(gallery_ids), len(gallery.templates()), len(active_ids),
+        tuple(sorted(active_ids & gallery_ids)), active_ids == gallery_ids,
+    )
 
 
 def civil_gallery_sync_warning(repository: PersonRepository | None,
                                gallery: FaceGallery) -> str | None:
     if repository is None: return None
-    active_ids: set[str] = set()
-    offset = 0
-    while True:
-        page = repository.list(limit=100, offset=offset)
-        active_ids.update(item.person_id for item in page if item.status is PersonStatus.ACTIVE)
-        if len(page) < 100: break
-        offset += len(page)
-    gallery_ids = {item.person_id for item in gallery.list_identities()}
-    return GALLERY_SYNC_WARNING if active_ids != gallery_ids and (active_ids or gallery_ids) else None
+    diagnostic = storage_synchronization_diagnostic(
+        repository, gallery, gallery_loaded=bool(gallery.list_identities()))
+    has_data = diagnostic.active_person_count or diagnostic.identity_count
+    return GALLERY_SYNC_WARNING if not diagnostic.synchronization_ok and has_data else None
 
 
 def local_validation_login_bypass_enabled(settings: dict[str, object]) -> bool:
@@ -974,9 +999,24 @@ def main() -> int:
     application_events, application_event_diagnostics = build_application_events(settings)
     startup = load_startup_gallery(settings, force_load=args.load_gallery)
     person_repository = build_person_repository(settings)
-    gallery_sync_warning = civil_gallery_sync_warning(person_repository, startup.gallery)
-    if gallery_sync_warning is not None:
-        LOGGER.warning("Civil/gallery synchronization mismatch detected")
+    synchronization = storage_synchronization_diagnostic(
+        person_repository, startup.gallery,
+        gallery_loaded=startup.error is None and startup.message.startswith("Galería cargada:"),
+    )
+    LOGGER.info(
+        "Storage synchronization diagnostic gallery_loaded=%s identity_count=%d "
+        "template_count=%d active_person_count=%d matched_person_ids=%s synchronization_ok=%s",
+        synchronization.gallery_loaded, synchronization.identity_count,
+        synchronization.template_count, synchronization.active_person_count,
+        synchronization.matched_person_ids, synchronization.synchronization_ok,
+    )
+    integral_profile = settings.get("profile_name") in {
+        "local_face_validation_pc", "local_face_validation_prod",
+        "local_face_validation_jetson",
+    }
+    synchronization_error = integral_profile and not synchronization.synchronization_ok
+    if synchronization_error:
+        LOGGER.error("Civil/gallery synchronization is incompatible; automatic repair disabled")
     detection_event_service = build_detection_event_service(settings)
     attendance_controller = build_attendance(
         settings, person_repository, authorization=security.authorization,
@@ -1595,12 +1635,14 @@ def main() -> int:
         presentation_frame_store.close,
     )
     if not tk_enabled:root.withdraw()
-    if gallery_sync_warning is not None:
-        app.status.configure(text=f"WARNING: {gallery_sync_warning}")
     app.show_monitoring(controller.monitoring.empty())
     app.status.configure(text=startup.message)
     if startup.error is not None:
         app.show_error(startup.error)
+    elif synchronization_error:
+        app.show_error(ErrorDTO(
+            UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR, GALLERY_SYNC_ERROR, True,
+        ))
     session.start()
     if (initial_selection_result is not None
             and (initial_selection_result.requires_selection or not initial_selection_result.sources)):
