@@ -224,6 +224,7 @@ class LocalFaceTkApp:
         audit_controller: object | None = None,
         audit_refresh_seconds: float = 30.0,
         local_validation_login_bypass: bool = False,
+        appliance_mode: bool = False,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -285,10 +286,15 @@ class LocalFaceTkApp:
         self._audit_controller = audit_controller
         self._audit_refresh_seconds = audit_refresh_seconds
         self._local_validation_login_bypass = local_validation_login_bypass
+        self._appliance_mode = appliance_mode
+        self._web_shutdown = None
+        self._presentation_frame_close = None
         self._audit_after_id = None
         self._dashboard_refresh_coordinator = None
         self._fullscreen = False
         self._professional_photos: list[Any] = []
+        self._camera_source_name = "N/D"
+        self._camera_source_type = "N/D"
 
         self._form: tk.Toplevel | None = None
         self._enrollment_video: Any | None = None
@@ -345,7 +351,8 @@ class LocalFaceTkApp:
         self.header_state.grid(row=0, column=1, sticky="e")
         self.validation_mode_banner = ttk.Label(
             header,
-            text=local_validation_banner(local_validation_login_bypass),
+            text=("MODO APPLIANCE — RED LOCAL" if appliance_mode else
+                  local_validation_banner(local_validation_login_bypass)),
         )
         self.validation_mode_banner.grid(row=1, column=0, columnspan=2, sticky="w")
 
@@ -827,6 +834,8 @@ class LocalFaceTkApp:
         self,
         dto: RuntimeStatusDTO,
     ) -> None:
+        self._camera_source_name=dto.camera_source_name
+        self._camera_source_type=dto.camera_source_type
         self.runtime_status.configure(
             text=(
                 f"Cámara: {dto.camera_state}\n"
@@ -1095,6 +1104,9 @@ class LocalFaceTkApp:
     def set_dashboard_refresh_coordinator(self, coordinator) -> None:
         self._dashboard_refresh_coordinator=coordinator
         coordinator.start()
+
+    def set_appliance_shutdown(self, web_shutdown=None, frame_store_close=None) -> None:
+        self._web_shutdown=web_shutdown;self._presentation_frame_close=frame_store_close
 
     def professional_live_state(self) -> DashboardLiveStateDTO:
         recognition_state=self._dashboard.system.recognition_state
@@ -1682,8 +1694,16 @@ class LocalFaceTkApp:
         """
         if self._closing:return
         self._closing = True
+        web_shutdown=getattr(self,"_web_shutdown",None)
+        if web_shutdown is not None:
+            try:web_shutdown()
+            except Exception:pass
         coordinator=getattr(self,"_dashboard_refresh_coordinator",None)
         if coordinator is not None:coordinator.close()
+        frame_close=getattr(self,"_presentation_frame_close",None)
+        if frame_close is not None:
+            try:frame_close()
+            except Exception:pass
         self._close_photo_capture()
         enrollment_after_id = getattr(self, "_enrollment_resume_after_id", None)
         if enrollment_after_id is not None:

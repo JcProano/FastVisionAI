@@ -16,6 +16,9 @@ KNOWN_FIELDS["guided_capture"].add("minimum_quality_score")
 KNOWN_FIELDS["guided_capture"].add("stability_frames")
 KNOWN_FIELDS["dashboard"].update({"refresh_seconds","statistics_refresh_seconds"})
 KNOWN_FIELDS["security"].add("skip_login_for_local_validation")
+KNOWN_FIELDS["security"].add("appliance_mode")
+KNOWN_FIELDS["web_dashboard"]={"enabled","host","port","open_browser_on_start","allow_remote_lan","video_max_fps","video_jpeg_quality","max_stream_clients"}
+KNOWN_FIELDS["ui"]={"tk_enabled"}
 KNOWN_FIELDS["audit"]={"enabled","database_path","sqlite_timeout_seconds","dashboard_refresh_seconds","default_query_limit","max_query_limit","metadata_max_items","metadata_value_max_length","message_max_length"}
 ROOT_FIELDS={"config_schema_version","profile_name","profile_version",*KNOWN_FIELDS}
 PATH_FIELDS={("guided_capture","policy_file"),("quality","profile_file"),("persistence","directory"),("thumbnails","directory"),("person_database","path"),("event_history","database_path"),("attendance","database_path"),("security","database_path"),("backup","directory")}
@@ -66,6 +69,23 @@ class ConfigurationValidator:
     if value is not None and (isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(float(value)) or value<=0):issues.append(ConfigurationValidationIssue(f"dashboard.{field}",ValidationSeverity.ERROR,"El intervalo debe ser positivo y finito."))
    operational=dashboard.get("refresh_seconds");statistics=dashboard.get("statistics_refresh_seconds")
    if isinstance(operational,(int,float)) and not isinstance(operational,bool) and isinstance(statistics,(int,float)) and not isinstance(statistics,bool) and statistics<operational:issues.append(ConfigurationValidationIssue("dashboard.statistics_refresh_seconds",ValidationSeverity.ERROR,"Las estadísticas no pueden refrescarse más rápido que el dashboard."))
+  web=candidate.get("web_dashboard",{})
+  if isinstance(web,dict):
+   host=web.get("host")
+   if host is not None:
+    try:_validate_web_host(host)
+    except ValueError as exc:issues.append(ConfigurationValidationIssue("web_dashboard.host",ValidationSeverity.ERROR,str(exc)))
+   port=web.get("port")
+   if port is not None and (isinstance(port,bool) or not isinstance(port,int) or not 1<=port<=65535):issues.append(ConfigurationValidationIssue("web_dashboard.port",ValidationSeverity.ERROR,"El puerto debe ser un entero entre 1 y 65535."))
+   fps=web.get("video_max_fps")
+   if fps is not None and (isinstance(fps,bool) or not isinstance(fps,(int,float)) or not math.isfinite(float(fps)) or not 0<float(fps)<=30):issues.append(ConfigurationValidationIssue("web_dashboard.video_max_fps",ValidationSeverity.ERROR,"La frecuencia MJPEG debe estar entre 0 y 30 FPS."))
+   quality=web.get("video_jpeg_quality")
+   if quality is not None and (isinstance(quality,bool) or not isinstance(quality,int) or not 1<=quality<=100):issues.append(ConfigurationValidationIssue("web_dashboard.video_jpeg_quality",ValidationSeverity.ERROR,"La calidad JPEG debe estar entre 1 y 100."))
+   clients=web.get("max_stream_clients")
+   if clients is not None and (isinstance(clients,bool) or not isinstance(clients,int) or not 1<=clients<=10):issues.append(ConfigurationValidationIssue("web_dashboard.max_stream_clients",ValidationSeverity.ERROR,"Los clientes MJPEG deben estar entre 1 y 10."))
+   if web.get("enabled",False) and host not in (None,"localhost","127.0.0.1","::1") and not web.get("allow_remote_lan",False):issues.append(ConfigurationValidationIssue("web_dashboard.allow_remote_lan",ValidationSeverity.ERROR,"Un host de red requiere allow_remote_lan=true."))
+  ui=candidate.get("ui",{})
+  if isinstance(ui,dict) and ui.get("tk_enabled") is False and not (isinstance(web,dict) and web.get("enabled") is True):issues.append(ConfigurationValidationIssue("ui.tk_enabled",ValidationSeverity.ERROR,"El modo experimental sin Tk requiere web_dashboard.enabled=true."))
   if isinstance(guided,dict) and "minimum_quality_score" in guided:
    minimum=guided["minimum_quality_score"]
    if isinstance(minimum,bool) or not isinstance(minimum,(int,float)) or not math.isfinite(float(minimum)) or not 0<=float(minimum)<=100:issues.append(ConfigurationValidationIssue("guided_capture.minimum_quality_score",ValidationSeverity.ERROR,"El umbral debe estar entre 0 y 100."))
@@ -122,4 +142,12 @@ def known_only(value:dict[str,Any])->dict[str,Any]:
  return result
 
 def _boolean_field(field:str)->bool:
- return field=="enabled" or field.endswith("_enabled") or field.startswith(("allow_","require_","reject_","reset_","load_","include_","mirrored_","replace_","continue_","fail","skip_"))
+ return field in {"appliance_mode","open_browser_on_start"} or field=="enabled" or field.endswith("_enabled") or field.startswith(("allow_","require_","reject_","reset_","load_","include_","mirrored_","replace_","continue_","fail","skip_"))
+
+def _validate_web_host(value:object)->None:
+ import ipaddress
+ if not isinstance(value,str) or not value or value.strip()!=value or len(value)>253 or any(ord(character)<33 for character in value):raise ValueError("El host web es inválido.")
+ if value=="localhost":return
+ try:ipaddress.ip_address(value);return
+ except ValueError:pass
+ if not re.fullmatch(r"(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*",value):raise ValueError("El host web es inválido.")

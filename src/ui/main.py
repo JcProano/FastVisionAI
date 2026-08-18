@@ -61,6 +61,10 @@ from src.ui.thumbnails import ThumbnailManager
 from src.ui.photo_capture import PersonPhotoController
 from src.ui.photo_capture import AutomaticPhotoPolicy
 from src.ui.video_presentation import VideoPresentation
+from src.ui.web_dashboard import (
+    LatestPresentationFrameStore, WebDashboardController, WebDashboardServer,
+)
+from src.ui.web_dashboard.contracts import WebDashboardPolicy
 
 
 def _video_presentation_settings(settings: dict[str, object]) -> dict[str, object]:
@@ -167,6 +171,15 @@ def local_validation_login_bypass_enabled(settings: dict[str, object]) -> bool:
     return enabled
 
 
+def appliance_mode_enabled(settings: dict[str, object]) -> bool:
+    configuration=settings.get("security",{})
+    if not isinstance(configuration,dict):raise ValueError("security configuration must be an object")
+    enabled=configuration.get("appliance_mode",False)
+    if type(enabled) is not bool:raise ValueError("security.appliance_mode must be boolean")
+    if enabled and not bool(configuration.get("enabled",True)):raise ValueError("appliance mode requires security.enabled=true")
+    return enabled
+
+
 def start_local_validation_admin_session(
     security: SecurityController,
 ) -> AuthenticatedSessionDTO:
@@ -179,6 +192,15 @@ def start_local_validation_admin_session(
         UserRole.ADMIN, UserStatus.ACTIVE, 0, None, None, None, now, now,
     )
     return security.sessions.start(temporary_user)
+
+
+def start_appliance_admin_session(security: SecurityController) -> AuthenticatedSessionDTO:
+    """Create an ADMIN principal only in memory; it is never a credential account."""
+    if not security.enabled:raise ValueError("appliance session requires enabled security")
+    now=datetime.now(timezone.utc)
+    principal=UserDTO(str(uuid.uuid4()),"appliance","Appliance Jetson",UserRole.ADMIN,
+                      UserStatus.ACTIVE,0,None,None,None,now,now)
+    return security.sessions.start(principal)
 
 
 def authenticate_startup(
@@ -224,7 +246,10 @@ def build_security(
     if root not in database.parents:
         raise ValueError("security database path escapes project root")
     repository = UserRepository(database)
-    repository.initialize()  # failure deliberately aborts administrative startup
+    appliance=configuration.get("appliance_mode",False)
+    if type(appliance) is not bool:raise ValueError("security.appliance_mode must be boolean")
+    if not appliance:
+        repository.initialize()  # normal login/bootstrap remains fail-closed
     password_policy = PasswordPolicy(
         int(configuration.get("minimum_password_length", 10)),
         int(configuration.get("maximum_password_length", 128)),
@@ -855,10 +880,22 @@ def main() -> int:
         settings = configuration_service.current().as_mapping()
     else:
         settings = raw_settings
+    ui_settings=settings.get("ui",{})
+    if not isinstance(ui_settings,dict):raise ValueError("ui configuration must be an object")
+    tk_enabled=ui_settings.get("tk_enabled",True)
+    if type(tk_enabled) is not bool:raise ValueError("ui.tk_enabled must be boolean")
+    if not tk_enabled:
+        LOGGER.warning("ui.tk_enabled=false is experimental in RC14; Tk remains the event-loop host")
     if settings.get("profile_name") == "local_face_validation_prod" and args.mock_camera:
         parser.error("production profile does not allow mock camera")
     security = build_security(settings)
+    appliance_mode=appliance_mode_enabled(settings)
+    if appliance_mode:
+        start_appliance_admin_session(security)
+        LOGGER.warning("MODO APPLIANCE JETSON enabled; credentials database is not used")
     local_validation_bypass = local_validation_login_bypass_enabled(settings)
+    if appliance_mode and local_validation_bypass:
+        raise ValueError("appliance_mode and local validation login bypass are mutually exclusive")
     audit_service=build_audit(settings)
     def audit(source):return AuditCallbackAdapter(audit_service,security.sessions.context,source)
     security.audit_callback=audit("security")
@@ -966,7 +1003,7 @@ def main() -> int:
             "Tkinter no está disponible en este entorno; no se instalaron dependencias"
         ) from exc
     root = tk.Tk()
-    if security.enabled:
+    if security.enabled and not appliance_mode:
         if not authenticate_startup(
             root, security, skip_login=local_validation_bypass,
         ):
@@ -974,6 +1011,7 @@ def main() -> int:
             return 0
     # Real Runtime/Camera ownership is deliberately constructed only after login.
     cancel_event = threading.Event()
+    presentation_frame_store=LatestPresentationFrameStore()
     camera_discovery_config = parse_discovery_config(settings["camera"])
     camera_discovery = CameraSourceDiscovery(camera_discovery_config)
     initial_selection = None
@@ -1061,6 +1099,7 @@ def main() -> int:
         stay_alive_disconnected=True,
         camera_display_name=initial_camera_name,
         camera_source_type=initial_camera_type,
+        presentation_frame_sink=presentation_frame_store.publish,
     )
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, object] = {}
@@ -1453,6 +1492,7 @@ def main() -> int:
         audit_controller=audit_controller,
         audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
         local_validation_login_bypass=local_validation_bypass,
+        appliance_mode=appliance_mode,
     )
     dashboard_coordinator = None
     if history_controller is not None and attendance_controller is not None and report_controller is not None:
@@ -1470,6 +1510,29 @@ def main() -> int:
         application_events.subscribe(DetectionEventStoredEvent,dashboard_coordinator.invalidate)
         application_events.subscribe(AttendanceRecordedEvent,dashboard_coordinator.invalidate)
         app.set_dashboard_refresh_coordinator(dashboard_coordinator)
+    web_server=None
+    web_policy=WebDashboardPolicy.from_mapping(settings.get("web_dashboard",{}))
+    if web_policy.enabled:
+        web_controller=WebDashboardController(
+            lambda:None if dashboard_coordinator is None else dashboard_coordinator.last_snapshot,
+            people=people_search_controller,history=history_controller,
+            attendance=attendance_controller,reports=report_controller,
+            system_health=system_health_controller,identity_provider=identity_provider,
+            camera_provider=lambda:{
+                "state":app._dashboard.system.camera_state,
+                "name":app._camera_source_name,
+                "type":app._camera_source_type,
+                "source":current_camera_source.get("id") or "N/D",
+            },
+        )
+        web_server=WebDashboardServer(web_policy,web_controller,presentation_frame_store)
+        if not web_server.start():
+            LOGGER.warning("Web dashboard did not start; Tk and Runtime continue")
+    app.set_appliance_shutdown(
+        None if web_server is None else web_server.close,
+        presentation_frame_store.close,
+    )
+    if not tk_enabled:root.withdraw()
     if gallery_sync_warning is not None:
         app.status.configure(text=f"WARNING: {gallery_sync_warning}")
     app.show_monitoring(controller.monitoring.empty())

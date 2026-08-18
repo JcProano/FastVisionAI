@@ -211,6 +211,7 @@
     "presentation_timezone": "America/Guayaquil"
   },
   "security": {
+    "appliance_mode": false,
     "bootstrap_admin_enabled": true,
     "database_path": "data/fastvision/users.db",
     "enabled": true,
@@ -220,6 +221,19 @@
     "minimum_password_length": 10,
     "session_idle_timeout_seconds": 1800,
     "skip_login_for_local_validation": true
+  },
+  "web_dashboard": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8080,
+    "open_browser_on_start": false,
+    "allow_remote_lan": false,
+    "video_max_fps": 10,
+    "video_jpeg_quality": 75,
+    "max_stream_clients": 3
+  },
+  "ui": {
+    "tk_enabled": true
   },
   "stability": {
     "enabled": true,

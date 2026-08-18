@@ -144,6 +144,7 @@ class LiveFaceSession:
         photo_capture_policy: AutomaticPhotoPolicy | None = None,
         stay_alive_disconnected: bool = False,
         camera_display_name: str = "N/D", camera_source_type: str = "N/D",
+        presentation_frame_sink: Callable[[VisualFrameDTO], object] | None = None,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -190,6 +191,7 @@ class LiveFaceSession:
         self._stay_alive_disconnected = stay_alive_disconnected
         self._camera_display_name = camera_display_name
         self._camera_source_type = camera_source_type
+        self._presentation_frame_sink = presentation_frame_sink
         self._photo_person_id: str | None = None
         self._photo_replace = False
         self._photo_capture_requested = False
@@ -387,6 +389,9 @@ class LiveFaceSession:
                                 "Error interno de inferencia; la sesión continúa.", True)
                     continue
                 dropped = _put_recent(self.visual_queue, step.visual)
+                if self._presentation_frame_sink is not None:
+                    try:self._presentation_frame_sink(step.visual)
+                    except Exception:pass
                 with self._metrics_lock:
                     self._frames_received += 1
                     self._frames_processed += 1

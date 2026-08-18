@@ -197,6 +197,7 @@
   },
   "security": {
     "enabled": true,
+    "appliance_mode": false,
     "skip_login_for_local_validation": false,
     "database_path": "data/fastvision/users.db",
     "bootstrap_admin_enabled": true,
@@ -205,6 +206,19 @@
     "max_failed_attempts": 5,
     "lockout_seconds": 300,
     "session_idle_timeout_seconds": 1800
+  },
+  "web_dashboard": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 8080,
+    "open_browser_on_start": false,
+    "allow_remote_lan": false,
+    "video_max_fps": 10,
+    "video_jpeg_quality": 75,
+    "max_stream_clients": 3
+  },
+  "ui": {
+    "tk_enabled": true
   },
   "backup": {
     "enabled": true,

@@ -1,5 +1,16 @@
 # FastVisionAI
 
+## Dashboard appliance en red local
+
+El perfil `config/local_face_validation.jetson.json` habilita una sesión ADMIN
+temporal en memoria y el dashboard web para el despliegue posterior en Jetson.
+
+> Este dashboard sin autenticación web está diseñado exclusivamente para
+> localhost o una LAN privada confiable. No exponer directamente a Internet.
+
+El servidor no configura UPnP, el router, HTTPS ni acceso desde Internet. En
+Jetson debe conservarse el OpenCV suministrado por JetPack.
+
 **Versión candidata:** `1.0.0-rc1`. Consulte [release notes](docs/RELEASE_NOTES_v1.0.0-rc1.md), [despliegue Ubuntu](docs/DEPLOYMENT_UBUNTU.md), [Jetson Orin Nano](docs/JETSON_ORIN_NANO.md) y [checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Auditoría administrativa local
