@@ -148,6 +148,7 @@
     "enabled": true,
     "registered_cooldown_seconds": 10.0,
     "registered_pause_seconds": 60.0,
+    "registered_popup_timeout_seconds": 60.0,
     "unknown_cooldown_seconds": 10.0,
     "unknown_popup_timeout_seconds": 60.0
   },
@@ -233,6 +234,7 @@
     "max_stream_clients": 3
   },
   "ui": {
+    "startup_mode": "TK",
     "tk_enabled": true
   },
   "stability": {

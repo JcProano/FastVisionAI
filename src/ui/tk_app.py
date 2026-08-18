@@ -659,7 +659,7 @@ class LocalFaceTkApp:
             )
         if getattr(self, "_enrollment_quality", None) is not None:
             quality = "No disponible" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
-            self._enrollment_quality.configure(text=f"Calidad: {quality}")
+            self._enrollment_quality.configure(text=f"Calidad de captura: {quality}\nEstado: {_capture_quality_state(dto.quality_score)}")
         if getattr(self, "_enrollment_reasons", None) is not None:
             reasons = (f"✓ Muestra guardada {dto.accepted_samples}/{dto.target_samples}"
                        if not dto.current_reasons and dto.accepted_samples else
@@ -703,10 +703,14 @@ class LocalFaceTkApp:
             ttk.Label(form, text="✓ REGISTRO FACIAL COMPLETADO",
                       font=("TkDefaultFont", 16, "bold")).pack(pady=(40, 12))
             ttk.Label(form, text=f"{dto.templates_registered}/5 muestras\n\n"
-                      "Ahora tomaremos su fotografía de perfil.",
+                      "Se guardaron 5 muestras biométricas correctamente.\n\n"
+                      "¿Desea tomar una fotografía de perfil?",
                       justify="center").pack(pady=12)
-            ttk.Button(form, text="Continuar",
-                       command=lambda: self._continue_profile_photo(dto.person_id)).pack(pady=16)
+            actions = ttk.Frame(form); actions.pack(pady=16)
+            ttk.Button(actions, text="Tomar fotografía",
+                       command=lambda: self._continue_profile_photo(dto.person_id)).pack(side="left", padx=6)
+            ttk.Button(actions, text="Omitir por ahora",
+                       command=self._skip_profile_photo).pack(side="left", padx=6)
             return
 
         self._close_enrollment_form()
@@ -732,6 +736,11 @@ class LocalFaceTkApp:
         self._close_enrollment_form()
         if self._on_start_photo is None or not self._on_start_photo(person_id):
             self.status.configure(text="No se pudo iniciar la fotografía de perfil.")
+
+    def _skip_profile_photo(self) -> None:
+        self._close_enrollment_form()
+        self.status.configure(text="Registro facial completado. Fotografía omitida por ahora.")
+        self._finish_enrollment_grace()
 
     def show_enrollment_conflict(self, dto: EnrollmentConflictDTO) -> None:
         self._enrollment_active = False
@@ -1295,7 +1304,9 @@ class LocalFaceTkApp:
             text="FOTO CAPTURADA" if dto.review else "CAPTURA DE FOTO DE PERFIL",
         )
         quality = "N/D" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
-        self._photo_capture_quality.configure(text=f"Calidad actual: {quality}")
+        self._photo_capture_quality.configure(
+            text=f"Calidad actual: {quality}\nEstado: {_capture_quality_state(dto.quality_score)}"
+        )
         required = dto.stability_required or 5
         self._photo_capture_stability.configure(
             text=f"Estabilidad: {dto.stability_observations}/{required}",
@@ -1790,6 +1801,13 @@ def _enrollment_checklist(accepted: int, target: int) -> str:
 def _enrollment_progress_bar(accepted: int, target: int) -> str:
     filled = 0 if target <= 0 else round(10 * accepted / target)
     return f"[{'█' * filled}{'-' * (10 - filled)}] {accepted}/{target}"
+
+
+def _capture_quality_state(score: float | None) -> str:
+    if score is None: return "NO EVALUADA"
+    if score >= 75: return "APROBADA"
+    if score >= 50: return "MEJORABLE"
+    return "INSUFICIENTE"
 
 
 def _enrollment_reason(reason: str) -> str:

@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 import uuid
+from enum import Enum
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -139,6 +140,53 @@ from src.ui.audit import AuditController, AuditLogWindow
 
 LOGGER = logging.getLogger(__name__)
 
+class StartupMode(str, Enum):
+    ASK = "ASK"
+    TK = "TK"
+    WEB = "WEB"
+    BOTH = "BOTH"
+
+def configured_startup_mode(settings: dict[str, object]) -> StartupMode:
+    """Read the additive UI mode while preserving legacy tk_enabled behavior."""
+    ui = settings.get("ui", {})
+    if not isinstance(ui, dict): raise ValueError("ui configuration must be an object")
+    value = ui.get("startup_mode")
+    if value is None:
+        web = settings.get("web_dashboard", {})
+        web_enabled = isinstance(web, dict) and web.get("enabled") is True
+        return StartupMode.BOTH if ui.get("tk_enabled", True) and web_enabled else (
+            StartupMode.WEB if ui.get("tk_enabled", True) is False else StartupMode.TK)
+    try: return StartupMode(str(value).upper())
+    except ValueError as exc: raise ValueError("ui.startup_mode must be ASK, TK, WEB or BOTH") from exc
+
+def apply_startup_mode(settings: dict[str, object], mode: StartupMode) -> dict[str, object]:
+    """Compose presentation flags without changing runtime/camera ownership."""
+    if mode is StartupMode.ASK: raise ValueError("ASK must be resolved before service composition")
+    result = dict(settings)
+    ui = dict(settings.get("ui", {})); web = dict(settings.get("web_dashboard", {}))
+    ui["tk_enabled"] = mode in {StartupMode.TK, StartupMode.BOTH}
+    web["enabled"] = mode in {StartupMode.WEB, StartupMode.BOTH}
+    if mode is StartupMode.TK: web["open_browser_on_start"] = False
+    result["ui"] = ui; result["web_dashboard"] = web
+    return result
+
+def ask_startup_mode(root: object) -> StartupMode | None:
+    """Modal appliance selector; closing it requests a clean shutdown."""
+    import tkinter as tk
+    from tkinter import ttk
+    selected: list[StartupMode] = []
+    window = tk.Toplevel(root); window.title("FASTVISION AI")
+    window.resizable(False, False); window.transient(root); window.grab_set()
+    ttk.Label(window, text="FASTVISION AI", font=("TkDefaultFont", 17, "bold")).pack(padx=42, pady=(28, 10))
+    ttk.Label(window, text="¿Cómo desea iniciar?").pack(pady=(0, 14))
+    def choose(mode: StartupMode) -> None: selected.append(mode); window.destroy()
+    for label, mode in (("Dashboard local", StartupMode.TK), ("Dashboard Web", StartupMode.WEB), ("Ambos", StartupMode.BOTH)):
+        ttk.Button(window, text=label, width=28, command=lambda item=mode: choose(item)).pack(padx=28, pady=5)
+    window.protocol("WM_DELETE_WINDOW", window.destroy)
+    window.bind("<Escape>", lambda _event: window.destroy())
+    window.wait_window()
+    return selected[0] if selected else None
+
 GALLERY_SYNC_WARNING = (
     "La información civil y la galería biométrica activa no están sincronizadas."
 )
@@ -205,7 +253,7 @@ def start_appliance_admin_session(security: SecurityController) -> Authenticated
 
 def authenticate_startup(
     root: object, security: SecurityController, *, skip_login: bool,
-    login_factory=LoginWindow,
+    login_factory=LoginWindow, reveal_root: bool = True,
 ) -> bool:
     """Authenticate before Runtime/Camera construction, optionally via explicit bypass."""
     root.withdraw()
@@ -215,7 +263,7 @@ def authenticate_startup(
         authenticated = True
     else:
         authenticated = bool(login_factory(root, security).run())
-    if authenticated:
+    if authenticated and reveal_root:
         root.deiconify()
     return authenticated
 
@@ -880,6 +928,7 @@ def main() -> int:
         settings = configuration_service.current().as_mapping()
     else:
         settings = raw_settings
+    requested_startup_mode = configured_startup_mode(settings)
     ui_settings=settings.get("ui",{})
     if not isinstance(ui_settings,dict):raise ValueError("ui configuration must be an object")
     tk_enabled=ui_settings.get("tk_enabled",True)
@@ -896,6 +945,28 @@ def main() -> int:
     local_validation_bypass = local_validation_login_bypass_enabled(settings)
     if appliance_mode and local_validation_bypass:
         raise ValueError("appliance_mode and local validation login bypass are mutually exclusive")
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Tkinter no está disponible en este entorno; no se instalaron dependencias"
+        ) from exc
+    root = tk.Tk(); root.withdraw()
+    if requested_startup_mode is StartupMode.ASK:
+        selected_mode = ask_startup_mode(root)
+        if selected_mode is None:
+            security.logout(); root.destroy(); return 0
+        settings = apply_startup_mode(settings, selected_mode)
+    else:
+        settings = apply_startup_mode(settings, requested_startup_mode)
+    tk_enabled = bool(settings["ui"]["tk_enabled"])
+    if security.enabled and not appliance_mode:
+        if not authenticate_startup(root, security, skip_login=local_validation_bypass,
+                                    reveal_root=tk_enabled):
+            root.destroy(); return 0
+    elif tk_enabled:
+        root.deiconify()
     audit_service=build_audit(settings)
     def audit(source):return AuditCallbackAdapter(audit_service,security.sessions.context,source)
     security.audit_callback=audit("security")
@@ -975,6 +1046,9 @@ def main() -> int:
             unknown_popup_timeout_seconds=float(
                 popup_settings.get("unknown_popup_timeout_seconds", 60.0)
             ),
+            registered_popup_timeout_seconds=float(
+                popup_settings.get("registered_popup_timeout_seconds", 60.0)
+            ),
             registered_pause_seconds=float(
                 popup_settings.get("registered_pause_seconds", 60.0)
             ),
@@ -995,20 +1069,6 @@ def main() -> int:
     popups_via_executor = uses_action_executor_popups(
         action_executor, decision_orchestrator, identification_controller,
     )
-    try:
-        import tkinter as tk
-        from tkinter import messagebox
-    except ModuleNotFoundError as exc:
-        raise RuntimeError(
-            "Tkinter no está disponible en este entorno; no se instalaron dependencias"
-        ) from exc
-    root = tk.Tk()
-    if security.enabled and not appliance_mode:
-        if not authenticate_startup(
-            root, security, skip_login=local_validation_bypass,
-        ):
-            root.destroy()
-            return 0
     # Real Runtime/Camera ownership is deliberately constructed only after login.
     cancel_event = threading.Event()
     presentation_frame_store=LatestPresentationFrameStore()
@@ -1406,6 +1466,8 @@ def main() -> int:
         on_view_person=open_profile,
         on_register=lambda: app.open_form(),
         unknown_timeout_seconds=identification_controller.policy.unknown_popup_timeout_seconds,
+        registered_timeout_seconds=float(settings.get("identification_popup", {}).get(
+            "registered_popup_timeout_seconds", 60.0)),
         on_unknown_closed=identification_controller.unknown_dismissed,
         on_dismissed=(None if application_events is None else lambda popup_type, reason:
             application_events.publish(PopupDismissedEvent(

@@ -26,17 +26,21 @@ class IdentificationPopupWindow:
         self, root: Any, provider: IdentityInfoProvider, *,
         on_view_person: Callable[[str], None], on_register: Callable[[], None],
         unknown_timeout_seconds: float = 60.0,
+        registered_timeout_seconds: float = 60.0,
         on_unknown_closed: Callable[[], None] | None = None,
         on_dismissed: Callable[[str, str], None] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         if unknown_timeout_seconds <= 0:
             raise ValueError("unknown_timeout_seconds must be positive")
+        if registered_timeout_seconds <= 0:
+            raise ValueError("registered_timeout_seconds must be positive")
         self.root = root
         self.provider = provider
         self._on_view_person = on_view_person
         self._on_register = on_register
         self._unknown_timeout_seconds = unknown_timeout_seconds
+        self._registered_timeout_seconds = registered_timeout_seconds
         self._on_unknown_closed = on_unknown_closed
         self._on_dismissed = on_dismissed
         self._monotonic = monotonic
@@ -156,7 +160,7 @@ class IdentificationPopupWindow:
         self._photo = None
         self.thumbnail.configure(image="", text="◯\n\nSin fotografía registrada")
         if dto.popup_type is IdentificationPopupType.REGISTERED_CANDIDATE:
-            self.title.configure(text="✔ IDENTIFICACIÓN EXITOSA")
+            self.title.configure(text="✔ PERSONA IDENTIFICADA")
             self.right_title.configure(text="PERSONA IDENTIFICADA")
             identifier = dto.external_identifier or "No disponible"
             similarity = ("No disponible" if dto.similarity is None
@@ -197,7 +201,8 @@ class IdentificationPopupWindow:
                     )
             self.primary.configure(text="Ver detalles", command=self._view)
             self.secondary.configure(text="Cerrar")
-            self._registered_deadline = self._monotonic() + 5.0
+            self._registered_deadline = self._monotonic() + getattr(
+                self, "_registered_timeout_seconds", 60.0)
             self._update_registered_countdown()
         else:
             self.title.configure(text="PERSONA NO REGISTRADA")

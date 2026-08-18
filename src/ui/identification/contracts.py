@@ -23,6 +23,7 @@ class IdentificationPopupPolicy:
     unknown_cooldown_seconds: float = 10.0
     candidate_stability_frames: int = 3
     unknown_popup_timeout_seconds: float = 60.0
+    registered_popup_timeout_seconds: float = 60.0
     registered_pause_seconds: float = 60.0
 
     def __post_init__(self) -> None:
@@ -32,6 +33,8 @@ class IdentificationPopupPolicy:
             raise ValueError("candidate_stability_frames must be positive")
         if self.unknown_popup_timeout_seconds <= 0:
             raise ValueError("unknown_popup_timeout_seconds must be positive")
+        if self.registered_popup_timeout_seconds <= 0:
+            raise ValueError("registered_popup_timeout_seconds must be positive")
         if self.registered_pause_seconds <= 0:
             raise ValueError("registered_pause_seconds must be positive")
 

@@ -34,6 +34,7 @@ class IdentificationPopupTests(unittest.TestCase):
         popup._on_view_person = lambda _person_id: None
         popup._on_register = lambda: registered.append(True)
         popup._unknown_timeout_seconds = 60.0
+        popup._registered_timeout_seconds = 60.0
         popup._on_unknown_closed = lambda: closed.append(True)
         popup._on_dismissed = None
         popup._monotonic = lambda: clock[0]
@@ -103,7 +104,7 @@ class IdentificationPopupTests(unittest.TestCase):
     def test_popup_text_actions_singleton_and_thumbnail_placeholder(self):
         source = inspect.getsource(IdentificationPopupWindow)
         for expected in (
-            "✔ IDENTIFICACIÓN EXITOSA", "PERSONA IDENTIFICADA",
+            "✔ PERSONA IDENTIFICADA", "PERSONA IDENTIFICADA",
             "PERSONA NO REGISTRADA",
             "Estado: IDENTIFICADO", "Ver detalles", "Registrar persona",
             "Sin fotografía registrada",
@@ -119,7 +120,7 @@ class IdentificationPopupTests(unittest.TestCase):
              patch("src.ui.identification.tk_popup.tk.PhotoImage", return_value="photo"):
             popup._render(self.registered())
         self.assertEqual(popup.thumbnail.values["image"], "photo")
-        self.assertEqual(popup.title.values["text"], "✔ IDENTIFICACIÓN EXITOSA")
+        self.assertEqual(popup.title.values["text"], "✔ PERSONA IDENTIFICADA")
         self.assertIn("Temporary Person", popup.details.values["text"])
         self.assertIn("Score de reconocimiento: 92.4 %", popup.details.values["text"])
         self.assertIn("Estado: IDENTIFICADO", popup.details.values["text"])
@@ -167,10 +168,10 @@ class IdentificationPopupTests(unittest.TestCase):
     def test_registered_countdown_manual_and_automatic_close(self):
         popup, clock, root, _, _ = self.popup()
         popup._render(self.registered(thumbnail=False))
-        self.assertEqual(popup.secondary.values["text"], "Cerrar (5)")
+        self.assertEqual(popup.secondary.values["text"], "Cerrar (60)")
         clock[0] = 1; root.run(popup._timer_id)
-        self.assertEqual(popup.secondary.values["text"], "Cerrar (4)")
-        clock[0] = 5; root.run(popup._timer_id)
+        self.assertEqual(popup.secondary.values["text"], "Cerrar (59)")
+        clock[0] = 60; root.run(popup._timer_id)
         self.assertEqual(popup.secondary.values["text"], "Cerrar (0)")
         self.assertFalse(popup.active); self.assertFalse(root.callbacks)
 

@@ -6,11 +6,33 @@ from unittest.mock import Mock
 
 from src.core.configuration import ConfigurationProfile, ConfigurationValidator
 from src.core.security import AuthorizationPermission, UserRole
-from src.ui.main import (appliance_mode_enabled, build_security,
+from src.ui.main import (StartupMode, appliance_mode_enabled, apply_startup_mode,
+                         build_security, configured_startup_mode,
                          start_appliance_admin_session)
 
 
 class JetsonApplianceTests(unittest.TestCase):
+    def test_startup_modes_are_explicit_and_compose_tk_web(self):
+        base={"ui":{"startup_mode":"ASK","tk_enabled":True},
+              "web_dashboard":{"enabled":True,"open_browser_on_start":True}}
+        self.assertIs(configured_startup_mode(base),StartupMode.ASK)
+        tk=apply_startup_mode(base,StartupMode.TK)
+        self.assertTrue(tk["ui"]["tk_enabled"]);self.assertFalse(tk["web_dashboard"]["enabled"])
+        self.assertFalse(tk["web_dashboard"]["open_browser_on_start"])
+        web=apply_startup_mode(base,StartupMode.WEB)
+        self.assertFalse(web["ui"]["tk_enabled"]);self.assertTrue(web["web_dashboard"]["enabled"])
+        both=apply_startup_mode(base,StartupMode.BOTH)
+        self.assertTrue(both["ui"]["tk_enabled"]);self.assertTrue(both["web_dashboard"]["enabled"])
+
+    def test_legacy_startup_configuration_remains_supported(self):
+        self.assertIs(configured_startup_mode({"ui":{"tk_enabled":True},"web_dashboard":{"enabled":False}}),StartupMode.TK)
+        self.assertIs(configured_startup_mode({"ui":{"tk_enabled":False},"web_dashboard":{"enabled":True}}),StartupMode.WEB)
+
+    def test_jetson_asks_and_registered_popup_lasts_sixty_seconds(self):
+        settings=json.loads(Path("config/local_face_validation.jetson.json").read_text())
+        self.assertEqual(settings["ui"]["startup_mode"],"ASK")
+        self.assertEqual(settings["identification_popup"]["registered_popup_timeout_seconds"],60)
+
     def test_appliance_session_is_ephemeral_admin_and_does_not_touch_users_database(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory);settings={"security":{"enabled":True,"appliance_mode":True,"database_path":"data/users.db"}}
