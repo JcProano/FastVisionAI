@@ -61,7 +61,7 @@ class PopupActionAdapterTests(unittest.TestCase):
             self.controller(provider))
         adapter.show_unregistered(
             context(ExecutableAction.SHOW_UNREGISTERED_POPUP),
-            PopupActionData("NO_GALLERY", message="No existe candidato local"),
+            PopupActionData("UNKNOWN", message="No existe candidato local", evaluated=True),
         )
         dto = adapter.drain()[0]
         self.assertEqual(dto.popup_type, IdentificationPopupType.UNREGISTERED)
@@ -83,20 +83,20 @@ class PopupActionAdapterTests(unittest.TestCase):
     def test_bounded_queue_keeps_recent_and_clear_close_are_safe(self):
         adapter = IdentificationPopupActionAdapter(self.controller(), queue_size=1)
         general = context(ExecutableAction.SHOW_UNREGISTERED_POPUP)
-        adapter.show_unregistered(general, PopupActionData("NO_GALLERY", message="first"))
-        adapter.show_unregistered(general, PopupActionData("NO_GALLERY", message="recent"))
+        adapter.show_unregistered(general, PopupActionData("UNKNOWN", message="first", evaluated=True))
+        adapter.show_unregistered(general, PopupActionData("UNKNOWN", message="recent", evaluated=True))
         values = adapter.drain()
         self.assertEqual(len(values), 1); self.assertEqual(values[0].message, "recent")
-        adapter.show_unregistered(general, PopupActionData("NO_GALLERY"))
+        adapter.show_unregistered(general, PopupActionData("UNKNOWN", evaluated=True))
         adapter.clear(); self.assertEqual(adapter.drain(), ())
         adapter.close()
         with self.assertRaisesRegex(RuntimeError, "closed"):
-            adapter.show_unregistered(general, PopupActionData("NO_GALLERY"))
+            adapter.show_unregistered(general, PopupActionData("UNKNOWN", evaluated=True))
 
     def test_contract_is_pii_free_and_adapter_never_imports_tkinter(self):
         self.assertEqual(
             {field.name for field in dataclasses.fields(PopupActionData)},
-            {"recognition_state", "similarity", "message"},
+            {"recognition_state", "similarity", "message", "evaluated"},
         )
         forbidden = {"name", "cedula", "external_identifier", "address", "phone",
                      "email", "thumbnail", "embedding", "template", "array", "model"}

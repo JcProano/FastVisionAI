@@ -88,9 +88,8 @@ class ActionExecutor:
             except ValueError:
                 skipped.append(action_name); reasons.append("unknown_action")
                 continue
-            reason = self._precondition(
-                action, value.person_id, value.detection_event, value.popup,
-            )
+            reason = self._precondition(action, value.person_id, value.detection_event,
+                                        value.popup)
             if reason is not None:
                 skipped.append(action_name); reasons.append(reason)
                 continue
@@ -139,6 +138,9 @@ class ActionExecutor:
                 return "popup_adapter_missing"
             if popup is None:
                 return "popup_action_data_missing"
+            if (popup.recognition_state.upper() != "UNKNOWN"
+                    or popup.evaluated is not True):
+                return "unregistered_popup_requires_evaluated_unknown"
         elif action is ExecutableAction.LOG_DETECTION_EVENT:
             if not policy.allow_detection_event_logging:
                 return "detection_event_logging_disabled"

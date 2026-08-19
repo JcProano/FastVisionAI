@@ -53,7 +53,7 @@ class DecisionOrchestrator:
             reasons.append("candidate_unregistered")
             unknown_stable = (
                 value.face_count == 1
-                and recognition in {"UNKNOWN", "NO_GALLERY", "NOT_EVALUATED"}
+                and recognition == "UNKNOWN"
                 and stability == "STABLE"
             )
             if policy.allow_unregistered_popup_proposal and unknown_stable:

@@ -48,7 +48,7 @@ class IdentificationPopupActionAdapter:
             raise RuntimeError("popup adapter is closed")
         dto = self._controller.observe_action(
             context.action.value, context.person_id, popup.recognition_state,
-            popup.similarity, popup.message,
+            popup.similarity, popup.message, popup.evaluated,
         )
         if self._application_events is not None:
             try:

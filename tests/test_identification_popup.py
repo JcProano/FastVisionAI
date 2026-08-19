@@ -106,7 +106,7 @@ class IdentificationPopupTests(unittest.TestCase):
         for expected in (
             "✔ PERSONA IDENTIFICADA", "PERSONA IDENTIFICADA",
             "PERSONA NO REGISTRADA",
-            "Estado: IDENTIFICADO", "Ver detalles", "Registrar persona",
+            "PENDIENTE DE CALIBRACIÓN", "Ver detalles", "Registrar persona",
             "Sin fotografía registrada",
             "winfo_exists", "lift",
         ):
@@ -120,16 +120,23 @@ class IdentificationPopupTests(unittest.TestCase):
              patch("src.ui.identification.tk_popup.tk.PhotoImage", return_value="photo"):
             popup._render(self.registered())
         self.assertEqual(popup.thumbnail.values["image"], "photo")
-        self.assertEqual(popup.title.values["text"], "✔ PERSONA IDENTIFICADA")
+        self.assertEqual(popup.title.values["text"], "PERSONA REGISTRADA")
         self.assertIn("Temporary Person", popup.details.values["text"])
         self.assertIn("Score de reconocimiento: 92.4 %", popup.details.values["text"])
-        self.assertIn("Estado: IDENTIFICADO", popup.details.values["text"])
+        self.assertIn("Estado: PENDIENTE DE CALIBRACIÓN", popup.details.values["text"])
         self.assertNotIn("person-safe", popup.details.values["text"])
 
     def test_registered_popup_without_photo_uses_placeholder(self):
         popup, _, _, _, _ = self.popup()
         popup._render(self.registered(thumbnail=False))
         self.assertIn("Sin fotografía registrada", popup.thumbnail.values["text"])
+
+    def test_only_evaluated_match_uses_identified_visual_state(self):
+        popup, _, _, _, _ = self.popup()
+        dto = dataclasses.replace(self.registered(thumbnail=False), recognition_state="MATCH")
+        popup._render(dto)
+        self.assertEqual(popup.title.values["text"], "✔ PERSONA IDENTIFICADA")
+        self.assertIn("Estado: IDENTIFICADO", popup.details.values["text"])
 
     def test_unknown_popup_translates_internal_quality_codes(self):
         popup, _, _, _, _ = self.popup()

@@ -160,8 +160,11 @@ class IdentificationPopupWindow:
         self._photo = None
         self.thumbnail.configure(image="", text="◯\n\nSin fotografía registrada")
         if dto.popup_type is IdentificationPopupType.REGISTERED_CANDIDATE:
-            self.title.configure(text="✔ PERSONA IDENTIFICADA")
-            self.right_title.configure(text="PERSONA IDENTIFICADA")
+            calibrated_match = (dto.recognition_state == "MATCH")
+            self.title.configure(text=("✔ PERSONA IDENTIFICADA" if calibrated_match
+                                       else "PERSONA REGISTRADA"))
+            self.right_title.configure(text=("PERSONA IDENTIFICADA" if calibrated_match
+                                             else "PENDIENTE DE CALIBRACIÓN"))
             identifier = dto.external_identifier or "No disponible"
             similarity = ("No disponible" if dto.similarity is None
                           else f"{dto.similarity * 100:.1f} %")
@@ -181,8 +184,8 @@ class IdentificationPopupWindow:
                 "────────────────────────\n"
                 "RESULTADO\n\n"
                 f"Score de reconocimiento: {similarity}\n"
-                "Estado: IDENTIFICADO\n"
-                f"Hora de identificación: {identified_at}"
+                f"Estado: {'IDENTIFICADO' if calibrated_match else 'PENDIENTE DE CALIBRACIÓN'}\n"
+                f"Fecha/hora: {identified_at}"
             ))
             self._person_id = dto.person_id
             if dto.thumbnail_available and dto.person_id is not None:

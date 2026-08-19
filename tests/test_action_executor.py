@@ -89,7 +89,11 @@ class ActionExecutorTests(unittest.TestCase):
         )
         for actions, person_id in cases:
             calls = []
-            result = self.executor(calls).execute(action_input(actions, person_id=person_id))
+            popup = (PopupActionData("UNKNOWN", evaluated=True)
+                     if actions == ("SHOW_UNREGISTERED_POPUP",)
+                     else PopupActionData("NOT_EVALUATED"))
+            result = self.executor(calls).execute(action_input(
+                actions, person_id=person_id, popup=popup))
             self.assertEqual(result.state, ActionExecutionState.EXECUTED)
             self.assertEqual(calls, list(actions))
 

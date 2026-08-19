@@ -62,6 +62,17 @@ class DecisionOrchestratorTests(unittest.TestCase):
         ))
         self.assertEqual(result.reasons[0], "automatic_actions_disabled")
 
+    def test_no_gallery_incompatible_and_not_evaluated_never_propose_unregistered_popup(self):
+        for recognition in ("NO_GALLERY", "INCOMPATIBLE", "NOT_EVALUATED"):
+            with self.subTest(recognition=recognition):
+                result = self.evaluate(
+                    person_id=None, recognition_state=recognition,
+                    administrative_status=None, identification_policy_state="NO_CANDIDATE",
+                    policy_eligible=False, stability_state="STABLE",
+                )
+                self.assertNotIn(ProposedAction.SHOW_UNREGISTERED_POPUP,
+                                 result.proposed_actions)
+
     def test_registered_popup_requires_active_and_policy_eligible(self):
         policy = DecisionOrchestratorPolicy(automatic_actions_enabled=True)
         disabled = self.evaluate(policy, administrative_status="DISABLED")

@@ -81,6 +81,7 @@ class PopupActionData:
     recognition_state: str
     similarity: float | None = None
     message: str | None = None
+    evaluated: bool | None = None
 
     def __post_init__(self) -> None:
         if not self.recognition_state.strip():

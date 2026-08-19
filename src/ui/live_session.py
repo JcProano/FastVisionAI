@@ -1003,6 +1003,7 @@ class LiveFaceSession:
         )
         popup_data = None if monitoring is None else PopupActionData(
             monitoring.recognition_state, monitoring.similarity, monitoring.message,
+            monitoring.evaluated,
         )
         result = executor.execute(ActionExecutionInput(
             orchestration.proposed_actions, orchestration.blocked_actions,

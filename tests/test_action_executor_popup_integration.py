@@ -159,7 +159,7 @@ class ActionExecutorPopupIntegrationTests(unittest.TestCase):
     def test_registered_and_unregistered_executor_paths_with_logging(self):
         for person_id, state, expected_popup in (
             ("person", "NOT_EVALUATED", IdentificationPopupType.REGISTERED_CANDIDATE),
-            (None, "NO_GALLERY", IdentificationPopupType.UNREGISTERED),
+            (None, "NO_GALLERY", None),
         ):
             with self.subTest(person_id=person_id):
                 _, popup, events, action, decision = components()
@@ -171,13 +171,13 @@ class ActionExecutorPopupIntegrationTests(unittest.TestCase):
                 ))
                 result = next(item for item in tuple(live.event_queue.queue)
                               if isinstance(item, ActionExecutorDTO))
-                expected_action = ("SHOW_REGISTERED_POPUP" if person_id else
-                                   "SHOW_UNREGISTERED_POPUP")
                 self.assertEqual(result.state, "EXECUTED")
-                self.assertEqual(result.executed_actions,
-                                 (expected_action, "LOG_DETECTION_EVENT"))
+                expected_actions = (("SHOW_REGISTERED_POPUP", "LOG_DETECTION_EVENT")
+                                    if person_id else ("LOG_DETECTION_EVENT",))
+                self.assertEqual(result.executed_actions, expected_actions)
                 self.assertEqual(len(events.calls), 1)
-                self.assertEqual(popup.drain()[0].popup_type, expected_popup)
+                queued = popup.drain()
+                self.assertEqual(queued[0].popup_type if queued else None, expected_popup)
 
     def test_popup_and_logging_failures_are_independent(self):
         base = dict(
