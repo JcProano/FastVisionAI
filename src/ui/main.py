@@ -45,7 +45,7 @@ from src.ui.camera_selection_window import CameraSelectionWindow
 from src.camera.source_discovery import (
     CameraSelectionController, CameraSourceDiscovery, camera_config_for_source,
     parse_discovery_config, CameraConfigurationPersistence,
-    redact_url,
+    redact_url, CameraSourceType,
 )
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
@@ -145,6 +145,36 @@ class StartupMode(str, Enum):
     TK = "TK"
     WEB = "WEB"
     BOTH = "BOTH"
+
+def _web_value(payload: object, name: str, *, limit: int = 120) -> str:
+    if not isinstance(payload, dict) or not isinstance(payload.get(name), str):
+        raise ValueError(f"{name} es obligatorio.")
+    value = payload[name].strip()
+    if not value or len(value) > limit:
+        raise ValueError(f"{name} es inválido.")
+    return value
+
+def _camera_id(payload: object) -> str:
+    return _web_value(payload, "id")
+
+def _camera_name(payload: object) -> str:
+    return _web_value(payload, "name")
+
+def _camera_url(payload: object) -> str:
+    value = _web_value(payload, "url", limit=2_000)
+    if not value.lower().startswith(("http://", "https://", "rtsp://")):
+        raise ValueError("URL de cámara inválida.")
+    return value
+
+def _camera_network_type(payload: object) -> CameraSourceType:
+    value = _web_value(payload, "type")
+    try:
+        result = CameraSourceType(value)
+    except ValueError as exc:
+        raise ValueError("Tipo de cámara inválido.") from exc
+    if result not in {CameraSourceType.NETWORK_HTTP, CameraSourceType.NETWORK_RTSP}:
+        raise ValueError("Tipo de cámara inválido.")
+    return result
 
 def configured_startup_mode(settings: dict[str, object]) -> StartupMode:
     """Read the additive UI mode while preserving legacy tk_enabled behavior."""
@@ -1251,7 +1281,9 @@ def main() -> int:
     selector_discovery = CameraSourceDiscovery(
         replace(camera_discovery_config, auto_discovery=True),
         occupied_source_id=lambda: current_camera_source["id"],
-        probe_network_sources=True,
+        # Network availability is tested only when the user explicitly asks;
+        # refreshing a browser/Tk list must never serially timeout every URL.
+        probe_network_sources=False,
     )
     camera_persistence = (None if configuration_service is None else
                           CameraConfigurationPersistence(configuration_service))
@@ -1400,6 +1432,13 @@ def main() -> int:
         if accepted:
             current_camera_source["id"] = source.source_id
         return accepted
+
+    def web_camera_probe(payload: object) -> dict[str, bool]:
+        """Probe on a worker so an offline RTSP endpoint never occupies HTTP threads."""
+        source_id = _camera_id(payload)
+        threading.Thread(target=lambda: camera_selection.probe(source_id),
+                         name="web-camera-probe", daemon=True).start()
+        return {"queued": True}
 
     def open_camera_selection() -> None:
         current = camera_window.get("window")
@@ -1560,7 +1599,11 @@ def main() -> int:
                 run_id=session.session_id, popup_type=popup_type, reason=reason,
             ))),
     )
-    if attendance_controller is not None:
+    if not tk_enabled:
+        # Web-only keeps the Tk event-loop host hidden, never a visible modal.
+        identification_popup.close()
+        identification_popup = None
+    if attendance_controller is not None and tk_enabled:
         def show_attendance_popup(event: AttendanceRecordedEvent, attempts: int = 0) -> None:
             if identification_popup.active:
                 if attempts < 20:
@@ -1671,6 +1714,19 @@ def main() -> int:
                 "type":app._camera_source_type,
                 "source":current_camera_source.get("id") or "N/D",
             },
+            actions={
+                "cameras": lambda: camera_selection.refresh().sources,
+                "camera_select": lambda payload: use_camera(camera_selection.use(_camera_id(payload))),
+                "camera_preferred": lambda payload: camera_selection.set_preferred(_camera_id(payload)),
+                "camera_network": lambda payload: camera_selection.add_network_source(
+                    _camera_name(payload), _camera_network_type(payload), _camera_url(payload)),
+                "camera_network_delete": camera_selection.remove_network_source,
+                "camera_probe": web_camera_probe,
+                "enrollment_cancel": lambda _payload: session.cancel_enrollment(),
+                "shutdown": lambda _payload: root.after(0, app.close) or True,
+            },
+            audit=audit_controller, backups=backup_controller,
+            configuration=configuration_controller,
         )
         web_server=WebDashboardServer(web_policy,web_controller,presentation_frame_store)
         if not web_server.start():
@@ -1689,7 +1745,7 @@ def main() -> int:
             UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR, GALLERY_SYNC_ERROR, True,
         ))
     session.start()
-    if (initial_selection_result is not None
+    if (tk_enabled and initial_selection_result is not None
             and (initial_selection_result.requires_selection or not initial_selection_result.sources)):
         root.after(0, open_camera_selection)
     app.poll_session(session, int(settings["worker"]["ui_poll_interval_ms"]))

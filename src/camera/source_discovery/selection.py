@@ -70,6 +70,19 @@ class CameraSelectionController:
         result = self.refresh()
         return result.sources[-1]
 
+    def remove_network_source(self, source_id: str) -> None:
+        """Remove only a configured network source, never a local V4L2 device."""
+        configured = tuple(item for item in self.discovery.config.network_sources
+                           if item.source_id != source_id)
+        if len(configured) == len(self.discovery.config.network_sources):
+            raise ValueError("La cámara IP no existe.")
+        preferred = (None if self.discovery.config.preferred_source == source_id
+                     else self.discovery.config.preferred_source)
+        updated = replace(self.discovery.config, network_sources=configured,
+                          preferred_source=preferred)
+        self._persist(updated)
+        self.discovery.config = updated
+
     def probe_network_source(self, name: str, source_type: CameraSourceType, url: str) -> bool:
         candidate = parse_discovery_config({
             "source": self.discovery.config.source, "auto_discovery": False,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from html import escape
 
 WARNING = "Este dashboard sin autenticación web está diseñado exclusivamente para localhost o una LAN privada confiable. No exponer directamente a Internet."
-NAV = (("/","Dashboard"),("/people","Personas"),("/history","Historial"),("/attendance","Asistencia"),("/reports","Reportes"),("/system","Sistema"))
+NAV = (("/","Dashboard"),("/camera","Cámara"),("/people","Personas"),("/attendance","Asistencia"),("/history","Historial"),("/reports","Reportes"),("/backups","Backups"),("/audit","Auditoría"),("/diagnostics","Diagnóstico"),("/settings","Configuración"))
 
 
 def page(title: str, content: str, *, refresh: int | None = None) -> bytes:

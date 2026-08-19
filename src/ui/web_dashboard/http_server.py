@@ -5,6 +5,7 @@ import logging
 import socket
 import threading
 import time
+import secrets
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlsplit
@@ -30,6 +31,7 @@ class WebDashboardServer:
         self.browser_open=browser_open;self.printer=printer;self._httpd=None;self._thread=None
         self._closing=threading.Event();self._streams=threading.BoundedSemaphore(policy.max_stream_clients)
         self._lock=threading.Lock()
+        self._sessions={};self._sessions_lock=threading.Lock()
 
     @property
     def running(self)->bool:return self._thread is not None and self._thread.is_alive() and not self._closing.is_set()
@@ -78,28 +80,73 @@ class WebDashboardServer:
             def do_GET(self):
                 split=urlsplit(self.path);path=unquote(split.path)
                 try:
-                    if path=="/api/dashboard":return self._bytes(200,"application/json; charset=utf-8",owner.controller.json_bytes(),sensitive=True)
+                    if path=="/api/session":return self._session()
+                    if path=="/api/events":return self._events()
+                    if path.startswith("/api/") and not path.startswith("/api/thumbnails/") and path != "/api/video.mjpeg":
+                        return self._json(200,owner.controller.api(path,split.query))
                     if path=="/api/video.mjpeg":return self._stream()
                     if path.startswith("/api/thumbnails/"):
                         token=path.removeprefix("/api/thumbnails/")
                         value=owner.controller.thumbnail(token)
                         if value is None:return self._error(404,"Recurso no disponible")
                         return self._bytes(200,value[0],value[1],sensitive=True)
-                    if path.startswith("/api/"):return self._error(404,"Endpoint no disponible")
                     return self._bytes(200,"text/html; charset=utf-8",owner.controller.render(path,split.query),sensitive=True)
                 except KeyError:return self._error(404,"Página no disponible")
                 except PermissionError:return self._error(403,"Acceso denegado")
                 except Exception:
                     LOGGER.warning("Web request failed safely; path=%s",path);return self._error(503,"Servicio temporalmente no disponible")
             def do_HEAD(self):return self._method_not_allowed()
-            def do_POST(self):return self._method_not_allowed()
+            def do_POST(self):return self._mutate()
             def do_PUT(self):return self._method_not_allowed()
-            def do_DELETE(self):return self._method_not_allowed()
-            def do_PATCH(self):return self._method_not_allowed()
+            def do_DELETE(self):return self._mutate()
+            def do_PATCH(self):return self._mutate()
             def do_OPTIONS(self):return self._method_not_allowed()
             def _method_not_allowed(self):
-                self.send_response(405);self.send_header("Allow","GET");self._security(True);self.end_headers()
+                self.send_response(405);self.send_header("Allow","GET, POST, PATCH, DELETE");self._security(True);self.end_headers()
             def _error(self,status,message):return self._bytes(status,"application/json; charset=utf-8",json.dumps({"error":message},ensure_ascii=False).encode(),sensitive=True)
+            def _json(self,status,value):return self._bytes(status,"application/json; charset=utf-8",json.dumps(value,ensure_ascii=False,separators=(",",":"),default=str).encode(),sensitive=True)
+            def _session(self):
+                token=secrets.token_urlsafe(32);cookie=secrets.token_urlsafe(24)
+                with owner._sessions_lock:owner._sessions[cookie]=token
+                self.send_response(200);self.send_header("Set-Cookie",f"fv_session={cookie}; HttpOnly; SameSite=Strict; Path=/")
+                payload=json.dumps({"csrf_token":token}).encode();self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Content-Length",str(len(payload)));self._security(True);self.end_headers();self.wfile.write(payload)
+            def _mutate(self):
+                split=urlsplit(self.path);path=unquote(split.path)
+                try:
+                    payload=self._request_json()
+                    self._require_same_origin();self._require_csrf(payload)
+                    if self.command == "DELETE":return self._json(200,owner.controller.delete(path))
+                    return self._json(200,owner.controller.action(path,payload))
+                except ValueError as exc:return self._error(400,str(exc))
+                except PermissionError:return self._error(403,"Acceso denegado")
+                except KeyError:return self._error(404,"Endpoint no disponible")
+                except Exception:
+                    LOGGER.warning("Web mutation failed safely; path=%s",path);return self._error(503,"Servicio temporalmente no disponible")
+            def _request_json(self):
+                if self.headers.get("Content-Type","").split(";",1)[0].strip().lower() != "application/json":raise ValueError("Se requiere Content-Type application/json.")
+                try:length=int(self.headers.get("Content-Length","0"))
+                except ValueError:raise ValueError("Longitud inválida.")
+                if length < 0 or length > 32_768:raise ValueError("Solicitud demasiado grande.")
+                try:value=json.loads(self.rfile.read(length).decode("utf-8"))
+                except (UnicodeDecodeError,json.JSONDecodeError):raise ValueError("JSON inválido.")
+                if not isinstance(value,dict):raise ValueError("El JSON debe ser un objeto.")
+                return value
+            def _require_same_origin(self):
+                origin=self.headers.get("Origin")
+                host=self.headers.get("Host","")
+                if not host or (origin is not None and urlsplit(origin).netloc != host):raise PermissionError()
+            def _require_csrf(self,payload):
+                cookie=next((part.strip().partition("=")[2] for part in self.headers.get("Cookie","").split(";") if part.strip().startswith("fv_session=")),None)
+                token=self.headers.get("X-CSRF-Token") or payload.get("csrf_token")
+                with owner._sessions_lock:expected=owner._sessions.get(cookie)
+                if not isinstance(token,str) or expected is None or not secrets.compare_digest(token,expected):raise PermissionError()
+            def _events(self):
+                # A bounded heartbeat keeps browser state fresh without polling camera resources.
+                self.send_response(200);self.send_header("Content-Type","text/event-stream");self.send_header("Cache-Control","no-store");self._security(True);self.end_headers()
+                try:
+                    while not owner._closing.wait(10):
+                        self.wfile.write(b"event: system_health\ndata: {}\n\n");self.wfile.flush()
+                except (BrokenPipeError,ConnectionResetError,OSError):pass
             def _security(self,sensitive=False):
                 for key,value in SECURITY_HEADERS.items():self.send_header(key,value)
                 self.send_header("Cache-Control","no-store" if sensitive else "private, max-age=60")

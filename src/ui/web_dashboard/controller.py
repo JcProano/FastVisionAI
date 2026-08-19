@@ -16,10 +16,13 @@ from . import html
 class WebDashboardController:
     def __init__(self, snapshot_provider, *, people=None, history=None, attendance=None,
                  reports=None, system_health=None, identity_provider=None,
-                 camera_provider=None) -> None:
+                 camera_provider=None, actions=None, diagnostics_provider=None,
+                 audit=None, backups=None, configuration=None) -> None:
         self.snapshot_provider=snapshot_provider;self.people=people;self.history=history
         self.attendance=attendance;self.reports=reports;self.system_health=system_health
         self.identity_provider=identity_provider;self.camera_provider=camera_provider or (lambda:{})
+        self.actions=actions or {};self.diagnostics_provider=diagnostics_provider
+        self.audit=audit;self.backups=backups;self.configuration=configuration
         self._salt=secrets.token_bytes(32);self._tokens={};self._photos={};self._lock=threading.Lock()
 
     def dashboard_payload(self) -> dict[str, object]:
@@ -39,13 +42,55 @@ class WebDashboardController:
     def json_bytes(self) -> bytes:
         return json.dumps(self.dashboard_payload(),ensure_ascii=False,separators=(",",":")).encode("utf-8")
 
+    def api(self, path: str, query: str = "") -> dict[str, object]:
+        """Read-only API projections.  They intentionally expose DTO fields only."""
+        if path == "/api/dashboard": return self.dashboard_payload()
+        if path == "/api/cameras":
+            sources = self._action("cameras", default=())
+            return {"cameras": tuple(self._camera_dto(item) for item in sources)}
+        if path == "/api/people": return self._people_payload(parse_qs(query, keep_blank_values=False))
+        if path == "/api/attendance": return self._attendance_payload()
+        if path == "/api/history": return self._history_payload()
+        if path == "/api/reports": return self._reports_payload()
+        if path in {"/api/system", "/api/diagnostics"}: return self._system_payload()
+        if path == "/api/audit": return self._audit_payload()
+        if path == "/api/backups": return self._backups_payload()
+        if path == "/api/settings": return self._settings_payload()
+        raise KeyError(path)
+
+    def action(self, path: str, payload: dict[str, object]) -> dict[str, object]:
+        """Explicitly allowlisted commands wired by composition in main.py."""
+        routes = {
+            "/api/camera/select": "camera_select", "/api/camera/preferred": "camera_preferred",
+            "/api/camera/network": "camera_network", "/api/camera/probe": "camera_probe",
+            "/api/enrollment/start": "enrollment_start",
+            "/api/enrollment/cancel": "enrollment_cancel", "/api/enrollment/photo": "enrollment_photo",
+            "/api/attendance/manual": "attendance_manual", "/api/backups": "backup_create",
+            "/api/shutdown": "shutdown",
+        }
+        key = routes.get(path)
+        if key is None: raise KeyError(path)
+        value = self._action(key, payload)
+        return {"ok": True, "result": self._plain_dto(value)}
+
+    def delete(self, path: str) -> dict[str, object]:
+        prefix = "/api/camera/network/"
+        if not path.startswith(prefix): raise KeyError(path)
+        source_id = path.removeprefix(prefix)
+        if not source_id or "/" in source_id: raise ValueError("Identificador inválido.")
+        return {"ok": True, "result": self._plain_dto(self._action("camera_network_delete", source_id))}
+
     def render(self, path: str, query: str = "") -> bytes:
         if path=="/":return self._dashboard_page()
         if path=="/people":return self._people_page(parse_qs(query,keep_blank_values=False))
         if path=="/history":return self._history_page()
         if path=="/attendance":return self._attendance_page()
         if path=="/reports":return self._reports_page()
-        if path=="/system":return self._system_page()
+        if path in {"/system", "/diagnostics"}:return self._system_page()
+        if path=="/camera":return self._camera_page()
+        if path=="/backups":return self._simple_page("Copias de seguridad", self._backups_payload())
+        if path=="/audit":return self._simple_page("Auditoría", self._audit_payload())
+        if path=="/settings":return self._simple_page("Configuración", self._settings_payload())
         raise KeyError(path)
 
     def thumbnail(self, token: str) -> tuple[str,bytes] | None:
@@ -85,6 +130,79 @@ class WebDashboardController:
         camera_detail=f'<p>Fuente: {html.escape(str(data.get("camera_source","N/D")))} · Nombre: {html.escape(str(data.get("camera_name","N/D")))} · Tipo: {html.escape(str(data.get("camera_type","N/D")))}</p>'
         content=f'<section>{states}{camera_detail}</section><div class="grid">{cards}</div><div class="columns"><section><h3>Video en vivo</h3><img class="video" src="/api/video.mjpeg" alt="Video no disponible"></section><div><section><h3>Reconocimientos recientes</h3>{html.photo_table(("Foto","Nombre","Hora","Similitud"),recognition_rows)}</section><section><h3>Asistencia de hoy</h3>{html.photo_table(("Foto","Nombre","Entrada","Salida","Estado"),attendance_rows)}</section></div></div>'
         return html.page("Dashboard",content,refresh=5)
+
+    def _camera_page(self) -> bytes:
+        rows=[]
+        for item in self._action("cameras", default=()):
+            dto=self._camera_dto(item)
+            rows.append((dto["name"],dto["type"],"Disponible" if dto["available"] else "No disponible",
+                         "Cámara principal" if dto["preferred"] else ""))
+        return html.page("Cámara", html.table(("Nombre","Tipo","Estado","Preferencia"), tuple(rows)))
+
+    def _simple_page(self, title, payload) -> bytes:
+        return html.page(title, "<pre>"+html.escape(json.dumps(payload, ensure_ascii=False, indent=2))+"</pre>")
+
+    def _action(self, name, *args, default=None):
+        callback=self.actions.get(name)
+        if callback is None:return default
+        return callback(*args)
+
+    @staticmethod
+    def _camera_dto(item):
+        return {"id":item.source_id,"name":item.display_name,"type":item.source_type.value,
+                "available":item.available,"preferred":item.preferred,"details":dict(item.details)}
+
+    def _people_payload(self, query):
+        if self.people is None:return {"people":(),"total":0}
+        text=str(query.get("q",[""])[0])[:100]
+        value=self.people.search(PeopleSearchFiltersDTO(text=text,limit=self.people.policy.default_page_size))
+        return {"people":[{"token":self._person_token(item.person_id),"name":item.display_name,
+                             "cedula":item.masked_cedula,"phone":item.phone,"email":item.email,
+                             "status":item.status,"thumbnail":f"/api/thumbnails/{self._person_token(item.person_id)}" if item.thumbnail_available else None}
+                            for item in value.people],"total":value.total}
+
+    def _attendance_payload(self):
+        values=() if self.attendance is None else self.attendance.day_list().days
+        return {"attendance":[{"name":item.display_name,"date":item.local_date.isoformat(),"status":item.status,
+                                "check_in":_time(item.check_in),"check_out":_time(item.check_out)} for item in values]}
+
+    def _history_payload(self):
+        values=() if self.history is None else self.history.list(limit=100).events
+        return {"events":[{"name":item.display_name,"time":item.timestamp.isoformat(),"type":item.event_type,
+                            "similarity":item.similarity,"camera":redact_url(item.camera_id) if isinstance(item.camera_id,str) else item.camera_id} for item in values]}
+
+    def _reports_payload(self):
+        if self.reports is None:return {"available":False}
+        start,end=self.reports.default_dates();value=self.reports.generate("Resumen diario",end,end)
+        return {"available":True,"date":str(end),"report":self._plain_dto(value)}
+
+    def _system_payload(self):
+        if self.diagnostics_provider is not None:
+            try:return self._plain_dto(self.diagnostics_provider())
+            except Exception:return {"available":False}
+        if self.system_health is None:return {"available":False}
+        value=self.system_health.snapshot();return {"available":True,"overall":value.overall_level,
+            "components":[{"name":part[0],"level":part[1],"message":part[2],"checked":str(part[3])} for part in value.components]}
+
+    def _audit_payload(self):
+        if self.audit is None:return {"available":False}
+        value=self.audit.query();return {"available":True,"events":[self._plain_dto(item) for item in value.records]}
+
+    def _backups_payload(self):
+        if self.backups is None:return {"available":False}
+        return {"available":True,"operations":[self._plain_dto(item) for item in self.backups.history()]}
+
+    def _settings_payload(self):
+        if self.configuration is None:return {"available":False}
+        value=self.configuration.current().as_mapping()
+        return {"available":True,"settings":_redacted_settings(value)}
+
+    @staticmethod
+    def _plain_dto(value):
+        if dataclasses.is_dataclass(value): return {field.name:WebDashboardController._plain_dto(getattr(value,field.name)) for field in dataclasses.fields(value) if _safe_key(field.name)}
+        if isinstance(value,dict): return {str(key):WebDashboardController._plain_dto(item) for key,item in value.items() if _safe_key(str(key))}
+        if isinstance(value,(tuple,list)): return [WebDashboardController._plain_dto(item) for item in value]
+        return _plain(value)
 
     def _people_page(self,query)->bytes:
         if self.people is None:return html.page("Personas","<p>Servicio no disponible.</p>")
@@ -128,3 +246,16 @@ def _plain(value):
     if isinstance(value,(str,int,float,bool)) or value is None:return value
     if isinstance(value,datetime):return value.isoformat()
     return len(value) if isinstance(value,(tuple,list)) else str(value)
+
+def _redacted_settings(value):
+    """Configuration projection: never send camera credentials or biometric internals."""
+    if isinstance(value,dict):
+        result={}
+        for key,item in value.items():
+            lowered=str(key).lower()
+            if any(part in lowered for part in ("embedding","template","hash","password","secret","salt")):
+                continue
+            result[key]=redact_url(str(item)) if key == "url" else _redacted_settings(item)
+        return result
+    if isinstance(value,list):return [_redacted_settings(item) for item in value]
+    return value
