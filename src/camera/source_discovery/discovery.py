@@ -29,6 +29,8 @@ class CameraSourceDiscovery:
         path_exists: Callable[[Path], bool] | None = None,
         name_reader: Callable[[Path], str] | None = None,
         occupied_source_id: Callable[[], str | None] | None = None,
+        probe_network_sources: bool = False,
+        network_source_ids_to_probe: frozenset[str] | None = None,
         open_timeout_ms: int = 1_500, read_timeout_ms: int = 1_500,
     ) -> None:
         self.config = config
@@ -36,6 +38,8 @@ class CameraSourceDiscovery:
         self._path_exists = path_exists or Path.exists
         self._name_reader = name_reader or (lambda path: path.read_text(encoding="utf-8"))
         self._occupied_source_id = occupied_source_id or (lambda: None)
+        self._probe_network_sources = probe_network_sources
+        self._network_source_ids_to_probe = network_source_ids_to_probe
         self.open_timeout_ms = open_timeout_ms
         self.read_timeout_ms = read_timeout_ms
 
@@ -81,8 +85,13 @@ class CameraSourceDiscovery:
         return value[:120] if value else f"Cámara de video #{index}"
 
     def _network_dto(self, item) -> CameraSourceDTO:
+        should_probe = self._probe_network_sources and (
+            self._network_source_ids_to_probe is None
+            or item.source_id in self._network_source_ids_to_probe
+        )
+        available = self._probe_capture(item.url, "network camera") if should_probe else True
         return CameraSourceDTO(
-            item.source_id, item.source_type, item.name, True,
+            item.source_id, item.source_type, item.name, available,
             item.source_id == self.config.preferred_source,
             {"transport": ("RTSP" if item.source_type is CameraSourceType.NETWORK_RTSP else
                            "HTTP/MJPEG" if item.source_type is CameraSourceType.NETWORK_HTTP else "Personalizada"),

@@ -15,6 +15,7 @@ class CameraSelectionResult:
     sources: tuple[CameraSourceDTO, ...]
     selected: CameraSourceDTO | None
     requires_selection: bool
+    preferred_unavailable: bool = False
 
 
 class CameraSelectionController:
@@ -29,9 +30,16 @@ class CameraSelectionController:
 
     def refresh(self) -> CameraSelectionResult:
         self.sources = self.discovery.refresh()
+        configured_preference = self.discovery.config.preferred_source
         preferred = next((item for item in self.sources if item.preferred and item.available), None)
         valid = tuple(item for item in self.sources if item.available)
-        selected = preferred or (valid[0] if len(valid) == 1 else None)
+        # A saved primary camera is an explicit user decision.  Never replace it
+        # with another discovered source merely because it happens to be usable.
+        if configured_preference is not None:
+            return CameraSelectionResult(
+                self.sources, preferred, preferred is None, preferred is None,
+            )
+        selected = valid[0] if len(valid) == 1 else None
         return CameraSelectionResult(self.sources, selected, selected is None and len(valid) > 1)
 
     def use(self, source_id: str) -> CameraSourceDTO:

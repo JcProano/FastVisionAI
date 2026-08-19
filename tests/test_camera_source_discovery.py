@@ -100,6 +100,29 @@ class CameraSourceDiscoveryTests(unittest.TestCase):
         self.assertEqual(second.selected.source_id, "v4l2:2")
         self.assertEqual(len(factory.created), 4)
 
+    def test_missing_preferred_never_falls_back_to_another_camera(self):
+        service, _ = self.discovery(
+            config(scan_indices=3, preferred_source="v4l2:2"), [FakeCapture()], {0},
+        )
+        result = CameraSelectionController(service).refresh()
+        self.assertIsNone(result.selected)
+        self.assertTrue(result.requires_selection)
+        self.assertTrue(result.preferred_unavailable)
+
+    def test_only_the_saved_network_camera_is_probed_at_startup(self):
+        cfg = config(auto_discovery=False, preferred_source="primary", network_sources=[
+            {"id": "primary", "type": "NETWORK_HTTP", "name": "Principal", "url": "http://cam/main"},
+            {"id": "old-droidcam", "type": "NETWORK_HTTP", "name": "DroidCam", "url": "http://cam/old"},
+        ])
+        primary = FakeCapture(opens=False)
+        service, factory = self.discovery(cfg, [primary], set())
+        service._probe_network_sources = True
+        service._network_source_ids_to_probe = frozenset(("primary",))
+        result = CameraSelectionController(service).refresh()
+        self.assertIsNone(result.selected)
+        self.assertTrue(result.preferred_unavailable)
+        self.assertEqual([item.source for item in factory.created], ["http://cam/main"])
+
     def test_every_probe_releases_on_failure_and_success(self):
         captures = [FakeCapture(raises=True), FakeCapture(opens=False), FakeCapture()]
         service, factory = self.discovery(config(scan_indices=3), captures, {0, 1, 2})
@@ -152,6 +175,17 @@ class CameraSourceDiscoveryTests(unittest.TestCase):
         self.assertEqual(persisted[-1].source, "auto")
         self.assertTrue(persisted[-1].auto_discovery)
         self.assertEqual(persisted[-1].preferred_source, source.source_id)
+
+    def test_clearing_preference_removes_old_network_primary(self):
+        service, _ = self.discovery(config(auto_discovery=False, preferred_source="old-droidcam",
+            network_sources=[{"id": "old-droidcam", "type": "NETWORK_HTTP", "name": "DroidCam",
+                              "url": "http://cam/old"}]), [], set())
+        persisted = []
+        controller = CameraSelectionController(service, persist_config=lambda value: persisted.append(value) or True)
+        controller.refresh()
+        controller.set_preferred(None)
+        self.assertIsNone(persisted[-1].preferred_source)
+        self.assertEqual(persisted[-1].source, "auto")
 
     def test_custom_opencv_source_can_be_configured_manually(self):
         cfg = config(auto_discovery=False, network_sources=[

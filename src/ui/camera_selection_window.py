@@ -108,13 +108,17 @@ class CameraSelectionWindow:
         if result.selected is not None: self.selected.set(result.selected.source_id)
         selected = next((item for item in result.sources if item.source_id == self.selected.get()), None)
         self.preferred.set(bool(selected and selected.preferred))
-        if not result.sources: self.status.configure(text="Desconectada — conecte una cámara y pulse Actualizar.")
+        if result.preferred_unavailable:
+            self.status.configure(text="La cámara principal guardada no está disponible.")
+        elif not result.sources:
+            self.status.configure(text="Desconectada — conecte una cámara y pulse Actualizar.")
 
     def _render_group(self, frame, sources, empty: str) -> None:
         if not sources: ttk.Label(frame, text=empty).pack(anchor="w"); return
         for source in sources:
             row = ttk.Frame(frame); row.pack(fill="x", pady=3)
-            ttk.Radiobutton(row, text=source.display_name, variable=self.selected,
+            label = source.display_name + (" — Cámara principal" if source.preferred else "")
+            ttk.Radiobutton(row, text=label, variable=self.selected,
                             value=source.source_id, command=self._selection_changed).pack(anchor="w")
             kind = ("Cámara virtual" if source.details.get("virtual") else
                     str(source.details.get("transport", source.source_type.value)))
@@ -215,10 +219,21 @@ class CameraSelectionWindow:
     def use_selected(self) -> None:
         try:
             source = self.controller.use(self.selected.get())
-            if self.preferred.get(): self.controller.set_preferred(source.source_id)
         except (PermissionError, ValueError, RuntimeError) as exc: self.status.configure(text=str(exc)); return
-        if self.on_use(source): self.close()
-        else: self.status.configure(text="No se puede cambiar de cámara durante un registro.")
+        # Switch the single session-owned capture first. Persistence controls a
+        # future startup and must not delay using the camera just chosen now.
+        if not self.on_use(source):
+            self.status.configure(text="No se puede cambiar de cámara durante un registro.")
+            return
+        try:
+            # Persist both directions: clearing the checkbox must stop an old
+            # DroidCam/network source from taking precedence on the next start.
+            if self.preferred.get() or source.preferred:
+                self.controller.set_preferred(source.source_id if self.preferred.get() else None)
+        except RuntimeError as exc:
+            self.status.configure(text=str(exc))
+            return
+        self.close()
 
     def close(self) -> None:
         if self.window.winfo_exists(): self.window.destroy()

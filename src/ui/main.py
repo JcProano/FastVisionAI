@@ -1131,19 +1131,45 @@ def main() -> int:
     cancel_event = threading.Event()
     presentation_frame_store=LatestPresentationFrameStore()
     camera_discovery_config = parse_discovery_config(settings["camera"])
-    camera_discovery = CameraSourceDiscovery(camera_discovery_config)
+    preferred_source_id = camera_discovery_config.preferred_source
+    camera_discovery = CameraSourceDiscovery(
+        camera_discovery_config,
+        network_source_ids_to_probe=(None if preferred_source_id is None else
+                                     frozenset((preferred_source_id,))),
+        probe_network_sources=preferred_source_id is not None,
+    )
     initial_selection = None
     initial_selection_result = None
-    if camera_discovery_config.source == "auto":
+    # A persisted primary source has exclusive startup priority.  Discovery is
+    # only used to decide whether the selector must be shown; it must not choose
+    # a replacement source for this runtime.
+    if camera_discovery_config.preferred_source is not None:
+        initial_selection_result = CameraSelectionController(camera_discovery).refresh()
+        initial_selection = initial_selection_result.selected
+    elif camera_discovery_config.source == "auto":
         initial_selection_result = CameraSelectionController(camera_discovery).refresh()
         initial_selection = initial_selection_result.selected
     initial_source = camera_discovery_config.source
-    if initial_selection is not None:
+    if preferred_source_id is not None:
+        if preferred_source_id.startswith("v4l2:"):
+            try:
+                initial_source = int(preferred_source_id.partition(":")[2])
+            except ValueError:
+                initial_source = camera_discovery_config.scan_indices + 10_000
+        else:
+            preferred_network = next(
+                (item for item in camera_discovery_config.network_sources
+                 if item.source_id == preferred_source_id), None,
+            )
+            initial_source = (preferred_network.url if preferred_network is not None
+                              else camera_discovery_config.scan_indices + 10_000)
+    elif initial_selection is not None:
         initial_source = camera_config_for_source(initial_selection, camera_discovery_config).source
     elif initial_source == "auto":
         # Deliberately invalid local index: the app remains DISCONNECTED until selection.
         initial_source = camera_discovery_config.scan_indices + 10_000
     current_camera_source = {"id": (
+        preferred_source_id if preferred_source_id is not None else
         initial_selection.source_id if initial_selection is not None else
         f"v4l2:{initial_source}" if isinstance(initial_source, int)
         and camera_discovery_config.source != "auto" else None
@@ -1225,6 +1251,7 @@ def main() -> int:
     selector_discovery = CameraSourceDiscovery(
         replace(camera_discovery_config, auto_discovery=True),
         occupied_source_id=lambda: current_camera_source["id"],
+        probe_network_sources=True,
     )
     camera_persistence = (None if configuration_service is None else
                           CameraConfigurationPersistence(configuration_service))
