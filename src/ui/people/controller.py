@@ -40,6 +40,7 @@ class PeopleManagerController:
         self._state = PeopleManagerState.IDLE
         self._pending_import: FaceGallery | None = None
         self._additional_person_id: str | None = None
+        self._replacement_person_id: str | None = None
         self._lock = threading.RLock()
 
     @property
@@ -137,10 +138,16 @@ class PeopleManagerController:
             self._additional_person_id = person_id
             return self._ok("additional_start", "Captura adicional iniciada.", person_id)
 
+    def begin_replacement(self, person_id: str) -> PeopleOperationResultDTO:
+        result=self.begin_additional(person_id)
+        if result.success:self._replacement_person_id=person_id
+        return result
+
     def cancel_additional(self) -> PeopleOperationResultDTO:
         with self._lock:
             person_id = self._additional_person_id
             self._additional_person_id = None
+            self._replacement_person_id = None
             self._state = PeopleManagerState.IDLE
             return self._ok("additional_cancel", "Captura adicional cancelada.", person_id)
 
@@ -154,21 +161,50 @@ class PeopleManagerController:
             ):
                 return self._fail("additional", "No existe una captura adicional activa.", person_id)
             try:
-                temporary = _rebuild(self.gallery, additions={person_id: tuple(samples)})
+                replacing=self._replacement_person_id == person_id
+                temporary = _rebuild(
+                    self.gallery,excluded={person_id} if replacing else set(),
+                    identity_overrides={person_id:self._identity(person_id)} if replacing else {},
+                    additions={person_id: tuple(samples)},
+                )
                 self.gallery.replace_from(temporary)
                 self._additional_person_id = None
+                self._replacement_person_id = None
                 self._state = PeopleManagerState.IDLE
                 return PeopleOperationResultDTO(
                     PeopleManagerState.IDLE, True, "additional",
-                    "Templates adicionales agregados en memoria.", person_id, len(samples),
+                    ("Templates faciales reemplazados en memoria." if replacing else
+                     "Templates adicionales agregados en memoria."), person_id, len(samples),
                 )
             except Exception:
                 self._additional_person_id = None
+                self._replacement_person_id = None
                 self._state = PeopleManagerState.ERROR
                 return self._fail(
                     "additional", "Los templates adicionales no superaron la validación.",
                     person_id,
                 )
+
+    def delete_persisted_identity(self, person_id: str) -> PeopleOperationResultDTO:
+        """Atomically persist a gallery without one identity, then activate it."""
+        with self._lock:
+            identities={item.person_id for item in self.gallery.list_identities()}
+            if person_id not in identities:
+                return self._ok("delete", "La persona no tenía identidad biométrica.", person_id)
+            count=len(self.gallery.templates(person_id))
+            temporary=_rebuild(self.gallery,excluded={person_id})
+            try:
+                self.persistence.export(
+                    temporary,self.manifest_path,self.archive_path,overwrite=True,
+                )
+                self.gallery.replace_from(temporary)
+                return PeopleOperationResultDTO(
+                    PeopleManagerState.IDLE,True,"delete",
+                    "Identidad biométrica eliminada y galería actualizada.",person_id,count,
+                    len(self.gallery.list_identities()),len(self.gallery.templates()),
+                )
+            except Exception:
+                return self._fail("delete","No se pudo persistir la eliminación biométrica.",person_id)
 
     def save_changes(self, *, overwrite_confirmed: bool = False) -> PeopleOperationResultDTO:
         return self.export_gallery(
@@ -289,7 +325,8 @@ def _rebuild(
     excluded = excluded or set()
     identities = {item.person_id: item for item in source.list_identities()
                   if item.person_id not in excluded}
-    if any(person_id not in identities for person_id in (*overrides, *additions)):
+    identities.update(overrides)
+    if any(person_id not in identities for person_id in additions):
         raise KeyError("unknown identity")
     existing = tuple(item for item in source.templates()
                      if item.template.identity.person_id not in excluded)
@@ -298,7 +335,7 @@ def _rebuild(
     for person_id, identity in identities.items():
         metadata_source = overrides.get(person_id, identity)
         owned = {item.index for item in source.templates(person_id)}
-        quality_by_person[person_id] = [
+        quality_by_person[person_id] = [] if person_id in excluded else [
             {**item, "template_index": old_to_new[int(item["template_index"])]}
             for item in _quality_items(metadata_source.metadata)
             if item.get("template_index") in owned

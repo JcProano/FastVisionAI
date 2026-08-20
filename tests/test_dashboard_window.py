@@ -12,10 +12,9 @@ class DashboardWindowTests(unittest.TestCase):
     def test_dashboard_declares_responsive_cards_actions_and_minimum_size(self):
         source = inspect.getsource(LocalFaceTkApp)
         for text in (
-            "FASTVISION AI", "VIDEO EN VIVO", "Estado del sistema",
+            "FASTVISION AI", "VIDEO EN TIEMPO REAL", "Estado del sistema",
             "Candidato experimental", "Métricas de sesión", "Historial temporal",
-            "Registrar rostro", "Personas registradas", "Diagnóstico", "Configuración",
-            "Guardar galería", "Salir", "minimum_width", "minimum_height",
+            "Diagnóstico", "Configuración", "minimum_width", "minimum_height",
         ):
             self.assertIn(text, source)
         refresh = inspect.getsource(LocalFaceTkApp._refresh_dashboard)

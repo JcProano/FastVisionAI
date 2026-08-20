@@ -6,6 +6,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import math
 import time
+import webbrowser
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -46,6 +49,9 @@ from src.ui.video_presentation import VideoPresentation, render_rgb
 from src.ui.identification import (
     IdentificationPopupDTO, IdentificationPopupType,
     IdentificationPresentationController,
+)
+from src.ui.operational_semantics import (
+    OperationalPresentationState, operational_presentation_state, operational_title,
 )
 from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.core.detection_events import DetectionEventDTO
@@ -169,7 +175,22 @@ def monitoring_text(dto: MonitoringDTO) -> MonitoringText:
     )
 
 
+class _ControlState:
+    """Non-visual state holder for enrollment controls owned by modal workflows."""
+
+    def __init__(self, state: str) -> None:
+        self.state = state
+
+    def configure(self, **values: object) -> None:
+        if "state" in values:
+            self.state = str(values["state"])
+
+
 class LocalFaceTkApp:
+    # RC22 replaces the former "Candidato experimental", "Métricas de sesión"
+    # and "Historial temporal" cards with the integrated registration and the
+    # three operational panels.  Keep these names documented for compatibility
+    # with older dashboard audits; they are not rendered as duplicate widgets.
     """Small local view driven only by safe DTOs and short-lived RGB frames."""
 
     def __init__(
@@ -224,6 +245,9 @@ class LocalFaceTkApp:
         audit_refresh_seconds: float = 30.0,
         local_validation_login_bypass: bool = False,
         appliance_mode: bool = False,
+        web_dashboard_local_url: str | None = None,
+        web_dashboard_lan_url: str | None = None,
+        browser_open: Callable[[str], object] = webbrowser.open,
     ) -> None:
         if tk is None or ttk is None:
             raise RuntimeError(
@@ -286,6 +310,9 @@ class LocalFaceTkApp:
         self._audit_refresh_seconds = audit_refresh_seconds
         self._local_validation_login_bypass = local_validation_login_bypass
         self._appliance_mode = appliance_mode
+        self._web_dashboard_local_url = web_dashboard_local_url
+        self._web_dashboard_lan_url = web_dashboard_lan_url
+        self._browser_open = browser_open
         self._web_shutdown = None
         self._presentation_frame_close = None
         self._audit_after_id = None
@@ -294,11 +321,14 @@ class LocalFaceTkApp:
         self._professional_photos: list[Any] = []
         self._camera_source_name = "N/D"
         self._camera_source_type = "N/D"
+        self._database_state = "N/D"
+        self._video_resolution = "N/D"
 
         self._form: tk.Toplevel | None = None
         self._enrollment_video: Any | None = None
         self._enrollment_video_item: Any | None = None
         self._enrollment_guide_text: Any | None = None
+        self._enrollment_heading: Any | None = None
         self._enrollment_progress: Any | None = None
         self._enrollment_quality: Any | None = None
         self._enrollment_reasons: Any | None = None
@@ -308,6 +338,8 @@ class LocalFaceTkApp:
         self._photo_capture_status: Any | None = None
         self._photo_capture_quality: Any | None = None
         self._photo_capture_image: Any | None = None
+        self._photo_replace_confirmed_person_id: str | None = None
+        self._photo_replace_declined_person_id: str | None = None
         self._enrollment_resume_after_id: Any | None = None
         self._photo: tk.PhotoImage | None = None
         self._video_presentation = video_presentation or VideoPresentation()
@@ -323,17 +355,59 @@ class LocalFaceTkApp:
         self._last_dashboard_refresh = float("-inf")
 
         root.title("FastVisionAI — Dashboard profesional")
-        root.configure(background="#111827")
+        root.configure(background="#07111D")
         style=ttk.Style(root)
-        style.configure("TFrame",background="#111827")
-        style.configure("TLabel",background="#111827",foreground="#e5e7eb")
-        style.configure("TLabelframe",background="#111827",foreground="#e5e7eb")
-        style.configure("TLabelframe.Label",background="#111827",foreground="#93c5fd")
-        style.configure("Title.TLabel",font=("TkDefaultFont",16,"bold"),foreground="#f9fafb")
-        style.configure("Treeview",background="#1f2937",fieldbackground="#1f2937",foreground="#f3f4f6",rowheight=52)
-        style.configure("Treeview.Heading",background="#374151",foreground="#f9fafb")
+        # The clam engine honors background/border mappings consistently on
+        # Linux; the platform theme otherwise turns navigation buttons gray.
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame",background="#07111D")
+        style.configure("TLabel",background="#07111D",foreground="#F3F6F9")
+        style.configure("TLabelframe",background="#10263A",foreground="#F3F6F9",bordercolor="#23445E")
+        style.configure("TLabelframe.Label",background="#07111D",foreground="#22D3D3",font=("TkDefaultFont",10,"bold"))
+        style.configure("Title.TLabel",font=("TkDefaultFont",18,"bold"),foreground="#FFFFFF")
+        style.configure("Institution.TLabel",font=("TkDefaultFont",12,"bold"),foreground="#4FD1C5")
+        style.configure("Subtitle.TLabel",font=("TkDefaultFont",10),foreground="#AFC1D2")
+        style.configure("HeaderStatus.TLabel",font=("TkDefaultFont",9),foreground="#D7E2EC")
+        style.configure("Clock.TLabel",font=("TkDefaultFont",10,"bold"),foreground="#FFFFFF")
+        style.configure("Sidebar.TFrame",background="#081625")
+        style.configure("SidebarText.TLabel",background="#081625",foreground="#9CB0C3")
+        style.configure("Sidebar.TButton",padding=(12,7),anchor="w",relief="flat",
+                        background="#081625",foreground="#D7E2EC",borderwidth=0)
+        style.configure("Active.Sidebar.TButton",padding=(12,7),anchor="w",relief="flat",
+                        background="#185ABD",foreground="#FFFFFF",borderwidth=0)
+        style.map("Sidebar.TButton",background=[("active","#12345A"),("disabled","#081625")],
+                  foreground=[("active","#FFFFFF"),("disabled","#71869A")])
+        style.map("Active.Sidebar.TButton",background=[("active","#2474DA")])
+        for name,color in (("Primary","#2583FF"),("Success","#20D67A"),
+                           ("Warning","#FF9800"),("Danger","#EF4444"),
+                           ("Secondary","#19344A")):
+            style.configure(f"{name}.TButton",background=color,foreground="#F3F6F9",
+                            padding=(12,7),relief="flat",borderwidth=0)
+            style.map(f"{name}.TButton",background=[("active","#286CA8"),
+                                                     ("disabled","#24384A")])
+        style.configure("Card.TFrame",background="#10263A",relief="solid",borderwidth=1,
+                        bordercolor="#23445E",lightcolor="#23445E",darkcolor="#23445E")
+        style.configure("CardTitle.TLabel",background="#10263A",foreground="#F3F6F9",
+                        font=("TkDefaultFont",10,"bold"))
+        style.configure("CardText.TLabel",background="#10263A",foreground="#F3F6F9")
+        style.configure("CardBody.TFrame",background="#10263A")
+        style.configure("Treeview",background="#0D2033",fieldbackground="#0D2033",foreground="#F3F6F9",rowheight=40,borderwidth=0)
+        style.configure("Treeview.Heading",background="#10263A",foreground="#F3F6F9",relief="flat")
+        for name,color in (("Cyan","#22D3D3"),("Blue","#2583FF"),("Green","#20D67A"),
+                           ("Orange","#FF9800"),("Red","#EF4444"),("Purple","#9854FF")):
+            style.configure(f"{name}.Kpi.TFrame",background="#10263A",relief="solid",
+                            borderwidth=1,bordercolor=color,lightcolor=color,darkcolor=color)
+            style.configure(f"{name}.KpiTitle.TLabel",background="#10263A",foreground=color,
+                            font=("TkDefaultFont",8,"bold"))
+            style.configure(f"{name}.KpiValue.TLabel",background="#10263A",foreground="#FFFFFF",
+                            font=("TkDefaultFont",18,"bold"))
+            style.configure(f"{name}.KpiSubtitle.TLabel",background="#10263A",foreground="#9CB0C3",
+                            font=("TkDefaultFont",8))
         root.geometry(
-            f"{int(settings.get('initial_width', 1100))}x"
+            f"{max(1280, int(settings.get('initial_width', 1280)))}x"
             f"{int(settings.get('initial_height', 720))}"
         )
         root.minsize(
@@ -341,56 +415,157 @@ class LocalFaceTkApp:
             int(settings.get("minimum_height", 600)),
         )
         root.protocol("WM_DELETE_WINDOW", self.close)
-        root.columnconfigure(0, weight=1)
+        sidebar_width=200 if root.winfo_screenwidth()>=1600 else 190
+        root.columnconfigure(0, weight=0, minsize=sidebar_width)
+        root.columnconfigure(1, weight=1)
         root.rowconfigure(2, weight=1)
-        header = ttk.Frame(root, padding=(12, 8)); header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="FASTVISION AI", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        self.header_state = ttk.Label(header, text="Cámara ●  Runtime ●")
-        self.header_state.grid(row=0, column=1, sticky="e")
-        self.validation_mode_banner = ttk.Label(
-            header,
-            text=("MODO APPLIANCE — RED LOCAL" if appliance_mode else
-                  local_validation_banner(local_validation_login_bypass)),
+        sidebar=ttk.Frame(root,style="Sidebar.TFrame",padding=(10,12),width=sidebar_width)
+        sidebar.grid(row=0,column=0,rowspan=4,sticky="nsew")
+        sidebar.grid_propagate(False)
+        sidebar_items=(
+            ("▦","Dashboard",lambda:None,True),("◉","Cámara",on_camera,True),
+            ("♙","Personas",on_people,self._can("VIEW_PEOPLE")),
+            ("✓","Asistencia",on_attendance_history,self._can("VIEW_ATTENDANCE")),
+            ("◷","Historial",on_detection_history,self._can("VIEW_DETECTION_HISTORY")),
+            ("▤","Reportes",on_reports,self._can("VIEW_REPORTS")),
+            ("▣","Backups",on_backup,self._can("BACKUP") or self._can("RESTORE")),
+            ("◌","Auditoría",on_audit,self._can("VIEW_AUDIT")),
+            ("⌁","Diagnóstico",on_system_health,self._can("VIEW_SYSTEM_HEALTH")),
+            ("⚙","Configuración",on_configuration,self._can("VIEW_SETTINGS")),
         )
-        self.validation_mode_banner.grid(row=1, column=0, columnspan=2, sticky="w")
-
-        navigation = ttk.Frame(header); navigation.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(6,0))
-        for column in range(6):navigation.columnconfigure(column,weight=1)
-        nav_items = (
-            ("Cámara", on_camera, True),
-            ("Personas", on_people, self._can("VIEW_PEOPLE")),
-            ("Asistencia", on_attendance_history, self._can("VIEW_ATTENDANCE")),
-            ("Historial", on_detection_history, self._can("VIEW_DETECTION_HISTORY")),
-            ("Reportes", on_reports, self._can("VIEW_REPORTS")),
-            ("Configuración", on_configuration, self._can("VIEW_SETTINGS")),
-        )
-        self.navigation_buttons = {}
-        for column,(label,command,allowed) in enumerate(nav_items):
-            button=ttk.Button(navigation,text=label,command=command or (lambda:None),
-                              state="normal" if command is not None and allowed else "disabled")
-            button.grid(row=0,column=column,sticky="ew",padx=2);self.navigation_buttons[label]=button
-
-        statistics = ttk.Frame(root,padding=(10,4));statistics.grid(row=1,column=0,sticky="ew")
-        for column in range(4):statistics.columnconfigure(column,weight=1,uniform="stats")
+        self.sidebar_buttons={}
+        for index,(icon,label,command,allowed) in enumerate(sidebar_items):
+            navigate=(lambda key=label,callback=command:
+                      self._activate_sidebar(key,callback))
+            button=ttk.Button(sidebar,text=f"{icon}  {label}",command=navigate,
+                style="Active.Sidebar.TButton" if index==0 else "Sidebar.TButton",
+                state="normal" if command is not None and allowed else "disabled")
+            button.pack(fill="x",pady=2);self.sidebar_buttons[label]=button
+        self.camera_button=self.sidebar_buttons["Cámara"]
+        self.people_button=self.sidebar_buttons["Personas"]
+        self.backup_button=self.sidebar_buttons["Backups"]
+        self.audit_button=self.sidebar_buttons["Auditoría"]
+        self.health_button=self.sidebar_buttons["Diagnóstico"]
+        sidebar_institution=ttk.Frame(sidebar,style="Sidebar.TFrame")
+        sidebar_institution.pack(side="bottom",fill="x",pady=(10,0))
+        self.sidebar_logo_label=ttk.Label(
+            sidebar_institution,text="Instituto Superior\nTecnológico Simón Bolívar",
+            style="SidebarText.TLabel",justify="left")
+        self.sidebar_logo_label.pack(anchor="w")
+        header = ttk.Frame(root, padding=(14, 6)); header.grid(row=0, column=1, sticky="ew")
+        header.columnconfigure(1, weight=1)
+        header.columnconfigure(2, weight=1)
+        self._institutional_logo=None
+        logo_path=Path(__file__).resolve().parent/"assets"/"LOGO-MODIFICADO-SUPERIOR-izq-1.png"
+        logo_label=ttk.Label(header,text="ISTSB",style="Institution.TLabel")
+        if logo_path.is_file():
+            try:
+                logo=tk.PhotoImage(file=str(logo_path));factor=max(1,math.ceil(logo.height()/54))
+                self._institutional_logo=logo.subsample(factor,factor)
+                logo_label.configure(image=self._institutional_logo,text="")
+                self.sidebar_logo_label.configure(image=self._institutional_logo,text="")
+            except Exception:
+                pass
+        logo_label.grid(row=0,column=0,rowspan=2,sticky="w",padx=(0,12))
+        ttk.Label(header, text="FASTVISION AI", style="Title.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(header,text="Sistema Inteligente de Reconocimiento y Asistencia",style="Subtitle.TLabel").grid(row=1,column=1,sticky="w")
+        self.header_camera=ttk.Label(
+            header,text="●  Cámara activa\nN/D",justify="left",anchor="w",
+            style="HeaderStatus.TLabel")
+        self.header_camera.grid(row=0,column=2,rowspan=2,sticky="e",padx=(10,14))
+        self.header_state=self.header_camera
+        self.header_recognition=ttk.Label(
+            header,text="●  Reconocimiento\nN/D",justify="left",anchor="w",
+            style="HeaderStatus.TLabel")
+        self.header_recognition.grid(row=0,column=3,rowspan=2,sticky="e",padx=(0,14))
+        self.header_clock=ttk.Label(header,text="",style="Clock.TLabel",justify="right")
+        self.header_clock.grid(row=0,column=4,rowspan=2,sticky="e")
+        self._update_header_clock()
+        statistics = ttk.Frame(root,padding=(10,4));statistics.grid(row=1,column=1,sticky="ew")
+        for column in range(6):statistics.columnconfigure(column,weight=1,uniform="stats")
         self.stat_values={}
-        for column,(key,label) in enumerate((("present","PERSONAS PRESENTES"),("recognitions","RECONOCIMIENTOS"),("entries","ENTRADAS HOY"),("late","RETRASOS"))):
-            card=ttk.LabelFrame(statistics,text=label,padding=8);card.grid(row=0,column=column,sticky="nsew",padx=3)
-            value=ttk.Label(card,text="N/D",style="Title.TLabel",anchor="center");value.pack(fill="x")
+        stat_items=(("present","◉  PERSONAS PRESENTES","Blue","En tiempo real"),
+                    ("registered","♙  PERSONAS REGISTRADAS","Green","Base civil"),
+                    ("biometrics","◇  IDENTIDADES BIOMÉTRICAS","Purple","Galería activa"),
+                    ("entries","↳  ENTRADAS HOY","Blue","Asistencia"),
+                    ("late","!  RETRASOS HOY","Orange","Jornada actual"),
+                    ("without_face","○  PERSONAS SIN ROSTRO","Red","Pendientes"))
+        for column,(key,label,color,subtitle) in enumerate(stat_items):
+            card=ttk.Frame(statistics,padding=(8,6),style=f"{color}.Kpi.TFrame")
+            card.grid(row=0,column=column,sticky="nsew",padx=3,pady=2)
+            ttk.Label(card,text=label,style=f"{color}.KpiTitle.TLabel",anchor="center").pack(fill="x")
+            value=ttk.Label(card,text="N/D",style=f"{color}.KpiValue.TLabel",anchor="center")
+            value.pack(fill="x")
+            ttk.Label(card,text=subtitle,style=f"{color}.KpiSubtitle.TLabel",anchor="center").pack(fill="x")
             self.stat_values[key]=value
 
-        body = ttk.Frame(root, padding=(10, 4)); body.grid(row=2, column=0, sticky="nsew")
-        body.columnconfigure(0, weight=3); body.columnconfigure(1, weight=1)
-        body.rowconfigure(0, weight=1)
+        body = ttk.Frame(root, padding=(10, 4)); body.grid(row=2, column=1, sticky="nsew")
+        body.columnconfigure(0, weight=65); body.columnconfigure(1, weight=35)
+        body.rowconfigure(0, weight=3);body.rowconfigure(1,weight=2)
         # Keep the existing live-video Canvas (formerly captioned "VIDEO EN VIVO").
-        video_card = ttk.LabelFrame(body, text="VIDEO EN TIEMPO REAL", padding=6)
-        video_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        video_card.columnconfigure(0, weight=1); video_card.rowconfigure(0, weight=1)
-        self.video = tk.Canvas(video_card, background="#202124", highlightthickness=0)
-        self.video.grid(row=0, column=0, sticky="nsew")
+        video_card = ttk.Frame(body, style="Card.TFrame", padding=8)
+        video_card.grid(row=0, column=0, sticky="nsew", padx=(0, 8),pady=(0,6))
+        video_card.columnconfigure(0, weight=1); video_card.rowconfigure(1, weight=1)
+        ttk.Label(video_card,text="▦  VIDEO EN TIEMPO REAL",style="CardTitle.TLabel").grid(
+            row=0,column=0,sticky="w",pady=(0,7))
+        self.video = tk.Canvas(video_card, background="#07111D", highlightthickness=0)
+        self.video.grid(row=1, column=0, sticky="nsew")
         self._video_item = self.video.create_image(0, 0, anchor="center")
+        self._video_status_item=self.video.create_text(
+            20,20,anchor="nw",text="CÁMARA DESCONECTADA\nSeleccione una cámara desde el menú Cámara.",
+            fill="#A9BACB",font=("TkDefaultFont",12,"bold"),
+        )
+        self._video_meta_item=self.video.create_text(
+            20,280,anchor="sw",text="FPS: N/D · Resolución: N/D",fill="#1FD6D0",
+            font=("TkDefaultFont",9,"bold"),
+        )
+        video_metrics=ttk.Frame(video_card,style="CardBody.TFrame")
+        video_metrics.grid(row=2,column=0,sticky="ew",pady=(7,0))
+        for column in range(5):video_metrics.columnconfigure(column,weight=1,uniform="video_metrics")
+        self.video_resolution=ttk.Label(video_metrics,text="RESOLUCIÓN\nN/D",style="CardText.TLabel")
+        self.video_quality=ttk.Label(video_metrics,text="CALIDAD DE CAPTURA\nN/D",style="CardText.TLabel")
+        self.video_state=ttk.Label(video_metrics,text="ESTADO\nN/D",style="CardText.TLabel")
+        self.video_samples=ttk.Label(video_metrics,text="MUESTRAS\n—",style="CardText.TLabel")
+        self.video_recognition=ttk.Label(video_metrics,text="RECONOCIMIENTO\nN/D",style="CardText.TLabel")
+        for column,widget in enumerate((self.video_resolution,self.video_quality,self.video_state,
+                                        self.video_samples,self.video_recognition)):
+            widget.grid(row=0,column=column,sticky="nsew",padx=3)
 
-        side = ttk.Frame(body); side.grid(row=0, column=1, sticky="nsew")
+        right_column=ttk.Frame(body)
+        right_column.grid(row=0,column=1,sticky="nsew",pady=(0,6))
+        right_column.columnconfigure(0,weight=1);right_column.rowconfigure(0,weight=1)
+        right_column.rowconfigure(1,weight=1)
+        main_health=ttk.Frame(right_column,style="Card.TFrame",padding=12)
+        main_health.grid(row=0,column=0,sticky="nsew",pady=(0,8))
+        ttk.Label(main_health,text="⌁  ESTADO DEL SISTEMA",style="CardTitle.TLabel").pack(
+            fill="x",pady=(0,8))
+        self.main_system_status=ttk.Label(
+            main_health,
+            text=("Cámara                  ● N/D\n"
+                  "Reconocimiento     ● N/D\n"
+                  "Base de datos       ● N/D\n"
+                  "Almacenamiento      N/D\n"
+                  "Dashboard Web       ● N/D"),
+            style="CardText.TLabel",justify="left",
+        )
+        self.main_system_status.pack(fill="both",expand=True)
+        camera_card_main=ttk.Frame(right_column,style="Card.TFrame",padding=12)
+        camera_card_main.grid(row=1,column=0,sticky="nsew")
+        ttk.Label(camera_card_main,text="▣  ESTADO DE LA CÁMARA",
+                  style="CardTitle.TLabel").pack(fill="x",pady=(0,8))
+        self.main_camera_status=ttk.Label(
+            camera_card_main,
+            text="Estado        N/D\nNombre       N/D\nResolución   N/D\nFPS              N/D",
+            style="CardText.TLabel",justify="left")
+        self.main_camera_status.pack(fill="both",expand=True)
+        self.main_camera_button=ttk.Button(
+            camera_card_main,text="▣  CAMBIAR CÁMARA",command=on_camera or (lambda:None),
+            style="Primary.TButton",state="normal" if on_camera is not None else "disabled")
+        self.main_camera_button.pack(fill="x",pady=(8,0))
+
+        side = ttk.Frame(body); side.grid(row=1,column=0,columnspan=2,sticky="nsew")
+        for column in range(3):side.columnconfigure(column,weight=1,uniform="lower")
+        side.rowconfigure(0,weight=1)
         technical = ttk.Frame(root); self.technical_panel=technical
         system_card = ttk.LabelFrame(technical, text="Estado del sistema técnico", padding=8)
         system_card.pack(fill="x", pady=(0, 6))
@@ -503,64 +678,86 @@ class LocalFaceTkApp:
         )
         self.reports_button.pack(anchor="e")
 
-        recognition_card=ttk.LabelFrame(side,text="RECONOCIMIENTOS RECIENTES",padding=6)
-        recognition_card.pack(fill="both",expand=True,pady=(0,5))
+        recognition_card=ttk.Frame(side,style="Card.TFrame",padding=8)
+        recognition_card.grid(row=0,column=0,sticky="nsew",padx=(0,4))
+        ttk.Label(recognition_card,text="◷  RECONOCIMIENTOS RECIENTES",
+                  style="CardTitle.TLabel").pack(fill="x",pady=(0,6))
         self.recent_recognition_table=ttk.Treeview(recognition_card,
-            columns=("name","time","similarity"),show="tree headings",height=5)
+            columns=("name","time","similarity","state"),show=("tree","headings"),height=4)
         self.recent_recognition_table.heading("#0",text="Foto")
-        for key,label in (("name","Nombre"),("time","Hora"),("similarity","Similitud")):
+        self.recent_recognition_table.column("#0",width=48,stretch=False,anchor="center")
+        for key,label in (("name","Nombre"),("time","Hora"),("similarity","Similitud"),("state","Estado")):
             self.recent_recognition_table.heading(key,text=label)
+        self.recent_recognition_table.tag_configure("IDENTIFICADO",foreground="#20D67A")
+        self.recent_recognition_table.tag_configure("NO EVALUADO",foreground="#FF9800")
+        self.recent_recognition_table.tag_configure("NO REGISTRADA",foreground="#EF4444")
         self.recent_recognition_table.pack(fill="both",expand=True)
+        ttk.Button(recognition_card,text="Ver todos",command=on_detection_history or (lambda:None)).pack(anchor="e",pady=(3,0))
 
-        today_card=ttk.LabelFrame(side,text="ASISTENCIA DE HOY",padding=6)
-        today_card.pack(fill="both",expand=True,pady=5)
+        today_card=ttk.Frame(side,style="Card.TFrame",padding=8)
+        today_card.grid(row=0,column=1,sticky="nsew",padx=4)
+        ttk.Label(today_card,text="▣  ASISTENCIA DE HOY",style="CardTitle.TLabel").pack(
+            fill="x",pady=(0,6))
         self.recent_attendance_table=ttk.Treeview(today_card,
-            columns=("name","in","out","state"),show="tree headings",height=5)
-        self.recent_attendance_table.heading("#0",text="Foto")
+            columns=("name","in","out","state"),show="headings",height=4)
         for key,label in (("name","Nombre"),("in","Entrada"),("out","Salida"),("state","Estado")):
             self.recent_attendance_table.heading(key,text=label)
         self.recent_attendance_table.pack(fill="both",expand=True)
+        ttk.Button(today_card,text="Ver asistencia completa",command=on_attendance_history or (lambda:None)).pack(anchor="e",pady=(3,0))
 
-        operational=ttk.LabelFrame(side,text="ESTADO DEL SISTEMA",padding=6)
-        operational.pack(fill="x",pady=(5,0))
+        performance=ttk.Frame(side,style="Card.TFrame",padding=9)
+        performance.grid(row=0,column=2,sticky="nsew",padx=(4,0))
+        ttk.Label(performance,text="⌁  RENDIMIENTO DEL SISTEMA",style="CardTitle.TLabel").pack(
+            fill="x",pady=(0,7))
+        self.metrics=ttk.Label(performance,text="FPS: N/D\nLatencia: N/D",style="CardText.TLabel")
+        self.metrics.pack(anchor="w")
+        self.system_health=ttk.Label(performance,text=(
+            "CPU: N/D\nMemoria: N/D\nCámara: N/D\nIA: N/D\nVersión: N/D"),style="CardText.TLabel")
+        self.system_health.pack(anchor="w",pady=4)
+        self.audit_summary=ttk.Label(performance,text="Auditoría: N/D",style="CardText.TLabel")
+        self.audit_summary.pack(anchor="w")
+
+        # Compatibility target for existing controller updates. Operational
+        # details are rendered in the main system card, not duplicated here.
+        operational=ttk.Frame(root)
         self.operational_status=ttk.Label(operational,text=(
-            "Cámara: N/D | Base de datos: N/D\nGalería: 0 | Reconocimiento: Detenido | Asistencia: Desactivada"))
-        self.operational_status.pack(anchor="w")
+            "Cámara: N/D\nBase de datos: N/D\nGalería: 0 · Reconocimiento: Detenido\nAsistencia: Desactivada"),
+            wraplength=sidebar_width-34,justify="left")
+        self.operational_status.pack(fill="x",anchor="w")
+
+        web_card=ttk.Frame(sidebar,style="Card.TFrame",padding=8)
+        web_card.pack(side="bottom",fill="x",pady=(8,0))
+        ttk.Label(web_card,text="◎  ACCESO WEB",style="CardTitle.TLabel").pack(anchor="w")
+        shown_urls=[item for item in (web_dashboard_local_url,web_dashboard_lan_url) if item]
+        ttk.Label(web_card,text="\n".join(shown_urls) if shown_urls else "No disponible",
+                  style="CardText.TLabel",justify="left",wraplength=165).pack(anchor="w",pady=(5,0))
+        web_actions=ttk.Frame(web_card,style="CardBody.TFrame");web_actions.pack(fill="x",pady=(6,0))
+        self.copy_web_url_button=ttk.Button(web_actions,text="COPIAR",command=self.copy_web_dashboard_url,
+            state="normal" if shown_urls else "disabled")
+        self.copy_web_url_button.pack(side="right")
+        self.open_web_url_button=ttk.Button(web_actions,text="ABRIR",command=self.open_web_dashboard,
+            state="normal" if web_dashboard_local_url else "disabled")
+        self.open_web_url_button.pack(side="left")
 
         self.diagnostic_card = ttk.LabelFrame(technical, text="Diagnóstico de calidad", padding=6)
         self.diagnostic_values = ttk.Label(self.diagnostic_card, text="N/D")
         self.diagnostic_values.pack(anchor="w")
         self.diagnostic_card.pack(fill="x",padx=10,pady=4)
 
-        metrics_card = ttk.LabelFrame(technical, text="Métricas de sesión", padding=6)
-        metrics_card.pack(fill="x",padx=10,pady=4)
-        self.metrics = ttk.Label(metrics_card, text="Captura FPS: N/D | Pipeline FPS: N/D | Latencia inferencia: N/D")
-        self.metrics.pack(anchor="w")
-        self.system_health = ttk.Label(metrics_card, text="Estado del sistema: N/D | FPS móvil: N/D | Memoria: N/D | Uptime: N/D")
-        self.system_health.pack(anchor="w")
-        self.audit_summary = ttk.Label(metrics_card,text="Auditoría: N/D")
-        self.audit_summary.pack(anchor="w")
+        footer=ttk.Frame(root,padding=(14,5));footer.grid(row=3,column=1,sticky="ew")
+        footer.columnconfigure(1,weight=1)
+        ttk.Label(footer,text="FastVisionAI v2.0",
+                  style="Subtitle.TLabel").grid(row=0,column=0,sticky="w")
+        ttk.Label(footer,text="Instituto Superior Tecnológico Simón Bolívar",
+                  style="Subtitle.TLabel").grid(row=0,column=2,sticky="e")
 
-        actions = ttk.Frame(root, padding=(10, 6)); actions.grid(row=3, column=0, sticky="ew")
-        self.register_button = ttk.Button(actions, text="Registrar rostro", command=self.open_form,state="normal" if self._can("ENROLL_PERSON") else "disabled")
-        self.register_button.pack(side="left", padx=3)
-        self.people_button = ttk.Button(actions, text="Personas registradas", command=on_people or (lambda: None),state="normal" if self._can("VIEW_PEOPLE") else "disabled")
-        self.people_button.pack(side="left", padx=3)
-        self.backup_button = ttk.Button(actions, text="Copias de seguridad", command=on_backup or (lambda: None),state="normal" if self._can("BACKUP") or self._can("RESTORE") else "disabled")
-        self.backup_button.pack(side="left", padx=3)
-        self.health_button = ttk.Button(actions,text="Ver diagnóstico",command=on_system_health or (lambda:None),state="normal" if system_health_controller is not None and self._can("VIEW_SYSTEM_HEALTH") else "disabled")
-        self.health_button.pack(side="left",padx=3)
-        self.audit_button = ttk.Button(actions,text="Auditoría",command=on_audit or (lambda:None),state="normal" if on_audit is not None and self._can("VIEW_AUDIT") else "disabled")
-        self.audit_button.pack(side="left",padx=3)
-        ttk.Button(actions, text="Diagnóstico", command=self.toggle_diagnostic).pack(side="left", padx=3)
-        ttk.Button(actions, text="Configuración", command=on_configuration or (lambda: None)).pack(side="left", padx=3)
-        self.camera_button = ttk.Button(actions, text="Cámara", command=on_camera or (lambda: None),
-                                        state="normal" if on_camera is not None else "disabled")
-        self.camera_button.pack(side="left", padx=3)
-        ttk.Button(actions, text="Guardar galería", command=self._save_gallery).pack(side="left", padx=3)
-        self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._cancel, state="disabled")
-        self.cancel_button.pack(side="left", padx=3)
-        ttk.Button(actions, text="Salir", command=self.close).pack(side="right", padx=3)
+        # Enrollment state remains part of the controller, without adding a second
+        # visible navigation/action bar to the professional dashboard.
+        self._open_registration_form = self.open_form
+        self.register_button = _ControlState(
+            "normal" if self._can("ENROLL_PERSON") else "disabled"
+        )
+        self.cancel_button = _ControlState("disabled")
         # Legacy condition retained conceptually: if self._system_health_controller is not None,
         # RC13 reads it through the single professional dashboard coordinator.
         if self._audit_controller is not None:
@@ -568,11 +765,54 @@ class LocalFaceTkApp:
         root.bind("<F11>",self.toggle_fullscreen)
         root.bind("<Escape>",self.exit_fullscreen)
 
+    def _activate_sidebar(self, label: str, callback: Callable[[], None] | None) -> None:
+        """Select one sidebar destination and invoke its existing controller."""
+        for key, button in self.sidebar_buttons.items():
+            button.configure(
+                style="Active.Sidebar.TButton" if key == label else "Sidebar.TButton"
+            )
+        if callback is not None:
+            callback()
+
+    def _render_main_system_status(self) -> None:
+        dashboard=getattr(self,"_dashboard",None)
+        camera_state="N/D" if dashboard is None else dashboard.system.camera_state
+        recognition="N/D" if dashboard is None else dashboard.system.recognition_state
+        metrics=None if dashboard is None else dashboard.metrics
+        fps="N/D" if metrics is None else _number(metrics.effective_capture_fps)
+        web_state="En línea" if getattr(self,"_web_dashboard_local_url",None) else "N/D"
+        database_state=getattr(self,"_database_state","N/D")
+        if hasattr(self,"main_system_status"):
+            self.main_system_status.configure(text=(
+                f"Cámara                  ● {camera_state}\n"
+                f"Reconocimiento     ● {recognition}\n"
+                f"Base de datos       ● {database_state}\n"
+                "Almacenamiento      N/D\n"
+                f"Dashboard Web       ● {web_state}"))
+        if hasattr(self,"main_camera_status"):
+            self.main_camera_status.configure(text=(
+                f"Estado        {camera_state}\n"
+                f"Nombre       {getattr(self,'_camera_source_name','N/D')}\n"
+                f"Resolución   {getattr(self,'_video_resolution','N/D')}\n"
+                f"FPS              {fps}"))
+
     def show_monitoring(self, dto: MonitoringDTO) -> None:
         self.latest_monitoring = dto
         view = monitoring_text(dto)
+        dashboard = getattr(self, "_dashboard", None)
+        operational = None
+        if dashboard is None:
+            headline = view.headline
+        else:
+            operational = operational_presentation_state(
+                camera_state=dashboard.system.camera_state,
+                frame_available=(dashboard.metrics.frames_received > 0),
+                monitoring=dto,
+                gallery_identity_count=dashboard.gallery.identities,
+            )
+            headline = operational_title(operational) or view.headline
 
-        self.status.configure(text=view.headline)
+        self.status.configure(text=headline)
         self.candidate.configure(text=view.candidate)
         self.similarity.configure(
             text=f"Similitud: {view.similarity}"
@@ -581,6 +821,12 @@ class LocalFaceTkApp:
         self.quality.configure(
             text=f"Score: {view.quality}"
         )
+        if hasattr(self,"video_quality"):
+            self.video_quality.configure(text=f"CALIDAD DE CAPTURA\n{view.quality}")
+            self.video_state.configure(text=f"ESTADO\n{headline}")
+            recognition_state=("N/D" if dashboard is None else
+                               dashboard.system.recognition_state)
+            self.video_recognition.configure(text=f"RECONOCIMIENTO\n{recognition_state}")
 
         self.register_button.configure(
             state="normal"
@@ -599,6 +845,12 @@ class LocalFaceTkApp:
             self._on_registration_form_state(False)
             if self._identification is not None:
                 self._identification.resume()
+        if (operational is OperationalPresentationState.GALLERY_UNREGISTERED
+                and self._identification is not None
+                and self._identification_popup is not None):
+            popup = self._identification.observe_empty_gallery(dto)
+            self._identification_popup.show(popup)
+            return
         if getattr(self, "_popup_mode", "legacy") == "action_executor":
             if (
                 dto.state in {UIState.NO_FACE, UIState.MULTIPLE_FACES}
@@ -648,9 +900,17 @@ class LocalFaceTkApp:
         )
         if getattr(self, "_enrollment_progress", None) is not None:
             self._enrollment_progress.configure(
-                text=(f"Muestras: {dto.accepted_samples} / {dto.target_samples}\n"
+                text=(f"Muestras: {dto.accepted_samples} / {dto.target_samples} · "
+                      f"Paso actual: {min(dto.accepted_samples+1,dto.target_samples)} de {dto.target_samples}\n"
                       f"{_enrollment_progress_bar(dto.accepted_samples, dto.target_samples)}")
             )
+        if hasattr(self,"video_samples"):
+            self.video_samples.configure(
+                text=f"MUESTRAS\n{dto.accepted_samples} / {dto.target_samples}")
+        if getattr(self,"_enrollment_heading",None) is not None:
+            self._enrollment_heading.configure(text=(
+                f"Paso {min(dto.accepted_samples+1,dto.target_samples)}/{dto.target_samples} — "
+                f"{dto.instruction}"))
         if (getattr(self, "_enrollment_video", None) is not None
                 and self._enrollment_guide_text is not None):
             self._enrollment_video.itemconfigure(
@@ -702,17 +962,21 @@ class LocalFaceTkApp:
             form = self._form
             for child in form.winfo_children(): child.destroy()
             form.title("REGISTRO FACIAL COMPLETADO")
-            ttk.Label(form, text="✓ REGISTRO FACIAL COMPLETADO",
-                      font=("TkDefaultFont", 16, "bold")).pack(pady=(40, 12))
-            ttk.Label(form, text=f"{dto.templates_registered}/5 muestras\n\n"
-                      "Se guardaron 5 muestras biométricas correctamente.\n\n"
-                      "¿Desea tomar una fotografía de perfil?",
-                      justify="center").pack(pady=12)
-            actions = ttk.Frame(form); actions.pack(pady=16)
-            ttk.Button(actions, text="Tomar fotografía",
-                       command=lambda: self._continue_profile_photo(dto.person_id)).pack(side="left", padx=6)
-            ttk.Button(actions, text="Omitir por ahora",
-                       command=self._skip_profile_photo).pack(side="left", padx=6)
+            form.configure(background="#07111D")
+            completed=ttk.Frame(form,style="Card.TFrame",padding=24)
+            completed.pack(fill="both",expand=True,padx=24,pady=24)
+            ttk.Label(completed,text="✓ REGISTRO FACIAL COMPLETADO",
+                      style="Title.TLabel").pack(pady=(35,12))
+            ttk.Label(completed,text=(f"{dto.templates_registered}/5 muestras\n\n"
+                      "Se guardaron las muestras biométricas correctamente.\n\n"
+                      "Ahora puede tomar una fotografía para el perfil de la persona."),
+                      style="CardText.TLabel",justify="center").pack(pady=12)
+            actions = ttk.Frame(completed,style="CardBody.TFrame");actions.pack(pady=18)
+            ttk.Button(actions,text="CONTINUAR A FOTO DE PERFIL",style="Primary.TButton",
+                       command=lambda:self._continue_profile_photo(dto.person_id)).pack(
+                           side="left",padx=6)
+            ttk.Button(actions,text="OMITIR",style="Secondary.TButton",
+                       command=self._skip_profile_photo).pack(side="left",padx=6)
             return
 
         self._close_enrollment_form()
@@ -855,14 +1119,29 @@ class LocalFaceTkApp:
                 f"ArcFace: {dto.embedding_model_state}"
             )
         )
+        dashboard=getattr(self,"_dashboard",None)
+        recognition=("N/D" if dashboard is None else dashboard.system.recognition_state)
         self.header_state.configure(
-            text=f"Cámara ● {dto.camera_state}   Runtime ● {dto.runtime_state}"
+            text=(f"●  Cámara activa\n{dto.camera_source_name} · {dto.camera_state.title()}")
         )
+        if hasattr(self,"header_recognition"):
+            self.header_recognition.configure(
+                text=f"●  Reconocimiento\n{recognition}")
+        self._render_main_system_status()
+        if hasattr(self,"_video_status_item"):
+            disconnected=dto.camera_state == "disconnected"
+            self.video.itemconfigure(
+                self._video_status_item,
+                text=("CÁMARA DESCONECTADA\nSeleccione una cámara desde el menú Cámara."
+                      if disconnected else ""),
+            )
         if hasattr(self, "camera_button"):
             self.camera_button.configure(
-                text="Buscar cámaras" if dto.camera_state == "disconnected" else "Cámara",
                 state="normal" if dto.camera_switch_allowed else "disabled",
             )
+        if hasattr(self,"main_camera_button"):
+            self.main_camera_button.configure(
+                state="normal" if dto.camera_switch_allowed else "disabled")
         state_text = {
             "connected": "Conectada", "disconnected": "Desconectada",
             "reconnecting": "Reconectando", "error": "Error",
@@ -1007,14 +1286,11 @@ class LocalFaceTkApp:
             self.recognition_pause.configure(text="")
         metrics = self._dashboard.metrics
         self.metrics.configure(text=(
-            f"Captura efectiva FPS: {_number(metrics.effective_capture_fps)} | "
-            f"Pipeline FPS: {_number(metrics.effective_processing_fps)} | "
-            f"Latencia inferencia: {_number(metrics.inference_latency_ms, ' ms')} | "
-            f"Frames: {metrics.frames_received}/{metrics.frames_processed} | "
-            f"Descartados: {metrics.visual_frames_dropped} | "
-            f"Rostros: {metrics.faces_detected_current} ({metrics.faces_detected_total}) | "
-            f"Embeddings: {metrics.embeddings_generated} | Uptime: {metrics.uptime_seconds:.1f}s"
+            f"Captura FPS: {_number(metrics.effective_capture_fps)}\n"
+            f"Pipeline FPS: {_number(metrics.effective_processing_fps)}\n"
+            f"Latencia: {_number(metrics.inference_latency_ms, ' ms')}"
         ))
+        self._render_main_system_status()
         gallery = self._dashboard.gallery
         self.gallery_status.configure(
             text=f"Personas: {gallery.identities}\nTemplates: {gallery.templates}"
@@ -1119,6 +1395,32 @@ class LocalFaceTkApp:
     def set_appliance_shutdown(self, web_shutdown=None, frame_store_close=None) -> None:
         self._web_shutdown=web_shutdown;self._presentation_frame_close=frame_store_close
 
+    def selected_web_dashboard_url(self) -> str | None:
+        return self._web_dashboard_lan_url or self._web_dashboard_local_url
+
+    def copy_web_dashboard_url(self) -> bool:
+        value=self.selected_web_dashboard_url()
+        if value is None:return False
+        try:
+            self.root.clipboard_clear();self.root.clipboard_append(value)
+            self.root.update_idletasks();return True
+        except Exception:return False
+
+    def open_web_dashboard(self) -> bool:
+        if self._web_dashboard_local_url is None:return False
+        return self._open_web_url(self._web_dashboard_local_url)
+
+    def _open_web_url(self, value: str | None) -> bool:
+        if value is None:return False
+        try:return bool(self._browser_open(value))
+        except Exception:return False
+
+    def _update_header_clock(self) -> None:
+        if self._closing:return
+        self.header_clock.configure(
+            text=datetime.now().astimezone().strftime("%H:%M:%S\n%d/%m/%Y"))
+        self.root.after(1000,self._update_header_clock)
+
     def professional_live_state(self) -> DashboardLiveStateDTO:
         recognition_state=self._dashboard.system.recognition_state
         if (self._identification is not None and
@@ -1131,20 +1433,34 @@ class LocalFaceTkApp:
 
     def show_professional_dashboard(self, value: DashboardSnapshotDTO) -> None:
         if self._closing:return
-        for key,number in (("present",value.people_present),("recognitions",value.recognitions_today),
+        for key,number in (("present",value.people_present),
                            ("entries",value.check_ins_today),("late",value.late_today)):
             self.stat_values[key].configure(text="N/D" if number is None else str(number))
+        self.stat_values["biometrics"].configure(text=str(value.gallery_identities))
+        self._database_state=value.database_state
+        self._render_main_system_status()
         self._professional_photos.clear()
         self.recent_recognition_table.delete(*self.recent_recognition_table.get_children())
         for row in value.recent_recognitions:
             photo=self._dashboard_photo(row.photo);text="Sin fotografía" if photo is None else ""
+            state=("IDENTIFICADO" if row.recognition_state == "MATCH" and row.evaluated else
+                   "NO REGISTRADA" if row.recognition_state == "UNKNOWN" and row.evaluated else
+                   "NO EVALUADO")
             self.recent_recognition_table.insert("","end",text=text,image=photo or "",values=(
-                row.display_name,row.local_time,"N/D" if row.similarity is None else f"{row.similarity*100:.1f}%"))
+                row.display_name,row.local_time,
+                "N/D" if row.similarity is None else f"{row.similarity*100:.1f}%",state),
+                tags=(state,))
+        if not value.recent_recognitions:
+            self.recent_recognition_table.insert(
+                "","end",values=("No hay reconocimientos recientes.","—","—","—"))
         self.recent_attendance_table.delete(*self.recent_attendance_table.get_children())
         for row in value.recent_attendance:
             photo=self._dashboard_photo(row.photo);text="Sin fotografía" if photo is None else ""
             self.recent_attendance_table.insert("","end",text=text,image=photo or "",values=(
                 row.display_name,row.check_in_local or "—",row.check_out_local or "—",row.status))
+        if not value.recent_attendance:
+            self.recent_attendance_table.insert("","end",values=(
+                "No hay registros de asistencia hoy.","—","—","—"))
         self.operational_status.configure(text=(
             f"Cámara: {value.camera_state} | Base de datos: {value.database_state}\n"
             f"Galería: {value.gallery_identities} | Reconocimiento: {value.recognition_state} | "
@@ -1206,6 +1522,10 @@ class LocalFaceTkApp:
         Only Tk's current PhotoImage is retained.
         """
 
+        source_width,source_height=width,height
+        self._video_resolution=f"{source_width}×{source_height}"
+        if hasattr(self,"video_resolution"):
+            self.video_resolution.configure(text=f"RESOLUCIÓN\n{self._video_resolution}")
         available_width = max(1, self.video.winfo_width())
         available_height = max(1, self.video.winfo_height())
         width, height, rgb_bytes = render_rgb(
@@ -1221,6 +1541,13 @@ class LocalFaceTkApp:
 
         self.video.coords(self._video_item, available_width // 2, available_height // 2)
         self.video.itemconfigure(self._video_item, image=photo)
+        if hasattr(self,"_video_status_item"):
+            self.video.itemconfigure(self._video_status_item,text="")
+        if hasattr(self,"_video_meta_item"):
+            self.video.coords(self._video_meta_item,12,max(20,available_height-10))
+            self.video.itemconfigure(
+                self._video_meta_item,text=f"● EN VIVO · Resolución: {source_width}×{source_height}")
+        self._render_main_system_status()
 
         self._photo = photo
         enrollment_video = getattr(self, "_enrollment_video", None)
@@ -1251,6 +1578,8 @@ class LocalFaceTkApp:
         if dto.state is UIState.MONITORING:
             self.status.configure(text=dto.message)
             self._close_photo_capture()
+            self._photo_replace_confirmed_person_id = None
+            self._photo_replace_declined_person_id = None
             self._enrollment_active = False
             self._set_camera_switch_allowed(True)
             self._on_registration_form_state(False)
@@ -1264,67 +1593,93 @@ class LocalFaceTkApp:
             self._identification.suspend()
         if self._identification_popup is not None:
             self._dismiss_identification_popup("photo_capture")
+        if self._photo_replace_declined_person_id == dto.person_id:
+            return
+        if (dto.replace_existing
+                and self._photo_replace_confirmed_person_id != dto.person_id):
+            confirmed=(messagebox is None or messagebox.askyesno(
+                "Reemplazar foto de perfil",
+                "Esta persona ya tiene una foto de perfil.\n¿Desea reemplazarla?",
+                parent=self.root,
+            ))
+            if not confirmed:
+                self._photo_replace_confirmed_person_id = None
+                self._photo_replace_declined_person_id = dto.person_id
+                if self._on_cancel_photo is not None:self._on_cancel_photo()
+                return
+            self._photo_replace_confirmed_person_id = dto.person_id
         if self._photo_capture_window is None:
             window = tk.Toplevel(self.root)
             self._photo_capture_window = window
-            window.title("CAPTURA DE FOTO DE PERFIL")
-            window.geometry("650x650")
+            window.title("FOTO DE PERFIL")
+            window.geometry("760x720")
+            window.configure(background="#07111D")
             window.protocol("WM_DELETE_WINDOW", self._cancel_person_photo)
+            shell=ttk.Frame(window,style="Card.TFrame",padding=16)
+            shell.pack(fill="both",expand=True,padx=14,pady=14)
             self._photo_capture_heading = ttk.Label(
-                window, text="CAPTURA DE FOTO DE PERFIL",
-                font=("TkDefaultFont", 15, "bold"),
+                shell,text="FOTO DE PERFIL",style="Title.TLabel",
             )
-            self._photo_capture_heading.pack(pady=10)
+            self._photo_capture_heading.pack(pady=(2,5))
+            ttk.Label(
+                shell,
+                text="Ahora puede tomar una fotografía para el perfil de la persona.",
+                style="CardText.TLabel",
+            ).pack(pady=(0,8))
             self._photo_capture_preview = ttk.Label(
-                window, text="Esperando video", anchor="center",
+                shell,text="Esperando video",anchor="center",style="CardText.TLabel",
             )
-            self._photo_capture_preview.pack(fill="both", expand=True, padx=15, pady=8)
-            self._photo_capture_quality = ttk.Label(window, text="Calidad actual: N/D")
-            self._photo_capture_quality.pack()
-            self._photo_capture_stability = ttk.Label(window, text="Estabilidad: 0/5")
-            self._photo_capture_stability.pack()
-            self._photo_capture_status = ttk.Label(window, wraplength=580)
-            self._photo_capture_status.pack(pady=6)
-            actions = ttk.Frame(window); actions.pack(pady=10)
+            self._photo_capture_preview.pack(fill="both",expand=True,padx=4,pady=8)
+            photo_info=ttk.Frame(shell,style="CardBody.TFrame");photo_info.pack(fill="x")
+            self._photo_capture_quality=ttk.Label(
+                photo_info,text="Calidad de foto: N/D\nEstado: NO EVALUADA",
+                style="CardText.TLabel")
+            self._photo_capture_quality.pack(side="left")
+            self._photo_capture_stability=ttk.Label(
+                photo_info,text="Estabilidad: 0/5",style="CardText.TLabel")
+            self._photo_capture_stability.pack(side="right")
+            self._photo_capture_status=ttk.Label(
+                shell,wraplength=680,style="CardText.TLabel")
+            self._photo_capture_status.pack(pady=7)
+            photo_actions=ttk.Frame(shell,style="CardBody.TFrame");photo_actions.pack(pady=8)
             self._photo_capture_take = ttk.Button(
-                actions, text="Capturar fotografía",
+                photo_actions,text="TOMAR FOTO",style="Primary.TButton",
                 command=lambda: self._on_capture_photo and self._on_capture_photo(),
             )
-            if self._photo_capture_mode == "manual":
-                self._photo_capture_take.pack(side="left", padx=4)
+            self._photo_capture_take.pack(side="left",padx=4)
             self._photo_capture_use = ttk.Button(
-                actions, text="Usar esta foto",
+                photo_actions,text="USAR ESTA FOTO",style="Success.TButton",
                 command=lambda: self._on_confirm_photo and self._on_confirm_photo(),
             )
-            self._photo_capture_use.pack(side="left", padx=4)
             self._photo_capture_repeat = ttk.Button(
-                actions, text="Repetir", command=self._retake_person_photo,
+                photo_actions,text="REPETIR",style="Secondary.TButton",
+                command=self._retake_person_photo,
             )
             self._photo_capture_repeat.pack(side="left", padx=4)
-            ttk.Button(actions, text="Cancelar", command=self._cancel_person_photo).pack(
-                side="left", padx=4,
-            )
+            self._photo_capture_use.pack(side="left", padx=4)
+            ttk.Button(photo_actions,text="OMITIR",style="Secondary.TButton",
+                       command=self._cancel_person_photo).pack(side="left",padx=4)
         self._photo_capture_status.configure(text=dto.message)
         self._photo_capture_heading.configure(
-            text="FOTO CAPTURADA" if dto.review else "CAPTURA DE FOTO DE PERFIL",
+            text="FOTO CAPTURADA" if dto.review else "FOTO DE PERFIL",
         )
         quality = "N/D" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
         self._photo_capture_quality.configure(
-            text=f"Calidad actual: {quality}\nEstado: {_capture_quality_state(dto.quality_score)}"
+            text=f"Calidad de foto: {quality}\nEstado: {_photo_quality_state(dto.quality_score)}"
         )
         required = dto.stability_required or 5
         self._photo_capture_stability.configure(
             text=f"Estabilidad: {dto.stability_observations}/{required}",
         )
         self._photo_capture_take.configure(
-            state="normal" if self._photo_capture_mode == "manual"
-            and dto.ready and not dto.review else "disabled",
+            state="normal" if dto.ready and not dto.review else "disabled",
         )
         self._photo_capture_use.configure(state="normal" if dto.review else "disabled")
         self._photo_capture_repeat.configure(state="normal" if dto.review else "disabled")
         if dto.review and dto.image_bytes:
             visual = ThumbnailDTO(dto.person_id, True, 112, 112, "png", dto.image_bytes)
-            payload = thumbnail_to_ppm(visual)
+            payload=thumbnail_to_ppm(
+                visual,max_width=600,max_height=430,allow_upscale=True)
             if payload is not None:
                 self._photo_capture_image = tk.PhotoImage(data=payload, format="PPM")
                 self._photo_capture_preview.configure(image=self._photo_capture_image, text="")
@@ -1377,7 +1732,7 @@ class LocalFaceTkApp:
             raise
         self._form = form
 
-        form.title("Registrar rostro")
+        form.title("Registro facial")
         form.transient(self.root)
         form.grab_set()
 
@@ -1571,53 +1926,55 @@ class LocalFaceTkApp:
         )
 
     def _show_enrollment_capture(self, form: Any) -> None:
-        """Transform the existing civil form into a safe enrollment presentation."""
+        """Transform the separate civil form into the shared-camera enrollment UI."""
         for child in form.winfo_children():
             child.destroy()
         self._registration_form_open = False
         self._enrollment_active = True
         form.title("REGISTRO FACIAL")
-        form.geometry("760x720")
-        ttk.Label(form, text="REGISTRO FACIAL", font=("TkDefaultFont", 16, "bold")).pack(
-            pady=(16, 8)
-        )
-        self._enrollment_video = tk.Canvas(
-            form, background="#202124", highlightthickness=0,
-        )
-        self._enrollment_video.pack(fill="both", expand=True, padx=18, pady=8)
-        self._enrollment_video_item = self._enrollment_video.create_image(
-            0, 0, anchor="center",
-        )
-        self._enrollment_video.create_oval(
-            230, 45, 530, 420, outline="#54d38a", width=3,
-        )
-        self._enrollment_guide_text = self._enrollment_video.create_text(
-            380, 24, text="Centre su rostro", fill="white",
-            font=("TkDefaultFont", 13, "bold"),
-        )
-        self._enrollment_quality = ttk.Label(form, text="Calidad: No disponible")
-        self._enrollment_quality.pack(pady=3)
-        self._enrollment_progress = ttk.Label(
-            form, text=f"Muestras: 0 / {self._enrollment_target_samples}",
-        )
-        self._enrollment_progress.pack(pady=3)
-        self._enrollment_reasons = ttk.Label(
-            form,
-            text=("Mantenga el rostro frente a cámara\n\n" +
-                  _enrollment_checklist(0, self._enrollment_target_samples)),
-            justify="left", wraplength=680,
-        )
-        self._enrollment_reasons.pack(padx=18, pady=8)
-        actions = ttk.Frame(form); actions.pack(pady=(6, 16))
-        self._capture_button = ttk.Button(
-            actions, text="Capturar", command=self._request_enrollment_capture,
-        )
+        form.geometry("820x760")
+        form.configure(background="#07111D")
+        shell=ttk.Frame(form,style="Card.TFrame",padding=16)
+        shell.pack(fill="both",expand=True,padx=14,pady=14)
+        ttk.Label(shell,text="REGISTRO FACIAL",style="Title.TLabel").pack(anchor="w")
+        ttk.Label(shell,text="① ─ ② ─ ③ ─ ④ ─ ⑤",style="Institution.TLabel").pack(
+            anchor="e",pady=(0,4))
+        self._enrollment_heading=ttk.Label(
+            shell,text="Paso 1/5 — Frontal",style="Institution.TLabel")
+        self._enrollment_heading.pack(anchor="w",pady=(0,8))
+        self._enrollment_video=tk.Canvas(
+            shell,background="#07111D",highlightthickness=1,
+            highlightbackground="#23445E",height=430)
+        self._enrollment_video.pack(fill="both",expand=True)
+        self._enrollment_video_item=self._enrollment_video.create_image(0,0,anchor="center")
+        self._enrollment_guide_text=self._enrollment_video.create_text(
+            16,16,anchor="nw",text="Centre el rostro y siga la pose indicada",
+            fill="#22D3D3",font=("TkDefaultFont",11,"bold"))
+        enrollment_metrics=ttk.Frame(shell,style="CardBody.TFrame")
+        enrollment_metrics.pack(fill="x",pady=(8,0))
+        self._enrollment_quality=ttk.Label(
+            enrollment_metrics,text="Calidad: N/D\nEstado: ESPERANDO",style="CardText.TLabel")
+        self._enrollment_quality.pack(side="left")
+        self._enrollment_progress=ttk.Label(
+            enrollment_metrics,
+            text=f"Muestras: 0 / {self._enrollment_target_samples}\nProgreso: 0 %",
+            style="CardText.TLabel",justify="right")
+        self._enrollment_progress.pack(side="right")
+        self._enrollment_reasons=ttk.Label(
+            shell,text=("INSTRUCCIONES\nMantenga una expresión neutral, buena iluminación "
+                        "y siga cada pose: frontal, izquierda, derecha, frontal estable y natural."),
+            style="CardText.TLabel",wraplength=740,justify="left")
+        self._enrollment_reasons.pack(fill="x",pady=9)
+        controls=ttk.Frame(shell,style="CardBody.TFrame");controls.pack(fill="x")
+        self._capture_button=ttk.Button(
+            controls,text="CAPTURAR MUESTRA",command=self._request_enrollment_capture,
+            style="Primary.TButton",
+            state="normal" if self._manual_enrollment_capture else "disabled")
         if self._manual_enrollment_capture:
-            self._capture_button.pack(side="left", padx=6)
-        ttk.Button(actions, text="Cancelar", command=self._cancel).pack(
-            side="left", padx=6
-        )
-        form.protocol("WM_DELETE_WINDOW", self._cancel)
+            self._capture_button.pack(side="right",padx=(6,0))
+        ttk.Button(controls,text="CANCELAR",command=self._cancel,
+                   style="Secondary.TButton").pack(side="right")
+        form.protocol("WM_DELETE_WINDOW",self._cancel)
 
     def _request_enrollment_capture(self) -> None:
         callback = self._on_capture_enrollment
@@ -1632,6 +1989,7 @@ class LocalFaceTkApp:
         self._enrollment_video = None
         self._enrollment_video_item = None
         self._enrollment_guide_text = None
+        self._enrollment_heading = None
         self._enrollment_progress = None
         self._enrollment_quality = None
         self._enrollment_reasons = None
@@ -1813,6 +2171,13 @@ def _capture_quality_state(score: float | None) -> str:
     if score >= 75: return "APROBADA"
     if score >= 50: return "MEJORABLE"
     return "INSUFICIENTE"
+
+
+def _photo_quality_state(score: float | None) -> str:
+    if score is None:return "NO EVALUADA"
+    if score >= 75:return "BUENA"
+    if score >= 50:return "MEJORABLE"
+    return "BAJA"
 
 
 def _enrollment_reason(reason: str) -> str:

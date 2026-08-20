@@ -34,11 +34,13 @@ class CameraSelectionController:
         configured_preference = self.discovery.config.preferred_source
         preferred = next((item for item in self.sources if item.preferred and item.available), None)
         valid = tuple(item for item in self.sources if item.available)
-        # A saved primary camera is an explicit user decision.  Never replace it
-        # with another discovered source merely because it happens to be usable.
         if configured_preference is not None:
+            # An offline saved preference must not block another usable source.
+            # A fallback is session-only; persistence happens only in set_preferred.
+            fallback = valid[0] if preferred is None and len(valid) == 1 else None
             return CameraSelectionResult(
-                self.sources, preferred, preferred is None, preferred is None,
+                self.sources, preferred or fallback,
+                preferred is None and len(valid) > 1, preferred is None,
             )
         selected = valid[0] if len(valid) == 1 else None
         return CameraSelectionResult(self.sources, selected, selected is None and len(valid) > 1)
@@ -83,6 +85,40 @@ class CameraSelectionController:
                           preferred_source=preferred)
         self._persist(updated)
         self.discovery.config = updated
+        self.sources = tuple(item for item in self.sources if item.source_id != source_id)
+
+    def update_network_source(
+        self, source_id: str, name: str, source_type: CameraSourceType, url: str,
+        *, preferred: bool,
+    ) -> CameraSourceDTO:
+        """Persist an edited saved endpoint through ConfigurationService."""
+        if source_id.startswith("v4l2:"):
+            raise ValueError("Las cámaras locales detectadas no se pueden editar.")
+        existing = next((item for item in self.discovery.config.network_sources
+                         if item.source_id == source_id), None)
+        if existing is None:
+            raise ValueError("La cámara de red no existe.")
+        candidate = parse_discovery_config({
+            "source": self.discovery.config.source,
+            "auto_discovery": self.discovery.config.auto_discovery,
+            "scan_indices": self.discovery.config.scan_indices,
+            "preferred_source": source_id if preferred else (
+                None if self.discovery.config.preferred_source == source_id
+                else self.discovery.config.preferred_source
+            ),
+            "network_sources": [
+                {"id": item.source_id,
+                 "type": (source_type.value if item.source_id == source_id
+                          else item.source_type.value),
+                 "name": (name.strip() if item.source_id == source_id else item.name),
+                 "url": (url.strip() if item.source_id == source_id else item.url)}
+                for item in self.discovery.config.network_sources
+            ],
+        })
+        self._persist(candidate)
+        self.discovery.config = candidate
+        self.discovery.invalidate_network_source(source_id)
+        return next(item for item in self.refresh().sources if item.source_id == source_id)
 
     def probe_network_source(self, name: str, source_type: CameraSourceType, url: str) -> bool:
         candidate = parse_discovery_config({
@@ -133,7 +169,7 @@ def camera_config_for_source(
         if configured is None:
             raise ValueError("La fuente de red no existe en la configuración.")
         concrete = configured.url
-        camera_type = CameraType.RTSP
+        camera_type = classify_camera_source(concrete)
     return CameraConfig(source.display_name, camera_type, concrete, reconnect=reconnect or ReconnectConfig())
 
 
@@ -141,7 +177,9 @@ def classify_camera_source(source: int | str) -> CameraType:
     if isinstance(source, int):
         return CameraType.USB
     lowered = source.lower()
-    if lowered.startswith(("rtsp://", "rtsps://", "http://", "https://")):
+    if lowered.startswith(("http://", "https://")):
+        return CameraType.NETWORK_HTTP
+    if lowered.startswith(("rtsp://", "rtsps://")):
         return CameraType.RTSP
     return CameraType.USB
 

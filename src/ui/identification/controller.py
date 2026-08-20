@@ -66,6 +66,17 @@ class IdentificationPresentationController:
         with self._lock:
             return self._observe_locked(event)
 
+    def observe_empty_gallery(self, event: MonitoringDTO) -> IdentificationPopupDTO:
+        """Present a valid single face when no biometric identity can exist."""
+        empty_gallery_event = MonitoringDTO(
+            event.state, "No existen rostros registrados en la galería.", None, None,
+            event.automatic_decision, True, event.quality_score, event.quality_band,
+            recognition_state="NO_GALLERY", candidate_person_id=None, evaluated=False,
+            match_threshold=event.match_threshold,
+        )
+        with self._lock:
+            return self._observe_locked(empty_gallery_event, allow_empty_gallery=True)
+
     def observe_action(
         self, action: str, person_id: str | None, recognition_state: str,
         similarity: float | None, message: str | None = None,
@@ -96,7 +107,8 @@ class IdentificationPresentationController:
             return self._observe_locked(event, message)
 
     def _observe_locked(
-        self, event: MonitoringDTO, message: str | None = None,
+        self, event: MonitoringDTO, message: str | None = None, *,
+        allow_empty_gallery: bool = False,
     ) -> IdentificationPopupDTO:
         if not self.policy.enabled or self._suspended:
             return self._suppressed(event, "Presentación suspendida")
@@ -114,7 +126,9 @@ class IdentificationPresentationController:
             IdentificationVisualState.IDENTIFIED,
             IdentificationVisualState.BIOMETRIC_CANDIDATE,
         }
-        unregistered = visual_state is IdentificationVisualState.UNREGISTERED
+        unregistered = (visual_state is IdentificationVisualState.UNREGISTERED or
+                        (allow_empty_gallery and event.recognition_state == "NO_GALLERY"
+                         and event.candidate_person_id is None))
         if not registered and not unregistered:
             self._reset_stability()
             return self._suppressed(event, "Estado no presentable")
@@ -171,7 +185,7 @@ class IdentificationPresentationController:
             event.recognition_state, False,
             message or "No existe una identidad local disponible para este rostro.",
             self._utcnow(),
-            evaluated=True,
+            evaluated=(event.evaluated is True),
         )
 
     def _suppressed(self, event: MonitoringDTO, message: str) -> IdentificationPopupDTO:

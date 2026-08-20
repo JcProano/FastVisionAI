@@ -27,6 +27,7 @@ class PeopleManagerWindow:
         on_view_profile: Callable[[str], None] | None = None,
         advanced_controller: Any | None = None,
         on_capture_photo: Callable[[str], bool] | None = None,
+        on_replace_face: Callable[[str], bool] | None = None,
         can_edit_photo: bool = True,
     ) -> None:
         if tk is None or ttk is None:
@@ -38,6 +39,7 @@ class PeopleManagerWindow:
         self._on_view_profile = on_view_profile
         self._advanced = advanced_controller
         self._on_capture_photo = on_capture_photo
+        self._on_replace_face = on_replace_face
         self._can_edit_photo = can_edit_photo
         self._search_after_id: Any | None = None
         self._page = 1
@@ -75,12 +77,12 @@ class PeopleManagerWindow:
                      values=sizes).pack(side="left")
         ttk.Button(filters, text="Buscar", command=self._filters_changed).pack(side="left", padx=4)
         ttk.Button(filters, text="Limpiar", command=self.clear_filters).pack(side="left")
-        columns = (("photo", "name", "cedula", "phone", "email", "status", "templates",
-                    "quality", "updated") if advanced_controller is not None else
+        columns = (("photo", "name", "cedula", "position", "department", "company",
+                    "status", "templates", "actions", "updated") if advanced_controller is not None else
                    ("first", "last", "external", "templates", "quality"))
         self.table = ttk.Treeview(self.window, columns=columns, show="headings", height=12)
-        labels = (("Foto", "Nombre", "Cédula", "Teléfono", "Email", "Estado",
-                   "Templates", "Calidad", "Actualizado") if advanced_controller is not None
+        labels = (("Foto", "Nombre", "Cédula", "Cargo", "Departamento", "Empresa",
+                   "Estado biométrico", "Templates", "Acciones", "Actualizado") if advanced_controller is not None
                   else ("Nombre", "Apellido", "Identificador", "Templates", "Calidad"))
         for key, label in zip(columns, labels):
             self.table.heading(key, text=label)
@@ -126,6 +128,11 @@ class PeopleManagerWindow:
             state="normal" if can_edit_photo else "disabled",
         )
         self.capture_thumbnail_button.grid(row=7, column=5, padx=4)
+        self.replace_face_button=ttk.Button(
+            self.window,text="ACTUALIZAR ROSTRO",command=self.replace_face,
+            state="normal" if on_replace_face is not None else "disabled",
+        )
+        self.replace_face_button.grid(row=7,column=6,padx=4)
         self.delete_thumbnail_button = ttk.Button(
             self.window, text="Eliminar foto", command=self.delete_thumbnail,
         )
@@ -165,8 +172,8 @@ class PeopleManagerWindow:
         for person in page.people:
             self.table.insert("", "end", iid=person.person_id, values=(
                 "Sí" if person.thumbnail_available else "No", person.display_name,
-                person.masked_cedula, person.phone or "", person.email or "", person.status,
-                person.template_count, person.quality_summary or "sin score",
+                person.masked_cedula, "N/D", "N/D", "N/D",
+                person.status, person.template_count, "VER · EDITAR · ELIMINAR",
                 person.updated_at.strftime("%Y-%m-%d %H:%M"),
             ))
         self.status.configure(text=page.message)
@@ -308,16 +315,19 @@ class PeopleManagerWindow:
             person.notes,
         )
         values = [tk.StringVar(dialog, value=value or "") for value in raw_values]
+        administrative_status=tk.StringVar(dialog,value=person.civil_status or "ACTIVE")
         labels = (
-            "Nombre", "Apellido", "Cédula (inmutable)", "Dirección", "Teléfono",
+            "Nombre", "Apellido", "Cédula", "Dirección", "Teléfono",
             "Email", "Fecha nacimiento", "Sexo", "Observaciones",
         )
         for row, label in enumerate(labels):
             ttk.Label(dialog, text=label).grid(row=row, column=0, padx=6, pady=4)
             entry = ttk.Entry(dialog, textvariable=values[row])
             entry.grid(row=row, column=1, padx=6, pady=4)
-            if row == 2:
-                entry.configure(state="disabled")
+        status_row=len(labels)
+        ttk.Label(dialog,text="Estado").grid(row=status_row,column=0,padx=6,pady=4)
+        ttk.Combobox(dialog,textvariable=administrative_status,state="readonly",
+                     values=("ACTIVE","DISABLED")).grid(row=status_row,column=1,padx=6,pady=4)
         def apply() -> None:
             try:
                 result = self.controller.update_person(
@@ -329,10 +339,19 @@ class PeopleManagerWindow:
                 result = self.controller.update_person(
                     person.person_id, values[0].get(), values[1].get(), values[2].get()
                 )
+            target=administrative_status.get()
+            if (result.success and person.civil_status in {"ACTIVE","DISABLED"}
+                    and target != person.civil_status
+                    and hasattr(self.controller,"set_administrative_status")):
+                result=self.controller.set_administrative_status(
+                    person.person_id,PersonStatus(target),confirmed=True,
+                )
             self.status.configure(text=result.message); dialog.destroy(); self.refresh()
-        ttk.Button(dialog, text="Guardar", command=apply).grid(row=len(labels), column=0)
+        ttk.Button(dialog,text="ACTUALIZAR FOTO",command=self.capture_thumbnail).grid(row=status_row+1,column=0)
+        ttk.Button(dialog,text="ACTUALIZAR ROSTRO",command=self.replace_face).grid(row=status_row+1,column=1)
+        ttk.Button(dialog, text="Guardar", command=apply).grid(row=status_row+2, column=0)
         ttk.Button(dialog, text="Cancelar", command=dialog.destroy).grid(
-            row=len(labels), column=1
+            row=status_row+2, column=1
         )
 
     def delete(self) -> None:
@@ -340,12 +359,25 @@ class PeopleManagerWindow:
         if person is None:
             return
         confirmed = messagebox.askyesno(
-            "Eliminar identidad",
-            f"Eliminar {person.display_name}\n{person.person_id}\n"
-            f"Templates que se eliminarán: {person.template_count}", parent=self.window,
+            "ELIMINAR PERSONA",
+            f"Nombre:\n{person.display_name}\n\nEsta acción puede eliminar:\n"
+            "- datos civiles activos\n- fotografía\n- templates biométricos\n"
+            "- identidad de la galería\n\n¿ELIMINAR DEFINITIVAMENTE?",
+            parent=self.window,
         )
         result = self.controller.delete_person(person.person_id, confirmed=confirmed)
         self.status.configure(text=result.message); self.refresh()
+
+    def replace_face(self) -> None:
+        person=self.selected()
+        if person is None or self._on_replace_face is None:return
+        if not messagebox.askyesno(
+            "ACTUALIZAR ROSTRO",
+            f"¿Reemplazar todos los templates faciales de {person.display_name}?",
+            parent=self.window,
+        ):return
+        if self._on_replace_face(person.person_id):
+            self.status.configure(text="Captura para reemplazo facial iniciada.")
 
     def add_samples(self) -> None:
         person = self.selected()

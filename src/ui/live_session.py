@@ -86,6 +86,7 @@ class SessionCommandType(str, Enum):
     CANCEL_ENROLLMENT = "cancel_enrollment"
     STOP = "stop"
     START_ADDITIONAL_ENROLLMENT = "start_additional_enrollment"
+    START_FACE_REPLACEMENT = "start_face_replacement"
     CAPTURE_ENROLLMENT_SAMPLE = "capture_enrollment_sample"
     START_PERSON_PHOTO = "start_person_photo"
     CAPTURE_PERSON_PHOTO = "capture_person_photo"
@@ -252,6 +253,13 @@ class LiveFaceSession:
             SessionCommandType.START_ADDITIONAL_ENROLLMENT, person_id=person_id
         ))
         if accepted: self.set_event_history_suspended(True)
+        return accepted
+
+    def start_face_replacement(self, person_id: str) -> bool:
+        accepted=self._command(SessionCommand(
+            SessionCommandType.START_FACE_REPLACEMENT,person_id=person_id,
+        ))
+        if accepted:self.set_event_history_suspended(True)
         return accepted
 
     def start_person_photo(self, person_id: str) -> bool:
@@ -533,7 +541,8 @@ class LiveFaceSession:
                     self._event_history_suspended.clear()
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "No se pudo iniciar el registro guiado.", False)
-            elif (command.kind is SessionCommandType.START_ADDITIONAL_ENROLLMENT and
+            elif (command.kind in {SessionCommandType.START_ADDITIONAL_ENROLLMENT,
+                                   SessionCommandType.START_FACE_REPLACEMENT} and
                   command.person_id is not None):
                 if self._plan is not None or self.controller.enrollment.active or (
                     self._additional_person_id is not None
@@ -547,7 +556,9 @@ class LiveFaceSession:
                     continue
                 try:
                     self._reset_stability(emit=True)
-                    started = self._people.begin_additional(command.person_id)
+                    started = (self._people.begin_replacement(command.person_id)
+                               if command.kind is SessionCommandType.START_FACE_REPLACEMENT
+                               else self._people.begin_additional(command.person_id))
                     if not started.success:
                         self._event(started)
                         continue

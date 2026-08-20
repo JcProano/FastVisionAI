@@ -40,6 +40,7 @@ class CameraSourceDiscovery:
         self._occupied_source_id = occupied_source_id or (lambda: None)
         self._probe_network_sources = probe_network_sources
         self._network_source_ids_to_probe = network_source_ids_to_probe
+        self._network_availability: dict[str, bool] = {}
         self.open_timeout_ms = open_timeout_ms
         self.read_timeout_ms = read_timeout_ms
 
@@ -89,7 +90,13 @@ class CameraSourceDiscovery:
             self._network_source_ids_to_probe is None
             or item.source_id in self._network_source_ids_to_probe
         )
-        available = self._probe_capture(item.url, "network camera") if should_probe else True
+        if should_probe:
+            available = self._probe_capture(item.url, "network camera")
+            self._network_availability[item.source_id] = available
+        else:
+            # A saved endpoint is not assumed online. Its bounded probe runs in a
+            # background startup task or when the operator explicitly requests it.
+            available = self._network_availability.get(item.source_id, False)
         return CameraSourceDTO(
             item.source_id, item.source_type, item.name, available,
             item.source_id == self.config.preferred_source,
@@ -110,10 +117,17 @@ class CameraSourceDiscovery:
             )
         network = next((item for item in self.config.network_sources
                         if item.source_id == source_id), None)
-        return False if network is None else self._probe_capture(network.url, "network camera")
+        if network is None:
+            return False
+        available = self._probe_capture(network.url, "network camera")
+        self._network_availability[source_id] = available
+        return available
 
     def probe_network_url(self, url: str) -> bool:
         return self._probe_capture(url, "network camera")
+
+    def invalidate_network_source(self, source_id: str) -> None:
+        self._network_availability.pop(source_id, None)
 
     def probe_network_url_details(self, url: str) -> tuple[bool, tuple[int, int] | None]:
         """Test an unsaved endpoint without retaining its URL or credentials."""

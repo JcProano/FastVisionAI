@@ -16,6 +16,7 @@ class CameraType(str, Enum):
     """Capture sources supported during phase 1."""
 
     USB = "usb"
+    NETWORK_HTTP = "network_http"
     RTSP = "rtsp"
     VIDEO_FILE = "video_file"
 
@@ -47,7 +48,7 @@ class CameraConfig:
 
     @property
     def is_live(self) -> bool:
-        return self.camera_type in {CameraType.USB, CameraType.RTSP}
+        return self.camera_type in {CameraType.USB, CameraType.NETWORK_HTTP, CameraType.RTSP}
 
     @property
     def video_path(self) -> Path | None:

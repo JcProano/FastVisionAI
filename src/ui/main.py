@@ -48,6 +48,7 @@ from src.camera.source_discovery import (
     parse_discovery_config, CameraConfigurationPersistence,
     redact_url, CameraSourceType,
 )
+from src.camera.camera_types import CameraConfig, CameraType, ReconnectConfig
 from src.ui.tk_app import LocalFaceTkApp
 from src.ui.form_validation import validate_registration_form
 from src.ui.contracts import ErrorDTO, UIErrorCode, UIState
@@ -64,9 +65,10 @@ from src.ui.photo_capture import PersonPhotoController
 from src.ui.photo_capture import AutomaticPhotoPolicy
 from src.ui.video_presentation import VideoPresentation
 from src.ui.web_dashboard import (
-    LatestPresentationFrameStore, WebDashboardController, WebDashboardServer,
+    LatestPresentationFrameStore, WebDashboardController, WebDashboardServer, detect_lan_ip,
 )
 from src.ui.web_dashboard.contracts import WebDashboardPolicy
+from src.ui.operational_semantics import operational_presentation_state
 
 
 def _video_presentation_settings(settings: dict[str, object]) -> dict[str, object]:
@@ -1153,6 +1155,7 @@ def main() -> int:
     if person_repository is not None:
         people_controller = DatabasePeopleManagerController(  # type: ignore[assignment]
             person_repository, people_controller, security.authorization,audit("people"),
+            thumbnail_manager,
         )
     people_search_controller = build_people_search(
         settings, people_controller, thumbnail_manager,
@@ -1213,57 +1216,41 @@ def main() -> int:
     preferred_source_id = camera_discovery_config.preferred_source
     camera_discovery = CameraSourceDiscovery(
         camera_discovery_config,
-        network_source_ids_to_probe=(None if preferred_source_id is None else
-                                     frozenset((preferred_source_id,))),
-        probe_network_sources=preferred_source_id is not None,
+        # Saved network endpoints are probed after UI construction so their
+        # bounded timeouts never freeze Tk startup.
+        probe_network_sources=False,
     )
     initial_selection = None
     initial_selection_result = None
-    # A persisted primary source has exclusive startup priority.  Discovery is
-    # only used to decide whether the selector must be shown; it must not choose
-    # a replacement source for this runtime.
-    if camera_discovery_config.preferred_source is not None:
-        initial_selection_result = CameraSelectionController(camera_discovery).refresh()
-        initial_selection = initial_selection_result.selected
-    elif camera_discovery_config.source == "auto":
+    if (camera_discovery_config.preferred_source is not None
+            or camera_discovery_config.source == "auto"):
         initial_selection_result = CameraSelectionController(camera_discovery).refresh()
         initial_selection = initial_selection_result.selected
     initial_source = camera_discovery_config.source
-    if preferred_source_id is not None:
-        if preferred_source_id.startswith("v4l2:"):
-            try:
-                initial_source = int(preferred_source_id.partition(":")[2])
-            except ValueError:
-                initial_source = camera_discovery_config.scan_indices + 10_000
-        else:
-            preferred_network = next(
-                (item for item in camera_discovery_config.network_sources
-                 if item.source_id == preferred_source_id), None,
-            )
-            initial_source = (preferred_network.url if preferred_network is not None
-                              else camera_discovery_config.scan_indices + 10_000)
-    elif initial_selection is not None:
+    if initial_selection is not None:
         initial_source = camera_config_for_source(initial_selection, camera_discovery_config).source
-    elif initial_source == "auto":
+    elif initial_source == "auto" or preferred_source_id is not None:
         # Deliberately invalid local index: the app remains DISCONNECTED until selection.
         initial_source = camera_discovery_config.scan_indices + 10_000
+    explicit_legacy_source = (
+        preferred_source_id is None and camera_discovery_config.source != "auto"
+    )
     current_camera_source = {"id": (
-        preferred_source_id if preferred_source_id is not None else
         initial_selection.source_id if initial_selection is not None else
         f"v4l2:{initial_source}" if isinstance(initial_source, int)
-        and camera_discovery_config.source != "auto" else None
+        and explicit_legacy_source else None
     )}
     initial_camera_name = (
         initial_selection.display_name if initial_selection is not None else
         f"Cámara de video #{initial_source}" if isinstance(initial_source, int)
-        and camera_discovery_config.source != "auto" else
+        and explicit_legacy_source else
         "Cámara RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else
         "Cámara HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
         "Sin cámara seleccionada"
     )
     initial_camera_type = (
         "DroidCam-OBS" if initial_selection is not None and initial_selection.details.get("virtual") else
-        "V4L2" if isinstance(initial_source, int) else
+        "V4L2" if isinstance(initial_source, int) and explicit_legacy_source else
         "HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
         "RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else "N/D"
     )
@@ -1355,6 +1342,35 @@ def main() -> int:
             app.status.configure(text="No se pudo encolar el registro")
             return False
         return True
+
+    def web_update_person(person_id: str, payload: object):
+        if not isinstance(payload,dict):raise ValueError("Datos civiles inválidos.")
+        result=people_controller.update_person(
+            person_id,str(payload.get("first_name",""))[:120],
+            str(payload.get("last_name",""))[:120],
+            str(payload.get("cedula","")).strip()[:20] or None,
+            phone=str(payload.get("phone",""))[:40],
+            email=str(payload.get("email",""))[:254],
+        )
+        requested=str(payload.get("status","")).upper()
+        if requested == "INACTIVE":requested="DISABLED"
+        if result.success and requested in {"ACTIVE","DISABLED"}:
+            current=people_controller.details(person_id).summary.civil_status
+            if current != requested:
+                result=people_controller.set_administrative_status(
+                    person_id,PersonStatus(requested),confirmed=True,
+                )
+        return result
+
+    def web_person_photo(person_id: str, payload: object) -> bool:
+        if not isinstance(payload,dict) or payload.get("confirmed") is not True:
+            raise ValueError("Se requiere confirmación.")
+        return session.start_person_photo(person_id)
+
+    def web_person_face(person_id: str, payload: object) -> bool:
+        if not isinstance(payload,dict) or payload.get("confirmed") is not True:
+            raise ValueError("Se requiere confirmación.")
+        return session.start_face_replacement(person_id)
 
     def close():
         nonlocal closing
@@ -1457,6 +1473,7 @@ def main() -> int:
             on_view_profile=open_profile,
             advanced_controller=people_search_controller,
             on_capture_photo=session.start_person_photo,
+            on_replace_face=session.start_face_replacement,
             can_edit_photo=security.authorization.can(AuthorizationPermission.EDIT_PERSON),
         )
 
@@ -1494,6 +1511,21 @@ def main() -> int:
                          name="web-camera-probe", daemon=True).start()
         return {"queued": True}
 
+    def delete_camera(source) -> bool:
+        """Remove saved configuration and disconnect only when it is active."""
+        source_id=source if isinstance(source,str) else source.source_id
+        was_active=current_camera_source["id"] == source_id
+        camera_selection.remove_network_source(source_id)
+        if was_active:
+            disconnected=CameraConfig(
+                "Sin cámara seleccionada",CameraType.USB,
+                camera_discovery_config.scan_indices+10_000,
+                reconnect=ReconnectConfig(enabled=False),
+            )
+            session.switch_camera(disconnected)
+            current_camera_source["id"]=None
+        return True
+
     def open_camera_selection() -> None:
         current = camera_window.get("window")
         if current is not None and current.window.winfo_exists():
@@ -1501,8 +1533,48 @@ def main() -> int:
         camera_window["window"] = CameraSelectionWindow(
             root, camera_selection, use_camera,
             current_source_id=lambda: current_camera_source["id"],
+            on_delete=delete_camera,
             on_close=lambda: camera_window.pop("window", None),
         )
+
+    def finish_startup_camera_discovery() -> None:
+        """Apply startup choice after bounded network probes complete."""
+        result = camera_selection.refresh()
+        available = tuple(source for source in result.sources if source.available)
+        if not available:
+            return
+        if len(available) == 1:
+            source = available[0]
+            if current_camera_source["id"] != source.source_id:
+                use_camera(source)
+            return
+        if tk_enabled:
+            open_camera_selection()
+
+    def start_network_camera_discovery() -> None:
+        """Probe saved network sources concurrently without blocking the UI."""
+        source_ids = tuple(
+            source.source_id for source in selector_discovery.config.network_sources
+        )
+        if not source_ids:
+            root.after(0, finish_startup_camera_discovery)
+            return
+
+        def probe_saved_sources() -> None:
+            workers = tuple(
+                threading.Thread(
+                    target=camera_selection.probe, args=(source_id,),
+                    name=f"camera-startup-probe-{index}", daemon=True,
+                )
+                for index, source_id in enumerate(source_ids)
+            )
+            for worker in workers: worker.start()
+            for worker in workers: worker.join()
+            root.after(0, finish_startup_camera_discovery)
+
+        threading.Thread(
+            target=probe_saved_sources, name="camera-startup-discovery", daemon=True,
+        ).start()
 
     def gallery_summary() -> DashboardGalleryDTO:
         gallery = people_controller.biometrics.gallery
@@ -1678,6 +1750,11 @@ def main() -> int:
         application_events.subscribe(AttendanceRecordedEvent,
             lambda event: root.after(0, lambda: show_attendance_popup(event)))
 
+    configured_web=WebDashboardPolicy.from_mapping(settings.get("web_dashboard",{}))
+    web_local_url=(f"http://127.0.0.1:{configured_web.port}"
+                   if configured_web.enabled else None)
+    lan_ip=detect_lan_ip() if configured_web.enabled else None
+    web_lan_url=(f"http://{lan_ip}:{configured_web.port}" if lan_ip else None)
     app = LocalFaceTkApp(
         root,
         on_register=register,
@@ -1737,6 +1814,8 @@ def main() -> int:
         audit_refresh_seconds=float(audit_settings.get("dashboard_refresh_seconds",30.0)),
         local_validation_login_bypass=local_validation_bypass,
         appliance_mode=appliance_mode,
+        web_dashboard_local_url=web_local_url,
+        web_dashboard_lan_url=web_lan_url,
     )
     app.web_only=not tk_enabled
     dashboard_coordinator = None
@@ -1756,7 +1835,7 @@ def main() -> int:
         application_events.subscribe(AttendanceRecordedEvent,dashboard_coordinator.invalidate)
         app.set_dashboard_refresh_coordinator(dashboard_coordinator)
     web_server=None
-    web_policy=WebDashboardPolicy.from_mapping(settings.get("web_dashboard",{}))
+    web_policy=configured_web
     if web_policy.enabled:
         web_controller=WebDashboardController(
             lambda:None if dashboard_coordinator is None else dashboard_coordinator.last_snapshot,
@@ -1770,13 +1849,24 @@ def main() -> int:
                 "source":current_camera_source.get("id") or "N/D",
             },
             presentation_provider=lambda:getattr(app,"latest_monitoring",None),
+            operational_state_provider=lambda dto: operational_presentation_state(
+                camera_state=app._dashboard.system.camera_state,
+                frame_available=(lambda status: bool(
+                    status["available"] and not status["stale"]
+                ))(presentation_frame_store.status()),
+                monitoring=dto,
+                gallery_identity_count=app._dashboard.gallery.identities,
+            ),
             actions={
                 "cameras": lambda: camera_selection.refresh().sources,
                 "camera_select": lambda payload: use_camera(camera_selection.use(_camera_id(payload))),
                 "camera_preferred": lambda payload: camera_selection.set_preferred(_camera_id(payload)),
                 "camera_network": lambda payload: camera_selection.add_network_source(
                     _camera_name(payload), _camera_network_type(payload), _camera_url(payload)),
-                "camera_network_delete": camera_selection.remove_network_source,
+                "camera_network_delete": delete_camera,
+                "camera_network_update": lambda payload: camera_selection.update_network_source(
+                    _camera_id(payload),_camera_name(payload),_camera_network_type(payload),
+                    _camera_url(payload),preferred=bool(payload.get("preferred",False))),
                 "camera_probe": web_camera_probe,
                 "enrollment_person": lambda payload: register(_web_registration_form(payload)),
                 "enrollment_capture_start": lambda _payload: session.capture_enrollment_sample(),
@@ -1786,6 +1876,11 @@ def main() -> int:
                     getattr(getattr(app,"latest_enrollment_event",None),"person_id","")),
                 "enrollment_photo_capture": lambda _payload: session.capture_person_photo(),
                 "enrollment_photo_confirm": lambda _payload: session.confirm_person_photo(),
+                "person_update": web_update_person,
+                "person_delete": lambda person_id,confirmed:
+                    people_controller.delete_person(person_id,confirmed=confirmed),
+                "person_photo": web_person_photo,
+                "person_face": web_person_face,
                 "shutdown": lambda _payload: root.after(0, app.close) or True,
             },
             audit=audit_controller, backups=backup_controller,
@@ -1817,9 +1912,7 @@ def main() -> int:
             UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR, GALLERY_SYNC_ERROR, True,
         ))
     session.start()
-    if (tk_enabled and initial_selection_result is not None
-            and (initial_selection_result.requires_selection or not initial_selection_result.sources)):
-        root.after(0, open_camera_selection)
+    start_network_camera_discovery()
     app.poll_session(session, int(settings["worker"]["ui_poll_interval_ms"]))
     if args.mock_auto_enroll:
         mock_form = validate_registration_form(

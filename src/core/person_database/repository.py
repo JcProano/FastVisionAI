@@ -92,7 +92,7 @@ class PersonRepository:
         values: dict[str, str | None] = {}
         for field in (
             "first_name", "last_name", "address", "phone", "email", "birth_date",
-            "sex", "notes",
+            "sex", "notes", "cedula",
         ):
             value = getattr(request, field)
             if value is not None:
@@ -119,6 +119,9 @@ class PersonRepository:
         except PersonNotFoundError:
             connection.rollback()
             raise
+        except sqlite3.IntegrityError as exc:
+            connection.rollback()
+            self._raise_integrity(exc,request.person_id,request.cedula or "")
         except Exception as exc:
             connection.rollback()
             raise PersonRepositoryError("person update failed") from exc

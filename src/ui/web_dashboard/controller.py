@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 from src.ui.identification_semantics import (
     IdentificationVisualState, identification_visual_state,
 )
+from src.ui.operational_semantics import OperationalPresentationState, operational_title
 
 from src.camera.source_discovery import redact_url
 from src.ui.people.contracts import PeopleSearchFiltersDTO
@@ -23,13 +24,15 @@ class WebDashboardController:
                  camera_provider=None, actions=None, diagnostics_provider=None,
                  audit=None, backups=None, configuration=None,
                  presentation_provider=None, monotonic=time.monotonic,
-                 modal_timeout_seconds: float = 60.0) -> None:
+                 modal_timeout_seconds: float = 60.0,
+                 operational_state_provider=None) -> None:
         self.snapshot_provider=snapshot_provider;self.people=people;self.history=history
         self.attendance=attendance;self.reports=reports;self.system_health=system_health
         self.identity_provider=identity_provider;self.camera_provider=camera_provider or (lambda:{})
         self.actions=actions or {};self.diagnostics_provider=diagnostics_provider
         self.audit=audit;self.backups=backups;self.configuration=configuration
         self.presentation_provider=presentation_provider;self._monotonic=monotonic
+        self.operational_state_provider=operational_state_provider
         self._modal_timeout=float(modal_timeout_seconds);self._modal_key=None
         self._modal_started=float("-inf");self._dismissed_key=None
         self._enrollment_stage="IDLE";self._enrollment_summary={}
@@ -87,7 +90,10 @@ class WebDashboardController:
         """Explicitly allowlisted commands wired by composition in main.py."""
         routes = {
             "/api/camera/select": "camera_select", "/api/camera/connect": "camera_select", "/api/camera/preferred": "camera_preferred",
-            "/api/camera/network": "camera_network", "/api/camera/probe": "camera_probe",
+            "/api/camera/network": "camera_network", "/api/camera/network/edit": "camera_network_update", "/api/camera/probe": "camera_probe",
+            "/api/camera/network/delete": "camera_network_delete",
+            "/api/person/update": "person_update", "/api/person/delete": "person_delete",
+            "/api/person/photo": "person_photo", "/api/person/face": "person_face",
             "/api/enrollment/start": "enrollment_start", "/api/enrollment/person": "enrollment_person",
             "/api/enrollment/capture/start": "enrollment_capture_start",
             "/api/enrollment/cancel": "enrollment_cancel", "/api/enrollment/photo": "enrollment_photo",
@@ -98,11 +104,24 @@ class WebDashboardController:
         }
         key = routes.get(path)
         if key is None: raise KeyError(path)
-        if key == "presentation_ignore":
+        if key == "camera_network_delete":
+            if payload.get("confirmed") is not True:raise ValueError("Se requiere confirmación.")
+            source_id=str(payload.get("source_id",""))
+            if not source_id or "/" in source_id:raise ValueError("Identificador inválido.")
+            value=self._action(key,source_id)
+        elif key.startswith("person_"):
+            token=str(payload.get("token",""));person_id=self._resolve_person_token(token)
+            if key == "person_delete":
+                if payload.get("confirmed") is not True or payload.get("confirmation") != "ELIMINAR":
+                    raise ValueError("Se requiere confirmación reforzada.")
+                value=self._action(key,person_id,True)
+            else:value=self._action(key,person_id,payload)
+        elif key == "presentation_ignore":
             self._dismissed_key=self._modal_key;self._modal_started=float("-inf");value=True
         elif key == "enrollment_start":
             current=self._presentation_payload()
-            if current.get("kind") != "UNKNOWN":raise ValueError("El registro requiere UNKNOWN evaluado.")
+            if current.get("kind") not in {"UNKNOWN","GALLERY_UNREGISTERED"}:
+                raise ValueError("El registro requiere una persona no registrada.")
             self._enrollment_stage="PERSON";self._enrollment_summary={};self._enrollment_result=None;value=True
         elif key == "enrollment_person":
             if self._enrollment_stage != "PERSON":raise ValueError("Etapa de datos no activa.")
@@ -155,11 +174,7 @@ class WebDashboardController:
                 "quality_score":None,"quality_band":None,"can_continue":self._enrollment_stage in {"PREPARATION","CONFIRMATION"},"summary":dict(self._enrollment_summary)}
 
     def delete(self, path: str) -> dict[str, object]:
-        prefix = "/api/camera/network/"
-        if not path.startswith(prefix): raise KeyError(path)
-        source_id = path.removeprefix(prefix)
-        if not source_id or "/" in source_id: raise ValueError("Identificador inválido.")
-        return {"ok": True, "result": self._plain_dto(self._action("camera_network_delete", source_id))}
+        raise ValueError("La eliminación requiere confirmación JSON explícita.")
 
     def render(self, path: str, query: str = "") -> bytes:
         if path=="/":return self._dashboard_page()
@@ -195,6 +210,13 @@ class WebDashboardController:
         with self._lock:self._tokens[token]=person_id
         return token
 
+    def _resolve_person_token(self, token: str) -> str:
+        if len(token)!=64 or any(character not in "0123456789abcdef" for character in token):
+            raise ValueError("Identificador inválido.")
+        with self._lock:person_id=self._tokens.get(token)
+        if person_id is None:raise ValueError("La persona ya no está disponible.")
+        return person_id
+
     def _safe_camera(self) -> dict[str,str]:
         try:value=dict(self.camera_provider())
         except Exception:return {"state":"DESCONECTADA","name":"N/D","type":"N/D","source":"N/D"}
@@ -219,6 +241,27 @@ class WebDashboardController:
         try:dto=None if self.presentation_provider is None else self.presentation_provider()
         except Exception:dto=None
         if dto is None:return {"active":False}
+        operational = (None if self.operational_state_provider is None else
+                       self.operational_state_provider(dto))
+        if operational is OperationalPresentationState.GALLERY_UNREGISTERED:
+            key=("GALLERY_UNREGISTERED",None);now=self._monotonic()
+            if key != self._modal_key:
+                self._modal_key=key;self._modal_started=now
+                if key != self._dismissed_key:self._dismissed_key=None
+            remaining=self._modal_timeout-(now-self._modal_started)
+            if remaining <= 0 or key == self._dismissed_key:return {"active":False}
+            return {"active":True,"kind":"GALLERY_UNREGISTERED",
+                    "title":"PERSONA NO REGISTRADA","name":None,"photo":None,
+                    "similarity":None,"status":"GALERÍA SIN IDENTIDADES",
+                    "warning":"No existen rostros registrados en la galería.",
+                    "details":[],"remaining_seconds":max(0,remaining)}
+        if (operational is not None and
+                operational is not OperationalPresentationState.RECOGNITION_RESULT):
+            title=operational_title(operational)
+            return {"active":True,"kind":operational.value,"title":title,
+                    "name":None,"photo":None,"similarity":None,"status":title,
+                    "warning":None,"details":[],
+                    "remaining_seconds":self._modal_timeout}
         state=str(getattr(dto,"recognition_state","")).upper()
         evaluated=getattr(dto,"evaluated",None);person_id=getattr(dto,"candidate_person_id",None)
         visual_state=identification_visual_state(state,evaluated,person_id)
@@ -267,9 +310,9 @@ class WebDashboardController:
 let csrf=''; const message=t=>document.getElementById('camera-message').textContent=t;
 async function api(path,method='GET',body){const o={method,credentials:'same-origin',headers:{}};if(body){o.headers['Content-Type']='application/json';o.headers['X-CSRF-Token']=csrf;o.body=JSON.stringify(body)}const r=await fetch(path,o);const d=await r.json();if(!r.ok)throw Error(d.error||'Operación no disponible');return d}
 function esc(v){const s=document.createElement('span');s.textContent=v??'';return s.innerHTML}
-async function load(){try{const d=await api('/api/cameras');document.getElementById('camera-list').innerHTML='<div class="scroll"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Principal</th><th>Acciones</th></tr></thead><tbody>'+d.cameras.map(c=>`<tr><td>${esc(c.name)}${c.active?' <strong>ACTIVA AHORA</strong>':''}</td><td>${esc(c.type)}</td><td>${esc(c.status)}</td><td>${c.preferred?'★ CÁMARA PRINCIPAL':'—'}</td><td><button onclick="connectCamera('${esc(c.id)}')">Conectar</button> <button onclick="probeCamera('${esc(c.id)}')">Probar</button> <button onclick="preferCamera('${esc(c.id)}')">☆ Usar como principal</button> ${c.network?`<button onclick="deleteCamera('${esc(c.id)}')">Eliminar</button>`:''}</td></tr>`).join('')+'</tbody></table></div>'}catch(e){message(e.message)}}
+let listedCameras={};async function load(){try{const d=await api('/api/cameras');listedCameras=Object.fromEntries(d.cameras.map(c=>[c.id,c]));document.getElementById('camera-list').innerHTML='<div class="scroll"><table><thead><tr><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Principal</th><th>Acciones</th></tr></thead><tbody>'+d.cameras.map(c=>`<tr><td>${esc(c.name)}${c.active?' <strong>ACTIVA AHORA</strong>':''}</td><td>${esc(c.type)}</td><td>${esc(c.status)}</td><td>${c.preferred?'★ CÁMARA PRINCIPAL':'—'}</td><td><button onclick="connectCamera('${esc(c.id)}')">USAR</button> <button onclick="probeCamera('${esc(c.id)}')">PROBAR</button> <button onclick="preferCamera('${esc(c.id)}')">☆ Principal</button> ${c.network?`<button onclick="editCamera('${esc(c.id)}')">EDITAR</button> <button onclick="deleteCamera('${esc(c.id)}')">ELIMINAR</button>`:''}</td></tr>`).join('')+'</tbody></table></div>'}catch(e){message(e.message)}}
 async function mutate(path,body,method='POST'){try{await api(path,method,body);message('Solicitud enviada.');load()}catch(e){message(e.message)}}
-function connectCamera(source_id){mutate('/api/camera/connect',{source_id})}function preferCamera(source_id){mutate('/api/camera/preferred',{source_id})}function probeCamera(source_id){mutate('/api/camera/probe',{source_id})}function deleteCamera(source_id){if(confirm('¿Eliminar esta cámara IP?'))mutate('/api/camera/network/'+encodeURIComponent(source_id),{},'DELETE')}
+function connectCamera(source_id){mutate('/api/camera/connect',{source_id})}function preferCamera(source_id){mutate('/api/camera/preferred',{source_id})}function probeCamera(source_id){mutate('/api/camera/probe',{source_id})}function editCamera(source_id){const camera=listedCameras[source_id];if(!camera)return;const nextName=prompt('Nombre',camera.name);if(nextName===null)return;const nextType=prompt('Tipo: NETWORK_HTTP, NETWORK_RTSP o CUSTOM',camera.type);if(nextType===null)return;const url=prompt('URL / origen\nHTTP: http://192.168.1.12:4747/video\nRTSP: rtsp://usuario:password@192.168.1.50:554/stream1');if(!url)return;mutate('/api/camera/network/edit',{source_id,name:nextName,type:nextType,url,preferred:camera.preferred})}function deleteCamera(source_id){const camera=listedCameras[source_id];if(camera&&confirm('¿Eliminar esta cámara?\n\nNombre: '+camera.name+'\n\nEsta acción eliminará la configuración guardada de la cámara.'))mutate('/api/camera/network/delete',{source_id,confirmed:true})}
 const guidance={NETWORK_RTSP:'rtsp://usuario:contraseña@192.168.1.50:554/stream1',NETWORK_HTTP:'http://192.168.1.50:8080/video',CUSTOM:'rtsp://192.168.1.50:554/cam/realmonitor?channel=1&subtype=0'};
 function formCamera(){return {name:document.getElementById('camera-name').value,type:document.getElementById('camera-type').value,url:document.getElementById('camera-url').value}}
 function updateGuidance(){const example=guidance[document.getElementById('camera-type').value];const url=document.getElementById('camera-url');url.placeholder=example;document.querySelector('#camera-example code').textContent=example}
@@ -301,6 +344,7 @@ function addNetwork(){mutate('/api/camera/network',formCamera())}
         text=str(query.get("q",[""])[0])[:100]
         value=self.people.search(PeopleSearchFiltersDTO(text=text,limit=self.people.policy.default_page_size))
         return {"people":[{"token":self._person_token(item.person_id),"name":item.display_name,
+                             "first_name":item.first_name,"last_name":item.last_name,
                              "cedula":item.masked_cedula,"phone":item.phone,"email":item.email,
                              "status":item.status,"biometrics":("SIN ROSTRO REGISTRADO" if item.template_count == 0 else f"{item.template_count} TEMPLATES"),"thumbnail":f"/api/thumbnails/{self._person_token(item.person_id)}" if item.thumbnail_available else None}
                             for item in value.people],"total":value.total}
@@ -356,9 +400,22 @@ function addNetwork(){mutate('/api/camera/network',formCamera())}
         for item in page.people:
             token=self._person_token(item.person_id)
             biometrics = "SIN ROSTRO REGISTRADO" if item.template_count == 0 else f"{item.template_count} TEMPLATES"
-            rows.append((f"/api/thumbnails/{token}" if item.thumbnail_available else "",item.display_name,item.masked_cedula,item.phone,item.email,item.status,biometrics))
+            photo=(f'<img src="/api/thumbnails/{token}" width="44" height="44" alt="Foto">'
+                   if item.thumbnail_available else "Sin foto")
+            rows.append(f'<tr><td>{photo}</td><td>{html.escape(item.display_name)}</td>'
+                        f'<td>{html.escape(item.masked_cedula)}</td><td>{html.escape(str(item.phone or ""))}</td>'
+                        f'<td>{html.escape(str(item.email or ""))}</td><td>{html.escape(item.status)}</td>'
+                        f'<td>{html.escape(biometrics)}</td><td><button onclick="viewPerson(\'{token}\')">VER</button>'
+                        f'<button onclick="editPerson(\'{token}\')">EDITAR</button>'
+                        f'<button onclick="updatePhoto(\'{token}\')">ACTUALIZAR FOTO</button>'
+                        f'<button onclick="replaceFace(\'{token}\')">ACTUALIZAR ROSTRO</button>'
+                        f'<button onclick="deletePerson(\'{token}\')">ELIMINAR</button></td></tr>')
         form=f'<form method="get"><input name="q" maxlength="100" value="{html.escape(text)}"><button>Buscar</button></form>'
-        return html.page("Personas",form+html.photo_table(("Foto","Nombre","Cédula","Teléfono","Email","Estado","Biometría"),tuple(rows)))
+        table='<div class="scroll"><table><thead><tr><th>Foto</th><th>Nombre</th><th>Cédula</th><th>Teléfono</th><th>Correo</th><th>Estado</th><th>Biometría</th><th>Acciones</th></tr></thead><tbody>'+''.join(rows)+'</tbody></table></div>'
+        script='''<p id="person-message" role="status"></p><script>
+let people={},csrf='';async function personApi(path,body){if(!csrf)csrf=(await (await fetch('/api/session')).json()).csrf_token;const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(body)});const d=await r.json();if(!r.ok)throw Error(d.error||'Operación no disponible');return d}async function loadPeople(){const d=await (await fetch('/api/people')).json();people=Object.fromEntries(d.people.map(p=>[p.token,p]))}function viewPerson(token){const p=people[token];if(p)alert(p.name+'\n'+p.cedula+'\n'+p.status+'\n'+p.biometrics)}async function editPerson(token){const p=people[token];if(!p)return;const first_name=prompt('Nombre',p.first_name);if(first_name===null)return;const last_name=prompt('Apellido',p.last_name);if(last_name===null)return;const cedula=prompt('Nueva cédula (dejar vacío para conservar)','');if(cedula===null)return;const phone=prompt('Teléfono',p.phone||'');if(phone===null)return;const email=prompt('Correo',p.email||'');if(email===null)return;const status=prompt('Estado: ACTIVE o INACTIVE',p.status==='DISABLED'?'INACTIVE':p.status);if(status===null)return;await personApi('/api/person/update',{token,first_name,last_name,cedula,phone,email,status});location.reload()}async function updatePhoto(token){await personApi('/api/person/photo',{token,confirmed:true});document.getElementById('person-message').textContent='Captura de fotografía iniciada.'}async function replaceFace(token){if(confirm('¿Reemplazar todos los templates faciales mediante el enrollment existente?'))await personApi('/api/person/face',{token,confirmed:true})}async function deletePerson(token){const p=people[token];if(!p||!confirm('ELIMINAR PERSONA\n\nNombre: '+p.name+'\n\nSe eliminarán fotografía, templates e identidad biométrica. El historial se conservará.'))return;const word=prompt('Escriba ELIMINAR para confirmar');if(word==='ELIMINAR'){await personApi('/api/person/delete',{token,confirmed:true,confirmation:word});location.reload()}}loadPeople();
+</script>'''
+        return html.page("Personas",form+table+script)
 
     def _history_page(self)->bytes:
         values=() if self.history is None else self.history.list(limit=50).events
@@ -393,7 +450,7 @@ def _modal_html(value):
     details="".join(f'<p><strong>{html.escape(str(item["label"]))}:</strong> {html.escape(str(item["value"]))}</p>' for item in value.get("details",()))
     similarity="" if value.get("similarity") is None else f'<p>Similitud: {float(value["similarity"])*100:.1f} %</p>'
     warning="" if not value.get("warning") else f'<p class="modal-warning">{html.escape(value["warning"])}</p>'
-    actions='<button onclick="webEnroll()">REGISTRAR PERSONA</button><button onclick="webIgnore()">IGNORAR</button>' if value.get("kind") == "UNKNOWN" else ""
+    actions='<button onclick="webEnroll()">REGISTRAR PERSONA</button><button onclick="webIgnore()">IGNORAR</button>' if value.get("kind") in {"UNKNOWN","GALLERY_UNREGISTERED"} else ""
     return (f'<header class="modal-header"><h2>{html.escape(value["title"])}</h2></header>'
             f'<div class="modal-photo">{photo}</div><div class="modal-content">'
             f'<h3>{html.escape(str(value.get("name") or ""))}</h3>{details}{similarity}'

@@ -30,7 +30,8 @@ class CameraDashboardTests(unittest.TestCase):
         ))
         self.assertIn("Desconectada", app.camera_status.values["text"])
         self.assertEqual(app.camera_retry_button.values["state"], "normal")
-        self.assertEqual(app.camera_button.values["text"], "Buscar cámaras")
+        self.assertEqual(app.camera_button.values["state"], "normal")
+        self.assertNotIn("text", app.camera_button.values)
 
     def test_dashboard_connected_camera_shows_name_and_type(self):
         app = self.app()
@@ -52,7 +53,7 @@ class CameraDashboardTests(unittest.TestCase):
     def test_selector_contains_required_sections_and_visible_url_entry(self):
         source = inspect.getsource(CameraSelectionWindow.__init__)
         for text in ("Cámaras locales detectadas", "Cámaras de red", "+ Agregar cámara IP",
-                     "Probar", "Guardar", "Conectar"):
+                     "Probar", "Guardar", "USAR ESTA CÁMARA"):
             self.assertIn(text, source)
         self.assertNotIn('show="•"', source)
         self.assertIn("self.network_url_entry = ttk.Entry", source)

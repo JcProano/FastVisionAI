@@ -86,23 +86,32 @@ class IdentificationPopupWindow:
     def _build(self) -> None:
         self.window = tk.Toplevel(self.root)
         self.window.title("FastVisionAI — Identificación")
-        self.window.configure(background="#10151d")
+        self.window.configure(background="#0B1420")
         self.window.protocol("WM_DELETE_WINDOW", self.dismiss)
         self.window.transient(self.root)
         self.window.minsize(760, 500)
         style = ttk.Style(self.window)
-        style.configure("Identification.TFrame", background="#10151d")
+        style.configure("Identification.TFrame", background="#0B1420")
         style.configure(
-            "Identification.Title.TLabel", background="#10151d",
-            foreground="#54d38a", font=("TkDefaultFont", 18, "bold"),
+            "Identification.Title.TLabel", background="#0B1420",
+            foreground="#4FD1C5", font=("TkDefaultFont", 18, "bold"),
         )
+        for name, color in (
+            ("Identified", "#32D583"),
+            ("Candidate", "#F79009"),
+            ("Unknown", "#F04438"),
+        ):
+            style.configure(
+                f"Identification.{name}.TLabel", background="#0B1420",
+                foreground=color, font=("TkDefaultFont", 18, "bold"),
+            )
         style.configure(
-            "Identification.Heading.TLabel", background="#10151d",
+            "Identification.Heading.TLabel", background="#0B1420",
             foreground="#f2f5f8", font=("TkDefaultFont", 13, "bold"),
         )
         style.configure(
-            "Identification.Body.TLabel", background="#10151d",
-            foreground="#d4d9df", font=("TkDefaultFont", 11),
+            "Identification.Body.TLabel", background="#0B1420",
+            foreground="#D7E2EC", font=("TkDefaultFont", 11),
         )
         container = ttk.Frame(self.window, style="Identification.TFrame", padding=24)
         container.pack(fill="both", expand=True)
@@ -175,7 +184,10 @@ class IdentificationPopupWindow:
             if not calibrated_match and not candidate:
                 return
             self.title.configure(text=("✔ PERSONA IDENTIFICADA" if calibrated_match
-                                       else "CANDIDATO BIOMÉTRICO"))
+                                       else "CANDIDATO BIOMÉTRICO"),
+                                 style=("Identification.Identified.TLabel"
+                                        if calibrated_match else
+                                        "Identification.Candidate.TLabel"))
             self.right_title.configure(text=("PERSONA IDENTIFICADA" if calibrated_match
                                              else "PENDIENTE DE CALIBRACIÓN"))
             similarity = ("No disponible" if dto.similarity is None
@@ -227,7 +239,10 @@ class IdentificationPopupWindow:
                 self, "_registered_timeout_seconds", 60.0)
             self._update_registered_countdown()
         else:
-            self.title.configure(text="PERSONA NO REGISTRADA")
+            self.title.configure(
+                text="PERSONA NO REGISTRADA",
+                style="Identification.Unknown.TLabel",
+            )
             self.right_title.configure(text="REGISTRO LOCAL")
             self.details.configure(text=_friendly_unknown_message(dto.message))
             self._person_id = None

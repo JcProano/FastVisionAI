@@ -92,9 +92,16 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
         if isinstance(raw_source, bool) or not isinstance(raw_source, int) or raw_source < 0:
             raise ConfigurationError("'camera.source' debe ser un índice USB no negativo")
         source = raw_source
-    elif camera_type is CameraType.RTSP:
-        if not isinstance(raw_source, str) or not raw_source.lower().startswith(("rtsp://", "rtsps://", "http://", "https://")):
-            raise ConfigurationError("'camera.source' debe ser una URL RTSP/HTTP válida")
+    elif camera_type in {CameraType.RTSP, CameraType.NETWORK_HTTP}:
+        # RTSP is the legacy generic network type and remains compatible with
+        # existing HTTP configurations; new discovery uses NETWORK_HTTP.
+        schemes = (("rtsp://", "rtsps://", "http://", "https://")
+                   if camera_type is CameraType.RTSP
+                   else ("http://", "https://"))
+        if not isinstance(raw_source, str) or not raw_source.lower().startswith(schemes):
+            raise ConfigurationError(
+                "'camera.source' debe usar un protocolo compatible con camera.type"
+            )
         source = raw_source
     else:
         source = _resolve_project_path(raw_source, "camera.source")

@@ -35,7 +35,7 @@ class DatabasePeopleManagerTests(unittest.TestCase):
         ))
         self.controller = DatabasePeopleManagerController(self.repository, _Biometrics())
 
-    def test_search_civil_edit_clear_and_cedula_is_immutable(self):
+    def test_search_civil_edit_clear_and_cedula_is_validated(self):
         self.assertEqual(self.controller.list_people("PÉREZ").total_identities, 1)
         edited = self.controller.update_person(
             self.person_id, "Ana María", "Pérez", "1710034065", email="",
@@ -44,11 +44,11 @@ class DatabasePeopleManagerTests(unittest.TestCase):
         record = self.repository.get_by_person_id(self.person_id)
         self.assertEqual(record.first_name, "Ana María")
         self.assertIsNone(record.email)
-        blocked = self.controller.update_person(
+        changed = self.controller.update_person(
             self.person_id, "Ana", "Pérez", "0926687856",
         )
-        self.assertFalse(blocked.success)
-        self.assertEqual(self.repository.get_by_person_id(self.person_id).cedula, "1710034065")
+        self.assertTrue(changed.success)
+        self.assertEqual(self.repository.get_by_person_id(self.person_id).cedula, "0926687856")
 
     def test_delete_is_blocked_and_additional_requires_active(self):
         self.assertFalse(self.controller.delete_person(self.person_id, confirmed=True).success)

@@ -15,11 +15,13 @@ from .controller import PeopleManagerController
 
 
 class DatabasePeopleManagerController:
-    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController, authorization=None, audit_callback=None) -> None:
+    def __init__(self, repository: PersonRepository, biometrics: PeopleManagerController,
+                 authorization=None, audit_callback=None, thumbnail_manager=None) -> None:
         self.repository = repository
         self.biometrics = biometrics
         self.authorization = authorization
         self.audit_callback = audit_callback
+        self.thumbnail_manager = thumbnail_manager
 
     def _require(self, permission: str) -> None:
         if self.authorization is None:
@@ -73,8 +75,6 @@ class DatabasePeopleManagerController:
         record = self.repository.get_by_person_id(person_id)
         if record is None:
             return self._fail("edit", "La persona no existe.", person_id)
-        if external_identifier not in (None, "", record.cedula):
-            return self._fail("edit", "La cédula es inmutable en esta fase.", person_id)
         try:
             optional_values = {
                 "address": address, "phone": phone, "email": email,
@@ -86,7 +86,7 @@ class DatabasePeopleManagerController:
             )
             self.repository.update(PersonUpdateRequest(
                 person_id, first_name, last_name, address, phone, email,
-                birth_date, sex, notes, clear_fields,
+                birth_date, sex, notes, external_identifier or None, clear_fields,
             ))
             self._audit("PERSON_UPDATED", {"person_id": person_id})
             return PeopleOperationResultDTO(
@@ -97,9 +97,40 @@ class DatabasePeopleManagerController:
             return self._fail("edit", "No se pudieron actualizar los datos civiles.", person_id)
 
     def delete_person(self, person_id: str, *, confirmed: bool) -> PeopleOperationResultDTO:
-        return self._fail(
-            "delete", "Eliminación coordinada pendiente de diseño y aprobación.", person_id,
-        )
+        self._require("EDIT_PERSON")
+        if not confirmed:
+            return PeopleOperationResultDTO(
+                PeopleManagerState.IDLE,False,"delete","Eliminación cancelada.",person_id,
+            )
+        record=self.repository.get_by_person_id(person_id)
+        if record is None:return self._fail("delete","La persona no existe.",person_id)
+        try:
+            # Soft-delete keeps attendance/audit references resolvable.
+            self.repository.set_status(person_id,PersonStatus.DISABLED)
+            biometric=self.biometrics.delete_persisted_identity(person_id)
+            if not biometric.success:
+                self.repository.set_status(person_id,record.status)
+                return biometric
+            if self.thumbnail_manager is not None:
+                self.thumbnail_manager.delete(person_id)
+            self._audit("PERSON_DELETED",{"person_id":person_id,"mode":"DISABLED"})
+            return PeopleOperationResultDTO(
+                PeopleManagerState.IDLE,True,"delete",
+                "Persona desactivada; biometría y fotografía eliminadas. El historial se conserva.",
+                person_id,biometric.affected_templates,biometric.identity_count,
+                biometric.template_count,
+            )
+        except Exception:
+            try:self.repository.set_status(person_id,record.status)
+            except Exception:pass
+            return self._fail("delete","No se pudo completar la eliminación coordinada.",person_id)
+
+    def begin_replacement(self, person_id: str) -> PeopleOperationResultDTO:
+        self._require("ENROLL_PERSON")
+        record=self.repository.get_by_person_id(person_id)
+        if record is None or record.status is not PersonStatus.ACTIVE:
+            return self._fail("replacement_start","La persona debe estar ACTIVE.",person_id)
+        return self.biometrics.begin_replacement(person_id)
 
     def begin_additional(self, person_id: str) -> PeopleOperationResultDTO:
         self._require("ENROLL_PERSON")

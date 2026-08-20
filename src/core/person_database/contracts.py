@@ -55,10 +55,13 @@ class PersonUpdateRequest:
     birth_date: str | None = None
     sex: str | None = None
     notes: str | None = None
+    cedula: str | None = None
     clear_fields: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "person_id", validate_person_id(self.person_id))
+        if self.cedula is not None:
+            object.__setattr__(self,"cedula",EcuadorianCedulaValidator.validate(self.cedula))
         if self.first_name is not None:
             object.__setattr__(self, "first_name", required_text(self.first_name, "first_name"))
         if self.last_name is not None:

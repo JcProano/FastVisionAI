@@ -10,12 +10,14 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import cv2
 import numpy as np
 
 from src.camera.camera_manager import CameraManager
 from src.camera.camera_types import CameraConfig, CameraType, ReadStatus, ReconnectConfig
+from src.camera.source_discovery import classify_camera_source, redact_url
 from src.core.config_manager import PROJECT_ROOT, load_config
 from src.engine.alignment import AlignmentQuality, FaceAligner
 from src.engine.benchmark.manager import BenchmarkManager
@@ -76,6 +78,40 @@ class CaptureSampleSelector:
         return True
 
 
+def parse_camera_source(value: str) -> int | str:
+    """Normalize a CLI camera source without accepting files or ambiguous input."""
+    candidate = value.strip()
+    if candidate.isdecimal():
+        return int(candidate)
+    if candidate.lower().startswith(("http://", "https://", "rtsp://", "rtsps://")):
+        try:
+            parsed = urlsplit(candidate)
+            if not parsed.hostname:
+                raise ValueError
+        except ValueError as exc:
+            raise argparse.ArgumentTypeError("camera URL must include a valid host") from exc
+        return candidate
+    raise argparse.ArgumentTypeError(
+        "camera source must be a non-negative USB index or HTTP/HTTPS/RTSP/RTSPS URL"
+    )
+
+
+def safe_source_reference(source: int | str) -> str:
+    """Stable RC17 provenance value that never persists URL credentials or query secrets."""
+    if isinstance(source, int):
+        return str(source)
+    if source.lower().startswith(("http://", "https://", "rtsp://", "rtsps://")):
+        return redact_url(source)
+    return source
+
+
+def capture_camera_config(source: int | str) -> CameraConfig:
+    return CameraConfig(
+        "face_calibration", classify_camera_source(source), source,
+        reconnect=ReconnectConfig(True, 3, 0.5),
+    )
+
+
 def run_capture(args: argparse.Namespace) -> dict[str, object]:
     """Run real capture only when explicitly invoked by an operator."""
     require_capture_consent(
@@ -95,7 +131,7 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
     gallery_manifest = json.loads(args.gallery_manifest.read_text(encoding="utf-8"))
     registered_ids = {str(item["person_id"])
                       for item in gallery_manifest.get("identities", [])}
-    gallery_sources = {str(item["source_reference"])
+    gallery_sources = {safe_source_reference(str(item["source_reference"]))
                        for item in gallery_manifest.get("templates", [])
                        if item.get("source_reference")}
     if sample_type is CalibrationSampleType.GENUINE and expected_identity not in registered_ids:
@@ -108,19 +144,15 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
     )
     selector = CaptureSampleSelector(policy)
     session_id = args.session_id or f"calibration-{uuid.uuid4()}"
-    if session_id in gallery_sources or str(args.source) in gallery_sources:
+    source_reference = safe_source_reference(args.source)
+    if session_id in gallery_sources or source_reference in gallery_sources:
         raise ValueError("evaluation run/source_reference overlaps enrollment")
     condition_id = args.condition_id or (
         f"{args.illumination}-{args.distance}-{args.pose}"
     )
     cancelled = threading.Event()
     previous = signal.signal(signal.SIGINT, lambda _sig, _frame: cancelled.set())
-    camera = CameraManager(
-        CameraConfig(
-            "face_calibration", CameraType.USB, args.source,
-            reconnect=ReconnectConfig(True, 3, 0.5),
-        ), cancelled,
-    )
+    camera = CameraManager(capture_camera_config(args.source), cancelled)
     config = load_config()
     face_config = next(item for item in config.pipeline.plugins.plugins if item.id == "face_detector")
     embedding_config = next(
@@ -164,7 +196,7 @@ def run_capture(args: argparse.Namespace) -> dict[str, object]:
                 if selector.consider(embedding, frame.monotonic_timestamp):
                     metadata = CalibrationSampleMetadata(
                         session_id, args.temporary_id, frame.captured_at,
-                        str(args.source), (frame.width, frame.height),
+                        source_reference, (frame.width, frame.height),
                         embedding.alignment_quality, embedding.model, embedding.version,
                         embedding.weights_sha256,
                         sample_type=sample_type, expected_identity=expected_identity,
@@ -235,7 +267,7 @@ def build_parser(sample_type: CalibrationSampleType | None = None) -> argparse.A
                         required=True)
     parser.add_argument("--pose", choices=[item.value for item in CalibrationPose], required=True)
     parser.add_argument("--session-id")
-    parser.add_argument("--source", type=int, default=0)
+    parser.add_argument("--source", type=parse_camera_source, default=0)
     parser.add_argument("--min-samples", type=int, default=5)
     parser.add_argument("--target-samples", type=int, default=10)
     parser.add_argument("--min-capture-interval", type=float, default=1.0)

@@ -100,13 +100,13 @@ class CameraSourceDiscoveryTests(unittest.TestCase):
         self.assertEqual(second.selected.source_id, "v4l2:2")
         self.assertEqual(len(factory.created), 4)
 
-    def test_missing_preferred_never_falls_back_to_another_camera(self):
+    def test_missing_preferred_allows_session_only_fallback(self):
         service, _ = self.discovery(
             config(scan_indices=3, preferred_source="v4l2:2"), [FakeCapture()], {0},
         )
         result = CameraSelectionController(service).refresh()
-        self.assertIsNone(result.selected)
-        self.assertTrue(result.requires_selection)
+        self.assertEqual(result.selected.source_id, "v4l2:0")
+        self.assertFalse(result.requires_selection)
         self.assertTrue(result.preferred_unavailable)
 
     def test_only_the_saved_network_camera_is_probed_at_startup(self):
@@ -151,7 +151,8 @@ class CameraSourceDiscoveryTests(unittest.TestCase):
         rendered = repr(sources)
         self.assertNotIn("user", rendered); self.assertNotIn("pass", rendered)
         self.assertEqual(camera_config_for_source(sources[0], cfg).camera_type, CameraType.RTSP)
-        self.assertEqual(camera_config_for_source(sources[1], cfg).camera_type, CameraType.RTSP)
+        self.assertEqual(camera_config_for_source(sources[1], cfg).camera_type,
+                         CameraType.NETWORK_HTTP)
 
     def test_network_probe_opens_reads_and_releases(self):
         cfg = config(auto_discovery=False, network_sources=[
@@ -222,7 +223,7 @@ class CameraSourceDiscoveryTests(unittest.TestCase):
         self.assertNotIn("password", safe); self.assertNotIn("token", safe)
         self.assertEqual(classify_camera_source(0), CameraType.USB)
         self.assertEqual(classify_camera_source("rtsp://cam/live"), CameraType.RTSP)
-        self.assertEqual(classify_camera_source("http://cam/mjpeg"), CameraType.RTSP)
+        self.assertEqual(classify_camera_source("http://cam/mjpeg"), CameraType.NETWORK_HTTP)
         projected = redact({"camera": {"network_sources": [{"url":
             "http://alice:secret@cam/mjpeg?token=hidden"}]}})
         rendered = repr(projected)
