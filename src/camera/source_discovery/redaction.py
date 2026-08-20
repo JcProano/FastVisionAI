@@ -12,9 +12,13 @@ def redact_url(value: str) -> str:
         return "[REDACTED URL]"
     if not parsed.scheme or not parsed.netloc:
         return "[REDACTED URL]"
-    host = parsed.hostname or "host"
+    try:
+        host = parsed.hostname or "host"
+        port_number = parsed.port
+    except ValueError:
+        return "[REDACTED URL]"
     if ":" in host and not host.startswith("["):
         host = f"[{host}]"
-    port = f":{parsed.port}" if parsed.port is not None else ""
+    port = f":{port_number}" if port_number is not None else ""
     credentials = "***:***@" if parsed.username is not None or parsed.password is not None else ""
     return urlunsplit((parsed.scheme, f"{credentials}{host}{port}", parsed.path, "", ""))

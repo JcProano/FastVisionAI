@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from src.ui.contracts import MonitoringDTO, UIState
+from src.ui.identification_semantics import (
+    IdentificationVisualState, identification_visual_state,
+)
 
 from .contracts import (
     IdentificationPopupDTO, IdentificationPopupPolicy, IdentificationPopupType,
@@ -104,16 +107,14 @@ class IdentificationPresentationController:
             self._reset_stability()
             return self._suppressed(event, "Se requiere exactamente un rostro")
 
-        registered = (
-            ((event.recognition_state == "MATCH" and event.evaluated is True)
-             or event.recognition_state == "NOT_EVALUATED")
-            and event.candidate_person_id is not None
+        visual_state = identification_visual_state(
+            event.recognition_state, event.evaluated, event.candidate_person_id,
         )
-        unregistered = (
-            event.recognition_state == "UNKNOWN"
-            and event.evaluated is True
-            and event.candidate_person_id is None
-        )
+        registered = visual_state in {
+            IdentificationVisualState.IDENTIFIED,
+            IdentificationVisualState.BIOMETRIC_CANDIDATE,
+        }
+        unregistered = visual_state is IdentificationVisualState.UNREGISTERED
         if not registered and not unregistered:
             self._reset_stability()
             return self._suppressed(event, "Estado no presentable")
@@ -142,19 +143,25 @@ class IdentificationPresentationController:
             self._registered_last[event.candidate_person_id] = now
             self._registered_paused_until = now + self.policy.registered_pause_seconds
             self._reset_stability()
+            confirmed = event.recognition_state == "MATCH" and event.evaluated is True
             return IdentificationPopupDTO(
                 IdentificationPopupType.REGISTERED_CANDIDATE,
-                person.person_id, person.display_name, person.external_identifier,
+                person.person_id, person.display_name,
+                person.external_identifier if confirmed else None,
                 event.similarity, event.recognition_state, thumbnail.available,
-                ("CANDIDATO REGISTRADO — RECONOCIMIENTO PENDIENTE DE CALIBRACIÓN"
-                 if event.recognition_state == "NOT_EVALUATED" else "Persona identificada"),
+                ("CANDIDATO BIOMÉTRICO — NO EVALUADO — SISTEMA PENDIENTE DE CALIBRACIÓN"
+                 if not confirmed else "Persona identificada"),
                 self._utcnow(),
-                getattr(person, "address", None), getattr(person, "phone", None),
-                getattr(person, "email", None), getattr(person, "status", None),
-                getattr(person, "department", None), getattr(person, "position", None),
-                getattr(person, "company", None),
-                getattr(person, "registered_at", None),
-                getattr(person, "last_access_at", None),
+                getattr(person, "address", None) if confirmed else None,
+                getattr(person, "phone", None) if confirmed else None,
+                getattr(person, "email", None) if confirmed else None,
+                getattr(person, "status", None) if confirmed else None,
+                getattr(person, "department", None) if confirmed else None,
+                getattr(person, "position", None) if confirmed else None,
+                getattr(person, "company", None) if confirmed else None,
+                getattr(person, "registered_at", None) if confirmed else None,
+                getattr(person, "last_access_at", None) if confirmed else None,
+                confirmed,
             )
 
         if now - self._unknown_last < self.policy.unknown_cooldown_seconds:
@@ -164,6 +171,7 @@ class IdentificationPresentationController:
             event.recognition_state, False,
             message or "No existe una identidad local disponible para este rostro.",
             self._utcnow(),
+            evaluated=True,
         )
 
     def _suppressed(self, event: MonitoringDTO, message: str) -> IdentificationPopupDTO:

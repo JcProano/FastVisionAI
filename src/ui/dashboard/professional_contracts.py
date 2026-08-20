@@ -19,6 +19,8 @@ class RecentRecognitionRowDTO:
     display_name: str
     local_time: str
     similarity: float | None
+    recognition_state: str = "NOT_EVALUATED"
+    evaluated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

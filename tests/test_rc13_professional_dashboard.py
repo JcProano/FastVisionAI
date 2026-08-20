@@ -47,10 +47,27 @@ class ProfessionalDashboardControllerTests(unittest.TestCase):
     def test_statistics_recent_limits_statuses_and_missing_thumbnail(self):
         controller,_=self.controller(False)
         value=controller.snapshot(DashboardLiveStateDTO("CONNECTED","RUNNING","MATCHED",9),refresh_statistics=True)
-        self.assertEqual((value.people_present,value.recognitions_today,value.check_ins_today,value.late_today),(4,11,6,2))
+        # REGISTERED_CANDIDATE rows are diagnostic top-1 candidates.  Without
+        # an evaluated MATCH the confirmed-recognition KPI remains zero.
+        self.assertEqual((value.people_present,value.recognitions_today,value.check_ins_today,value.late_today),(4,0,6,2))
         self.assertEqual((len(value.recent_recognitions),len(value.recent_attendance)),(5,5))
         self.assertFalse(value.recent_recognitions[0].photo.available)
         self.assertEqual((value.camera_state,value.recognition_state,value.attendance_state),("Conectada","Activo","Activa"))
+
+    def test_recognitions_kpi_counts_only_evaluated_matches(self):
+        controller,values=self.controller()
+        values.recognitions=(
+            SimpleNamespace(person_id="confirmed",display_name="Confirmada",timestamp=NOW,
+                            similarity=.9,recognition_state="MATCH",evaluated=True),
+            SimpleNamespace(person_id="unevaluated",display_name="Candidata",timestamp=NOW,
+                            similarity=.99,recognition_state="NOT_EVALUATED",evaluated=False),
+            SimpleNamespace(person_id="invalid",display_name="Inválida",timestamp=NOW,
+                            similarity=.99,recognition_state="MATCH",evaluated=False),
+        )
+        value=controller.snapshot(DashboardLiveStateDTO(),refresh_statistics=True)
+        self.assertEqual(value.recognitions_today,1)
+        self.assertTrue(value.recent_recognitions[0].evaluated)
+        self.assertFalse(value.recent_recognitions[1].evaluated)
 
     def test_camera_recognition_attendance_variants_and_degraded_health(self):
         controller,values=self.controller();values.attendance.service.policy.automatic_attendance_enabled=False

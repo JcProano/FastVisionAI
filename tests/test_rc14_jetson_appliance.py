@@ -28,9 +28,12 @@ class JetsonApplianceTests(unittest.TestCase):
         self.assertIs(configured_startup_mode({"ui":{"tk_enabled":True},"web_dashboard":{"enabled":False}}),StartupMode.TK)
         self.assertIs(configured_startup_mode({"ui":{"tk_enabled":False},"web_dashboard":{"enabled":True}}),StartupMode.WEB)
 
-    def test_jetson_asks_and_registered_popup_lasts_sixty_seconds(self):
+    def test_jetson_defaults_to_hybrid_and_registered_popup_lasts_sixty_seconds(self):
         settings=json.loads(Path("config/local_face_validation.jetson.json").read_text())
-        self.assertEqual(settings["ui"]["startup_mode"],"ASK")
+        self.assertEqual(settings["ui"]["startup_mode"],"BOTH")
+        self.assertTrue(settings["ui"]["tk_enabled"])
+        self.assertTrue(settings["web_dashboard"]["enabled"])
+        self.assertFalse(settings["web_dashboard"]["open_browser_on_start"])
         self.assertEqual(settings["identification_popup"]["registered_popup_timeout_seconds"],60)
 
     def test_appliance_session_is_ephemeral_admin_and_does_not_touch_users_database(self):

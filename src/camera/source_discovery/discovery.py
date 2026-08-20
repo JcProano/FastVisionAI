@@ -115,6 +115,27 @@ class CameraSourceDiscovery:
     def probe_network_url(self, url: str) -> bool:
         return self._probe_capture(url, "network camera")
 
+    def probe_network_url_details(self, url: str) -> tuple[bool, tuple[int, int] | None]:
+        """Test an unsaved endpoint without retaining its URL or credentials."""
+        capture = self._capture_factory()
+        try:
+            self._set_timeout(capture, "CAP_PROP_OPEN_TIMEOUT_MSEC", self.open_timeout_ms)
+            self._set_timeout(capture, "CAP_PROP_READ_TIMEOUT_MSEC", self.read_timeout_ms)
+            if not (bool(capture.open(url)) and bool(capture.isOpened())):
+                return False, None
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                return False, None
+            shape = getattr(frame, "shape", ())
+            return True, (int(shape[1]), int(shape[0])) if len(shape) >= 2 else None
+        except (cv2.error, OSError, RuntimeError) as exc:
+            LOGGER.debug("Camera probe failed for network camera: %s", exc)
+            return False, None
+        finally:
+            try: capture.release()
+            except (cv2.error, OSError, RuntimeError):
+                LOGGER.debug("Camera probe release failed for network camera")
+
     def _probe_capture(self, source: int | str, safe_name: str) -> bool:
         capture = self._capture_factory()
         try:

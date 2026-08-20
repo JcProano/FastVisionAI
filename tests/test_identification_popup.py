@@ -120,10 +120,13 @@ class IdentificationPopupTests(unittest.TestCase):
              patch("src.ui.identification.tk_popup.tk.PhotoImage", return_value="photo"):
             popup._render(self.registered())
         self.assertEqual(popup.thumbnail.values["image"], "photo")
-        self.assertEqual(popup.title.values["text"], "PERSONA REGISTRADA")
+        self.assertEqual(popup.title.values["text"], "CANDIDATO BIOMÉTRICO")
         self.assertIn("Temporary Person", popup.details.values["text"])
-        self.assertIn("Score de reconocimiento: 92.4 %", popup.details.values["text"])
-        self.assertIn("Estado: PENDIENTE DE CALIBRACIÓN", popup.details.values["text"])
+        self.assertIn("Similitud: 92.4 %", popup.details.values["text"])
+        self.assertIn("Estado: NO EVALUADO", popup.details.values["text"])
+        self.assertIn("no constituye una identificación", popup.details.values["text"])
+        for civil_label in ("Cédula", "Teléfono", "Empresa", "Departamento"):
+            self.assertNotIn(civil_label, popup.details.values["text"])
         self.assertNotIn("person-safe", popup.details.values["text"])
 
     def test_registered_popup_without_photo_uses_placeholder(self):
@@ -133,7 +136,9 @@ class IdentificationPopupTests(unittest.TestCase):
 
     def test_only_evaluated_match_uses_identified_visual_state(self):
         popup, _, _, _, _ = self.popup()
-        dto = dataclasses.replace(self.registered(thumbnail=False), recognition_state="MATCH")
+        dto = dataclasses.replace(
+            self.registered(thumbnail=False), recognition_state="MATCH", evaluated=True,
+        )
         popup._render(dto)
         self.assertEqual(popup.title.values["text"], "✔ PERSONA IDENTIFICADA")
         self.assertIn("Estado: IDENTIFICADO", popup.details.values["text"])
@@ -146,7 +151,7 @@ class IdentificationPopupTests(unittest.TestCase):
         self.assertNotIn("pose_not_requested", popup.details.values["text"])
         self.assertIn("centre el rostro", popup.details.values["text"])
 
-    def test_missing_registered_data_is_explicitly_unavailable(self):
+    def test_candidate_with_missing_data_never_renders_civil_fields(self):
         popup, _, _, _, _ = self.popup()
         dto = IdentificationPopupDTO(
             IdentificationPopupType.REGISTERED_CANDIDATE, "person-safe", None,
@@ -154,13 +159,17 @@ class IdentificationPopupTests(unittest.TestCase):
             datetime.now(timezone.utc),
         )
         popup._render(dto)
-        self.assertGreaterEqual(popup.details.values["text"].count("No disponible"), 8)
+        self.assertIn("CANDIDATO BIOMÉTRICO", popup.title.values["text"])
+        self.assertNotIn("Cédula", popup.details.values["text"])
+        self.assertNotIn("Teléfono", popup.details.values["text"])
 
     def test_singleton_registered_popup_updates_only_when_person_changes(self):
         popup, _, _, _, _ = self.popup()
         first = self.registered(thumbnail=False)
         popup._popup_type = IdentificationPopupType.REGISTERED_CANDIDATE
         popup._person_id = first.person_id
+        popup._recognition_state = first.recognition_state
+        popup._evaluated = first.evaluated
         popup._render = Mock()
         popup.show(first)
         popup._render.assert_not_called()

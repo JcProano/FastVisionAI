@@ -569,6 +569,7 @@ class LocalFaceTkApp:
         root.bind("<Escape>",self.exit_fullscreen)
 
     def show_monitoring(self, dto: MonitoringDTO) -> None:
+        self.latest_monitoring = dto
         view = monitoring_text(dto)
 
         self.status.configure(text=view.headline)
@@ -630,6 +631,7 @@ class LocalFaceTkApp:
         self,
         dto: EnrollmentProgressDTO,
     ) -> None:
+        self.latest_enrollment_event = dto
         self._enrollment_active = True
         self._set_camera_switch_allowed(False)
         self._clear_pending_popups()
@@ -690,6 +692,7 @@ class LocalFaceTkApp:
         self,
         dto: EnrollmentResultDTO,
     ) -> None:
+        self.latest_enrollment_event = dto
         self._enrollment_active = True
         self._registration_form_open = False
         self.status.configure(text=dto.message)
@@ -1242,6 +1245,9 @@ class LocalFaceTkApp:
                 self._photo_capture_preview = None
 
     def show_person_photo_capture(self, dto: PersonPhotoCaptureDTO) -> None:
+        self.latest_photo_event = dto
+        if getattr(self, "web_only", False):
+            return
         if dto.state is UIState.MONITORING:
             self.status.configure(text=dto.message)
             self._close_photo_capture()

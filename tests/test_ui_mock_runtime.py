@@ -15,6 +15,7 @@ class MockUIRuntimeTests(unittest.TestCase):
         self.assertEqual(step.face_count, 1)
         self.assertTrue(step.guided.accepted)
         self.assertIsNotNone(step.guided.embedding)
+        self.assertIs(step.monitoring_embedding, step.guided.embedding)
         self.assertEqual(len(step.visual.rgb_bytes), step.visual.width * step.visual.height * 3)
         adapter.close()
         self.assertTrue(adapter.closed)
@@ -32,6 +33,7 @@ class MockUIRuntimeTests(unittest.TestCase):
         self.assertEqual(multiple.face_count, 2)
         self.assertEqual(multiple.guided.primary_state, GuidedCaptureState.MULTIPLE_FACES)
         self.assertIsNone(multiple.guided.embedding)
+        self.assertIsNone(multiple.monitoring_embedding)
 
 
 if __name__ == "__main__":

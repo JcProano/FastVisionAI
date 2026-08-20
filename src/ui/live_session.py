@@ -398,7 +398,7 @@ class LiveFaceSession:
                     self._visual_frames_dropped += int(dropped)
                     self._faces_detected_total += step.face_count
                     self._faces_detected_current = step.face_count
-                    self._embeddings_generated += int(step.guided.embedding is not None)
+                    self._embeddings_generated += int(step.monitoring_embedding is not None)
                     self._dashboard_quality = _dashboard_quality(step.guided)
                 self._last_single_valid = (
                     step.face_count == 1 and step.guided.visual_quality_passed
@@ -420,7 +420,9 @@ class LiveFaceSession:
                             None if score is None else score.quality_band.value, True,
                         ))
                 else:
-                    self._monitoring_step(step.face_count, step.guided)
+                    self._monitoring_step(
+                        step.face_count, step.guided, step.monitoring_embedding
+                    )
         finally:
             self.adapter.close()
             if self.controller.enrollment.active:
@@ -638,32 +640,7 @@ class LiveFaceSession:
             camera_source_type=self._camera_source_type,
         )
 
-    def _monitoring_step(self, face_count: int, guided) -> None:
-        if time.monotonic() < self._photo_grace_until:
-            self._event(MonitoringDTO(
-                UIState.MONITORING, "Identificación temporalmente suspendida", None,
-                None, "deshabilitada / NOT_EVALUATED", False,
-                recognition_state="NOT_EVALUATED",
-            ))
-            return
-        if self._event_history_suspended.is_set():
-            self._event(MonitoringDTO(
-                UIState.FORM_OPEN, "Identificación suspendida durante el registro",
-                None, None, "deshabilitada / NOT_EVALUATED", False,
-                recognition_state="NOT_EVALUATED",
-            ))
-            return
-        presentation = getattr(self, "_identification_presentation", None)
-        if (presentation is not None
-                and presentation.registered_pause_remaining_seconds() > 0):
-            score = guided.face_quality_score
-            self._emit_monitoring(MonitoringDTO(
-                UIState.MONITORING, "Reconocimiento temporalmente pausado",
-                None, None, "deshabilitada / NOT_EVALUATED", True,
-                None if score is None else score.total_score,
-                None if score is None else score.quality_band.value,
-            ))
-            return
+    def _monitoring_step(self, face_count: int, guided, monitoring_embedding) -> None:
         if face_count == 0:
             self._emit_monitoring(MonitoringDTO(
                 UIState.NO_FACE, "No se detectó un rostro", None, None,
@@ -677,15 +654,33 @@ class LiveFaceSession:
             ))
             return
         score = guided.face_quality_score
-        if guided.embedding is None:
+        if monitoring_embedding is None:
+            state = (GuidedCaptureState.ALIGNMENT_FAILED.value
+                     if guided.primary_state is GuidedCaptureState.ALIGNMENT_FAILED
+                     else GuidedCaptureState.EMBEDDING_FAILED.value)
             self._emit_monitoring(MonitoringDTO(
-                UIState.MONITORING, guided.primary_state.value, None, None,
+                UIState.MONITORING, state, None, None,
                 "deshabilitada / NOT_EVALUATED", True,
                 None if score is None else score.total_score,
                 None if score is None else score.quality_band.value,
             ))
             return
-        dto, error = self.controller.monitor(guided.embedding, score)
+        LOGGER.info("Recognition pipeline started")
+        dto, error = self.controller.monitor(monitoring_embedding, score)
+        LOGGER.info(
+            "Recognition candidate: %s",
+            dto.candidate_display_name or dto.candidate_person_id or "none",
+        )
+        LOGGER.info(
+            "Similarity: %s",
+            "N/D" if dto.similarity is None else f"{dto.similarity:.6f}",
+        )
+        LOGGER.info("Recognition state: %s", dto.recognition_state)
+        if (dto.recognition_state == "NOT_EVALUATED"
+                and dto.candidate_person_id is not None):
+            dto = replace(
+                dto, message="CANDIDATO BIOMÉTRICO — NO EVALUADO — SISTEMA PENDIENTE DE CALIBRACIÓN"
+            )
         self._emit_monitoring(dto)
         if error is not None:
             self._event(error)
@@ -820,6 +815,18 @@ class LiveFaceSession:
         ))
 
     def _emit_monitoring(self, dto: MonitoringDTO) -> None:
+        monitoring = getattr(getattr(self, "controller", None), "monitoring", None)
+        gallery = getattr(monitoring, "gallery", None)
+        gallery_size = 0 if gallery is None else len(gallery.list_identities())
+        LOGGER.debug(
+            "Recognition diagnostic face_detected=%s embedding_generated=%s gallery_size=%d "
+            "candidate_present=%s candidate_similarity=%s recognition_state=%s evaluated=%s",
+            dto.state is UIState.MONITORING, dto.state is UIState.MONITORING,
+            gallery_size,
+            dto.candidate_person_id is not None,
+            "N/D" if dto.similarity is None else f"{dto.similarity:.6f}",
+            dto.recognition_state, dto.evaluated,
+        )
         presentation = getattr(self, "_identification_presentation", None)
         pause_remaining = (
             0.0 if presentation is None
@@ -858,7 +865,7 @@ class LiveFaceSession:
         action = self._evaluate_action_executor(orchestration, dto, face_count)
         self._event(action)
         LOGGER.debug(
-            "Identification diagnostic recognition_state=%s candidate_present=%s "
+            "Recognition diagnostic recognition_state=%s candidate_present=%s "
             "similarity=%s stability_state=%s policy_state=%s decision_state=%s "
             "popup_action=%s",
             dto.recognition_state, dto.candidate_person_id is not None,

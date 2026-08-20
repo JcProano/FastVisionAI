@@ -93,7 +93,7 @@ def load_config(config_path: Path = DEFAULT_CONFIG_PATH) -> AppConfig:
             raise ConfigurationError("'camera.source' debe ser un índice USB no negativo")
         source = raw_source
     elif camera_type is CameraType.RTSP:
-        if not isinstance(raw_source, str) or not raw_source.lower().startswith(("rtsp://", "http://", "https://")):
+        if not isinstance(raw_source, str) or not raw_source.lower().startswith(("rtsp://", "rtsps://", "http://", "https://")):
             raise ConfigurationError("'camera.source' debe ser una URL RTSP/HTTP válida")
         source = raw_source
     else:

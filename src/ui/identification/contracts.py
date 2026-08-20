@@ -59,6 +59,7 @@ class IdentificationPopupDTO:
     company: str | None = None
     registered_at: datetime | None = None
     last_access_at: datetime | None = None
+    evaluated: bool = False
 
 
 @dataclass(frozen=True, slots=True)

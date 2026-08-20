@@ -161,7 +161,7 @@ def redact(value:Any,key:str="")->Any:
  if SECRET.search(key):return "[REDACTED]"
  if isinstance(value,dict):return {str(k):redact(v,str(k)) for k,v in value.items()}
  if isinstance(value,(list,tuple)):return [redact(v,key) for v in value]
- if isinstance(value,str) and value.lower().startswith(("rtsp://","http://","https://")):return redact_url(value)
+ if isinstance(value,str) and value.lower().startswith(("rtsp://","rtsps://","http://","https://")):return redact_url(value)
  return value
 
 def known_only(value:dict[str,Any])->dict[str,Any]:

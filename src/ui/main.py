@@ -12,6 +12,7 @@ import json
 import logging
 import threading
 import uuid
+from urllib.parse import urlsplit
 from enum import Enum
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
@@ -154,7 +155,19 @@ def _web_value(payload: object, name: str, *, limit: int = 120) -> str:
         raise ValueError(f"{name} es inválido.")
     return value
 
+def _web_registration_form(payload: object):
+    if not isinstance(payload,dict):raise ValueError("Datos de persona inválidos.")
+    optional=lambda key,limit=200: (str(payload[key]).strip()[:limit] or None) if payload.get(key) is not None else None
+    return validate_registration_form(
+        _web_value(payload,"first_name"),_web_value(payload,"last_name"),None,
+        consent_confirmed=payload.get("consent_confirmed") is True,persist_locally=True,
+        cedula=_web_value(payload,"cedula"),address=optional("address"),
+        phone=optional("phone",40),email=optional("email",254),
+    )
+
 def _camera_id(payload: object) -> str:
+    if isinstance(payload, dict) and isinstance(payload.get("source_id"), str):
+        return _web_value(payload, "source_id")
     return _web_value(payload, "id")
 
 def _camera_name(payload: object) -> str:
@@ -162,8 +175,13 @@ def _camera_name(payload: object) -> str:
 
 def _camera_url(payload: object) -> str:
     value = _web_value(payload, "url", limit=2_000)
-    if not value.lower().startswith(("http://", "https://", "rtsp://")):
-        raise ValueError("URL de cámara inválida.")
+    if not value.lower().startswith(("http://", "https://", "rtsp://", "rtsps://")):
+        raise ValueError("URL de cámara inválida. Use rtsp://, rtsps://, http:// o https://.")
+    try:
+        if not urlsplit(value).hostname:
+            raise ValueError
+    except ValueError as exc:
+        raise ValueError("URL de cámara inválida.") from exc
     return value
 
 def _camera_network_type(payload: object) -> CameraSourceType:
@@ -172,7 +190,7 @@ def _camera_network_type(payload: object) -> CameraSourceType:
         result = CameraSourceType(value)
     except ValueError as exc:
         raise ValueError("Tipo de cámara inválido.") from exc
-    if result not in {CameraSourceType.NETWORK_HTTP, CameraSourceType.NETWORK_RTSP}:
+    if result not in {CameraSourceType.NETWORK_HTTP, CameraSourceType.NETWORK_RTSP, CameraSourceType.CUSTOM}:
         raise ValueError("Tipo de cámara inválido.")
     return result
 
@@ -196,7 +214,8 @@ def apply_startup_mode(settings: dict[str, object], mode: StartupMode) -> dict[s
     ui = dict(settings.get("ui", {})); web = dict(settings.get("web_dashboard", {}))
     ui["tk_enabled"] = mode in {StartupMode.TK, StartupMode.BOTH}
     web["enabled"] = mode in {StartupMode.WEB, StartupMode.BOTH}
-    if mode is StartupMode.TK: web["open_browser_on_start"] = False
+    # RC20.2: the web endpoint is advertised, but startup never launches a browser.
+    web["open_browser_on_start"] = False
     result["ui"] = ui; result["web_dashboard"] = web
     return result
 
@@ -233,6 +252,24 @@ class StorageSynchronizationDiagnostic:
     active_person_count: int
     matched_person_ids: tuple[str, ...]
     synchronization_ok: bool
+    persons_without_face: tuple[str, ...] = ()
+    orphan_gallery_identity_ids: tuple[str, ...] = ()
+
+    @property
+    def gallery_identity_count(self) -> int:
+        return self.identity_count
+
+    @property
+    def biometric_person_count(self) -> int:
+        return self.identity_count
+
+    @property
+    def persons_without_face_count(self) -> int:
+        return len(self.persons_without_face)
+
+    @property
+    def orphan_gallery_identity_count(self) -> int:
+        return len(self.orphan_gallery_identity_ids)
 
 def storage_synchronization_diagnostic(
     repository: PersonRepository | None, gallery: FaceGallery, *, gallery_loaded: bool,
@@ -246,9 +283,13 @@ def storage_synchronization_diagnostic(
             if len(page) < 100: break
             offset += len(page)
     gallery_ids = {item.person_id for item in gallery.list_identities()}
+    # An ACTIVE civil record without templates is a valid pending-biometric state.
+    # Only a gallery identity with no active civil owner is operationally incompatible.
+    without_face = tuple(sorted(active_ids - gallery_ids))
+    orphaned = tuple(sorted(gallery_ids - active_ids))
     return StorageSynchronizationDiagnostic(
         gallery_loaded, len(gallery_ids), len(gallery.templates()), len(active_ids),
-        tuple(sorted(active_ids & gallery_ids)), active_ids == gallery_ids,
+        tuple(sorted(active_ids & gallery_ids)), not orphaned, without_face, orphaned,
     )
 
 
@@ -257,7 +298,7 @@ def civil_gallery_sync_warning(repository: PersonRepository | None,
     if repository is None: return None
     diagnostic = storage_synchronization_diagnostic(
         repository, gallery, gallery_loaded=bool(gallery.list_identities()))
-    has_data = diagnostic.active_person_count or diagnostic.identity_count
+    has_data = diagnostic.orphan_gallery_identity_count
     return GALLERY_SYNC_WARNING if not diagnostic.synchronization_ok and has_data else None
 
 
@@ -948,7 +989,7 @@ def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfi
     raw_camera_source = camera.get("source", "N/D")
     safe_camera_source = (
         redact_url(raw_camera_source) if isinstance(raw_camera_source, str)
-        and raw_camera_source.lower().startswith(("rtsp://", "http://", "https://"))
+        and raw_camera_source.lower().startswith(("rtsp://", "rtsps://", "http://", "https://"))
         else str(raw_camera_source)
     )
     return DashboardConfigurationDTO(
@@ -976,6 +1017,11 @@ def main() -> int:
                         help="close a mock UI automatically after this many seconds")
     parser.add_argument("--load-gallery", action="store_true",
                         help="load the configured local gallery for this execution")
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--desktop-only", action="store_true",
+                            help="start only the Tk desktop dashboard")
+    mode_group.add_argument("--web-only", action="store_true",
+                            help="start only the web dashboard")
     args = parser.parse_args()
     if (args.mock_auto_enroll or args.mock_duration is not None) and not args.mock_camera:
         parser.error("mock automation options require --mock-camera")
@@ -1001,13 +1047,14 @@ def main() -> int:
         settings = configuration_service.current().as_mapping()
     else:
         settings = raw_settings
-    requested_startup_mode = configured_startup_mode(settings)
+    requested_startup_mode = (StartupMode.TK if args.desktop_only else
+                              StartupMode.WEB if args.web_only else StartupMode.BOTH)
     ui_settings=settings.get("ui",{})
     if not isinstance(ui_settings,dict):raise ValueError("ui configuration must be an object")
     tk_enabled=ui_settings.get("tk_enabled",True)
     if type(tk_enabled) is not bool:raise ValueError("ui.tk_enabled must be boolean")
     if not tk_enabled:
-        LOGGER.warning("ui.tk_enabled=false is experimental in RC14; Tk remains the event-loop host")
+        LOGGER.info("WEB-only enabled; Tk remains hidden only as the internal event-loop host")
     if settings.get("profile_name") == "local_face_validation_prod" and args.mock_camera:
         parser.error("production profile does not allow mock camera")
     security = build_security(settings)
@@ -1052,11 +1099,13 @@ def main() -> int:
         gallery_loaded=startup.error is None and startup.message.startswith("Galería cargada:"),
     )
     LOGGER.info(
-        "Storage synchronization diagnostic gallery_loaded=%s identity_count=%d "
-        "template_count=%d active_person_count=%d matched_person_ids=%s synchronization_ok=%s",
+        "Storage synchronization diagnostic gallery_loaded=%s gallery_identity_count=%d "
+        "template_count=%d active_person_count=%d biometric_person_count=%d "
+        "persons_without_face_count=%d orphan_gallery_identity_count=%d synchronization_ok=%s",
         synchronization.gallery_loaded, synchronization.identity_count,
         synchronization.template_count, synchronization.active_person_count,
-        synchronization.matched_person_ids, synchronization.synchronization_ok,
+        synchronization.biometric_person_count, synchronization.persons_without_face_count,
+        synchronization.orphan_gallery_identity_count, synchronization.synchronization_ok,
     )
     integral_profile = settings.get("profile_name") in {
         "local_face_validation_pc", "local_face_validation_prod",
@@ -1433,8 +1482,13 @@ def main() -> int:
             current_camera_source["id"] = source.source_id
         return accepted
 
-    def web_camera_probe(payload: object) -> dict[str, bool]:
-        """Probe on a worker so an offline RTSP endpoint never occupies HTTP threads."""
+    def web_camera_probe(payload: object) -> dict[str, object]:
+        """Probe a saved source asynchronously, or a form URL before it is saved."""
+        if isinstance(payload, dict) and "url" in payload:
+            connected, resolution = camera_selection.probe_network_source_details(
+                _camera_name(payload), _camera_network_type(payload), _camera_url(payload),
+            )
+            return {"connected": connected, "resolution": resolution}
         source_id = _camera_id(payload)
         threading.Thread(target=lambda: camera_selection.probe(source_id),
                          name="web-camera-probe", daemon=True).start()
@@ -1451,9 +1505,9 @@ def main() -> int:
         )
 
     def gallery_summary() -> DashboardGalleryDTO:
-        listing = people_controller.list_people()
+        gallery = people_controller.biometrics.gallery
         return DashboardGalleryDTO(
-            listing.total_identities, listing.total_templates, listing.state.value
+            len(gallery.list_identities()), len(gallery.templates()), people_controller.state.value
         )
 
     def save_gallery():
@@ -1653,7 +1707,7 @@ def main() -> int:
         photo_capture_mode=str(settings.get("photo_capture", {}).get("mode", "automatic")),
         get_thumbnail=thumbnail_manager.load,
         identification_controller=identification_controller,
-        identification_popup=identification_popup,
+        identification_popup=identification_popup if tk_enabled else None,
         popup_mode="action_executor" if popups_via_executor else "legacy",
         get_popup_requests=popup_action_adapter.drain,
         clear_popup_requests=popup_action_adapter.clear,
@@ -1684,6 +1738,7 @@ def main() -> int:
         local_validation_login_bypass=local_validation_bypass,
         appliance_mode=appliance_mode,
     )
+    app.web_only=not tk_enabled
     dashboard_coordinator = None
     if history_controller is not None and attendance_controller is not None and report_controller is not None:
         professional_dashboard = ProfessionalDashboardController(
@@ -1714,6 +1769,7 @@ def main() -> int:
                 "type":app._camera_source_type,
                 "source":current_camera_source.get("id") or "N/D",
             },
+            presentation_provider=lambda:getattr(app,"latest_monitoring",None),
             actions={
                 "cameras": lambda: camera_selection.refresh().sources,
                 "camera_select": lambda payload: use_camera(camera_selection.use(_camera_id(payload))),
@@ -1722,15 +1778,31 @@ def main() -> int:
                     _camera_name(payload), _camera_network_type(payload), _camera_url(payload)),
                 "camera_network_delete": camera_selection.remove_network_source,
                 "camera_probe": web_camera_probe,
+                "enrollment_person": lambda payload: register(_web_registration_form(payload)),
+                "enrollment_capture_start": lambda _payload: session.capture_enrollment_sample(),
                 "enrollment_cancel": lambda _payload: session.cancel_enrollment(),
+                "enrollment_status": lambda:getattr(app,"latest_enrollment_event",None),
+                "enrollment_photo_start": lambda _payload: session.start_person_photo(
+                    getattr(getattr(app,"latest_enrollment_event",None),"person_id","")),
+                "enrollment_photo_capture": lambda _payload: session.capture_person_photo(),
+                "enrollment_photo_confirm": lambda _payload: session.confirm_person_photo(),
                 "shutdown": lambda _payload: root.after(0, app.close) or True,
             },
             audit=audit_controller, backups=backup_controller,
             configuration=configuration_controller,
         )
-        web_server=WebDashboardServer(web_policy,web_controller,presentation_frame_store)
+        web_server=WebDashboardServer(
+            web_policy,web_controller,presentation_frame_store,printer=lambda _message: None,
+        )
         if not web_server.start():
             LOGGER.warning("Web dashboard did not start; Tk and Runtime continue")
+        else:
+            print("\nFASTVISION AI INICIADO\n\n"
+                  f"Dashboard de escritorio: {'ACTIVO' if tk_enabled else 'INACTIVO'}\n\n"
+                  "Dashboard web disponible en:\n\n"
+                  f"{web_server.local_url}\n\n"
+                  "Para acceder desde otro equipo:\n\n"
+                  f"http://IP_DEL_JETSON:{web_policy.port}\n")
     app.set_appliance_shutdown(
         None if web_server is None else web_server.close,
         presentation_frame_store.close,

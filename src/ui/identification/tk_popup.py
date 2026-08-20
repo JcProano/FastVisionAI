@@ -15,6 +15,9 @@ except ModuleNotFoundError:  # pragma: no cover
     tk = ttk = None  # type: ignore[assignment]
 
 from src.ui.thumbnails.presentation import thumbnail_to_ppm
+from src.ui.identification_semantics import (
+    IdentificationVisualState, identification_visual_state,
+)
 
 from .contracts import IdentificationPopupDTO, IdentificationPopupType, IdentityInfoProvider
 
@@ -74,7 +77,9 @@ class IdentificationPopupWindow:
                 return
             if (dto.popup_type is IdentificationPopupType.REGISTERED_CANDIDATE
                     and self._popup_type is IdentificationPopupType.REGISTERED_CANDIDATE
-                    and dto.person_id == self._person_id):
+                    and dto.person_id == self._person_id
+                    and dto.recognition_state == getattr(self, "_recognition_state", None)
+                    and dto.evaluated is getattr(self, "_evaluated", None)):
                 return
         self._render(dto)
 
@@ -157,36 +162,47 @@ class IdentificationPopupWindow:
                 and self._on_unknown_closed is not None):
             self._on_unknown_closed()
         self._popup_type = dto.popup_type
+        self._recognition_state = dto.recognition_state
+        self._evaluated = dto.evaluated
         self._photo = None
         self.thumbnail.configure(image="", text="◯\n\nSin fotografía registrada")
         if dto.popup_type is IdentificationPopupType.REGISTERED_CANDIDATE:
-            calibrated_match = (dto.recognition_state == "MATCH")
+            visual_state = identification_visual_state(
+                dto.recognition_state, dto.evaluated, dto.person_id,
+            )
+            calibrated_match = visual_state is IdentificationVisualState.IDENTIFIED
+            candidate = visual_state is IdentificationVisualState.BIOMETRIC_CANDIDATE
+            if not calibrated_match and not candidate:
+                return
             self.title.configure(text=("✔ PERSONA IDENTIFICADA" if calibrated_match
-                                       else "PERSONA REGISTRADA"))
+                                       else "CANDIDATO BIOMÉTRICO"))
             self.right_title.configure(text=("PERSONA IDENTIFICADA" if calibrated_match
                                              else "PENDIENTE DE CALIBRACIÓN"))
-            identifier = dto.external_identifier or "No disponible"
             similarity = ("No disponible" if dto.similarity is None
                           else f"{dto.similarity * 100:.1f} %")
-            registered = _format_datetime(dto.registered_at)
-            last_access = _format_datetime(dto.last_access_at)
             identified_at = _format_datetime(dto.timestamp)
-            self.details.configure(text=(
-                f"Nombre completo\n{dto.display_name or 'No disponible'}\n\n"
-                f"Cédula\n{identifier}\n\n"
-                f"Cargo: {dto.position or 'No disponible'}\n"
-                f"Departamento: {dto.department or 'No disponible'}\n"
-                f"Empresa: {dto.company or 'No disponible'}\n"
-                f"Teléfono: {dto.phone or 'No disponible'}\n"
-                f"Correo: {dto.email or 'No disponible'}\n"
-                f"Fecha de registro: {registered}\n"
-                f"Último acceso: {last_access}\n"
-                "────────────────────────\n"
-                "RESULTADO\n\n"
-                f"Score de reconocimiento: {similarity}\n"
-                f"Estado: {'IDENTIFICADO' if calibrated_match else 'PENDIENTE DE CALIBRACIÓN'}\n"
-                f"Fecha/hora: {identified_at}"
-            ))
+            if candidate:
+                self.details.configure(text=(
+                    f"Nombre del candidato\n{dto.display_name or 'No disponible'}\n\n"
+                    f"Similitud: {similarity}\n"
+                    "Estado: NO EVALUADO — SISTEMA PENDIENTE DE CALIBRACIÓN\n\n"
+                    "El candidato más cercano no constituye una identificación."
+                ))
+            else:
+                self.details.configure(text=(
+                    f"Nombre completo\n{dto.display_name or 'No disponible'}\n\n"
+                    f"Cédula\n{dto.external_identifier or 'No disponible'}\n\n"
+                    f"Cargo: {dto.position or 'No disponible'}\n"
+                    f"Departamento: {dto.department or 'No disponible'}\n"
+                    f"Empresa: {dto.company or 'No disponible'}\n"
+                    f"Teléfono: {dto.phone or 'No disponible'}\n"
+                    f"Correo: {dto.email or 'No disponible'}\n"
+                    f"Fecha de registro: {_format_datetime(dto.registered_at)}\n"
+                    f"Último acceso: {_format_datetime(dto.last_access_at)}\n"
+                    "────────────────────────\nRESULTADO\n\n"
+                    f"Score de reconocimiento: {similarity}\nEstado: IDENTIFICADO\n"
+                    f"Fecha/hora: {identified_at}"
+                ))
             self._person_id = dto.person_id
             if dto.thumbnail_available and dto.person_id is not None:
                 try:
@@ -202,7 +218,10 @@ class IdentificationPopupWindow:
                         "Registered thumbnail unavailable safely; exception_type=%s",
                         type(exc).__name__,
                     )
-            self.primary.configure(text="Ver detalles", command=self._view)
+            self.primary.configure(
+                text="Ver detalles" if calibrated_match else "Cerrar",
+                command=self._view if calibrated_match else self.dismiss,
+            )
             self.secondary.configure(text="Cerrar")
             self._registered_deadline = self._monotonic() + getattr(
                 self, "_registered_timeout_seconds", 60.0)

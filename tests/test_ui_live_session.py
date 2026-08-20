@@ -27,7 +27,7 @@ from src.ui.tk_app import _enrollment_reason
 from src.ui.recognition_session import ExperimentalRecognitionSession
 from src.ui.people.controller import PeopleManagerController
 from src.ui.identification import (
-    IdentificationPopupPolicy, IdentificationPresentationController,
+    IdentificationPopupPolicy, IdentificationPopupType, IdentificationPresentationController,
     IdentityPersonDTO,
 )
 from src.ui.thumbnails import ThumbnailDTO
@@ -284,7 +284,7 @@ class LiveFaceSessionTests(unittest.TestCase):
                 session.cancel_enrollment()
                 session.close()
 
-    def test_registered_pause_stops_recognition_but_video_worker_continues(self):
+    def test_registered_pause_keeps_matching_and_suppresses_duplicate_presentation(self):
         gallery = FaceGallery()
         matcher = FaceMatcher(policy=MatchPolicy(False, None))
         recognition = CountingRecognitionService(
@@ -294,17 +294,26 @@ class LiveFaceSessionTests(unittest.TestCase):
         clock = [0.0]
         presentation = IdentificationPresentationController(
             IdentificationPopupPolicy(candidate_stability_frames=1,
+                                      registered_popup_timeout_seconds=60,
                                       registered_pause_seconds=60),
             IdentityProvider(), monotonic=lambda: clock[0],
         )
-        popup = presentation.observe(MonitoringDTO(
+        adapter = MockUIRuntimeAdapter(delay=.005)
+        adapter.open()
+        reference = adapter.process(CapturePose.FRONTAL).monitoring_embedding
+        gallery.register_identity(FaceIdentity("person", "Temporary Person"))
+        gallery.add_template("person", reference)
+        candidate = MonitoringDTO(
             UIState.MONITORING, "Candidato experimental", "Temporary Person", .83,
             "deshabilitada / NOT_EVALUATED", True,
             recognition_state="NOT_EVALUATED", candidate_person_id="person",
-        ))
+            evaluated=False,
+        )
+        popup = presentation.observe(candidate)
+        self.assertEqual(popup.popup_type, IdentificationPopupType.REGISTERED_CANDIDATE)
         self.assertEqual(popup.person_id, "person")
+        self.assertEqual(presentation.registered_pause_remaining_seconds(), 60)
         stability = ResetCountingStabilityTracker()
-        adapter = MockUIRuntimeAdapter(delay=.005)
         session = LiveFaceSession(
             adapter, ui, event_queue_size=64,
             identification_presentation=presentation,
@@ -314,13 +323,26 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertTrue(wait_until(
             lambda: session.dashboard_telemetry()[0].frames_processed >= 3
         ))
-        self.assertEqual(recognition.calls, 0)
+        self.assertGreaterEqual(recognition.calls, 3)
         self.assertTrue(session.alive)
         self.assertEqual(adapter.status().runtime_state, "initialized")
         self.assertGreater(session.dashboard_telemetry()[0].frames_received, 0)
+        events = session.drain_events()
+        self.assertTrue(any(
+            isinstance(event, MonitoringDTO)
+            and event.candidate_person_id == "person"
+            and event.similarity is not None
+            and event.recognition_state == "NOT_EVALUATED"
+            for event in events
+        ))
+        self.assertEqual(
+            presentation.observe(candidate).popup_type, IdentificationPopupType.SUPPRESSED
+        )
+        self.assertEqual(presentation.registered_pause_remaining_seconds(), 60)
         clock[0] = 60
-        self.assertTrue(wait_until(lambda: recognition.calls > 0))
-        self.assertGreaterEqual(stability.reset_count, 2)
+        reopened = presentation.observe(candidate)
+        self.assertEqual(reopened.popup_type, IdentificationPopupType.REGISTERED_CANDIDATE)
+        self.assertGreaterEqual(stability.reset_count, 1)
         session.close()
 
     def test_recognition_is_suspended_during_primary_enrollment_and_reactivated(self):
@@ -342,6 +364,33 @@ class LiveFaceSessionTests(unittest.TestCase):
         self.assertTrue(wait_until(lambda: not ui.enrollment.active))
         self.assertTrue(wait_until(lambda: recognition.calls > calls_during))
         session.close()
+
+    def test_monitoring_uses_embedding_when_guided_capture_rejects_sample(self):
+        """Enrollment rejection must not suppress a valid live candidate."""
+        gallery = FaceGallery()
+        matcher = FaceMatcher(policy=MatchPolicy(False, None))
+        recognition = CountingRecognitionService(
+            gallery, matcher, RecognitionPolicy(top_k=matcher.top_k)
+        )
+        seed = MockUIRuntimeAdapter(delay=0)
+        seed.open()
+        reference = seed.process(CapturePose.FRONTAL).monitoring_embedding
+        gallery.register_identity(FaceIdentity("existing", "Existing Person"))
+        gallery.add_template("existing", reference)
+        _, ui = controller(gallery, matcher, recognition=recognition)
+        adapter = RejectedGuidedAdapter(GuidedCaptureState.TOO_SOON, face_count=1)
+        session = LiveFaceSession(adapter, ui, event_queue_size=64)
+        session.start()
+        self.assertTrue(wait_until(lambda: recognition.calls > 0))
+        events = session.drain_events()
+        session.close()
+        self.assertTrue(any(
+            isinstance(event, MonitoringDTO)
+            and event.candidate_person_id == "existing"
+            and event.recognition_state == "NOT_EVALUATED"
+            and event.evaluated is False
+            for event in events
+        ))
 
     def test_recognition_is_suspended_during_additional_enrollment_and_reactivated(self):
         gallery = FaceGallery()
@@ -592,7 +641,8 @@ class LiveFaceSessionTests(unittest.TestCase):
             seen.extend(session.drain_events())
             return (any(isinstance(item, EnrollmentResultDTO) for item in seen) and
                     any(isinstance(item, MonitoringDTO) and
-                        "AÚN NO CALIBRADO" in item.message for item in seen))
+                        "CANDIDATO BIOMÉTRICO" in item.message and
+                        "NO EVALUADO" in item.message for item in seen))
 
         self.assertTrue(wait_until(completed, 1.5))
         session.close()
@@ -600,7 +650,8 @@ class LiveFaceSessionTests(unittest.TestCase):
         result = next(item for item in seen if isinstance(item, EnrollmentResultDTO))
         self.assertEqual(result.templates_registered, 3)
         candidate = next(item for item in seen if isinstance(item, MonitoringDTO) and
-                         "AÚN NO CALIBRADO" in item.message)
+                         "CANDIDATO BIOMÉTRICO" in item.message and
+                         "NO EVALUADO" in item.message)
         self.assertEqual(candidate.automatic_decision, "NOT_EVALUATED")
 
     def test_cancel_discards_temporary_samples(self):

@@ -15,7 +15,7 @@ from .contracts import WebDashboardPolicy
 LOGGER=logging.getLogger(__name__)
 SECURITY_HEADERS={
     "X-Content-Type-Options":"nosniff",
-    "Content-Security-Policy":"default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'none'; object-src 'none'; frame-ancestors 'none'",
+    "Content-Security-Policy":"default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
     "Referrer-Policy":"no-referrer",
 }
 
@@ -81,6 +81,7 @@ class WebDashboardServer:
                 split=urlsplit(self.path);path=unquote(split.path)
                 try:
                     if path=="/api/session":return self._session()
+                    if path=="/api/video/status":return self._json(200,owner.frame_store.status())
                     if path=="/api/events":return self._events()
                     if path.startswith("/api/") and not path.startswith("/api/thumbnails/") and path != "/api/video.mjpeg":
                         return self._json(200,owner.controller.api(path,split.query))
@@ -102,7 +103,7 @@ class WebDashboardServer:
             def do_PATCH(self):return self._mutate()
             def do_OPTIONS(self):return self._method_not_allowed()
             def _method_not_allowed(self):
-                self.send_response(405);self.send_header("Allow","GET, POST, PATCH, DELETE");self._security(True);self.end_headers()
+                self.send_response(405);self.send_header("Allow","GET");self._security(True);self.end_headers()
             def _error(self,status,message):return self._bytes(status,"application/json; charset=utf-8",json.dumps({"error":message},ensure_ascii=False).encode(),sensitive=True)
             def _json(self,status,value):return self._bytes(status,"application/json; charset=utf-8",json.dumps(value,ensure_ascii=False,separators=(",",":"),default=str).encode(),sensitive=True)
             def _session(self):
@@ -112,6 +113,7 @@ class WebDashboardServer:
                 payload=json.dumps({"csrf_token":token}).encode();self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Content-Length",str(len(payload)));self._security(True);self.end_headers();self.wfile.write(payload)
             def _mutate(self):
                 split=urlsplit(self.path);path=unquote(split.path)
+                if not path.startswith("/api/"):return self._method_not_allowed()
                 try:
                     payload=self._request_json()
                     self._require_same_origin();self._require_csrf(payload)

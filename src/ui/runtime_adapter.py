@@ -15,12 +15,14 @@ from src.camera.camera_types import CameraConfig, CameraType, ReadStatus, Reconn
 from src.camera.source_discovery.selection import classify_camera_source
 from src.core.config_manager import PROJECT_ROOT, load_config
 from src.engine.alignment import FaceAligner
+from src.engine.alignment.contracts import AlignmentStatus
 from src.engine.benchmark.manager import BenchmarkManager
 from src.engine.capture_quality import (
     CapturePose, FaceCaptureQualityEvaluator, GuidedCapturePolicy, GuidedCaptureResult,
 )
 from src.engine.contracts.inference_context import InferenceContext
 from src.engine.embedding import FaceEmbeddingPlugin
+from src.engine.embedding.contracts import FaceEmbedding
 from src.engine.face_quality import FaceQualityScorer, load_face_quality_profile
 from src.engine.models.manager import ModelManager
 from src.engine.plugins.manager import PluginManager
@@ -46,6 +48,9 @@ class ProcessingStep:
     face_count: int
     guided: GuidedCaptureResult
     aligned_face_bytes: bytes | None = None
+    # This is deliberately separate from guided.embedding: the latter is an
+    # enrollment sample and is therefore subject to capture cadence/diversity.
+    monitoring_embedding: FaceEmbedding | None = None
 
 
 class UIRuntimeAdapter(Protocol):
@@ -136,11 +141,36 @@ class RealUIRuntimeAdapter:
                 self._preprocessor.prepare(frame), InferenceContext(run_id=self._run_id)
             )
             aligned = self._aligner.align_result(inference)
+            # The evaluator only asks for an embedding after its enrollment
+            # gates have passed.  Cache the result so monitoring can reuse it,
+            # or request it once for a biometrically usable aligned face which
+            # enrollment rejected for a capture-specific reason.
+            monitoring_embedding: FaceEmbedding | None = None
+            embedding_attempted = False
+
+            def embedding_for_face(face):
+                nonlocal monitoring_embedding, embedding_attempted
+                if not embedding_attempted:
+                    embedding_attempted = True
+                    monitoring_embedding = self._embedding.embed((face,))[0]
+                if monitoring_embedding is None:
+                    raise ValueError("embedding generation failed")
+                return monitoring_embedding
+
             guided = self._evaluator.evaluate(
                 inference.detections, aligned, requested_pose, self._run_id,
-                frame.monotonic_timestamp, lambda face: self._embedding.embed((face,))[0],
+                frame.monotonic_timestamp, embedding_for_face,
                 timestamp=frame.captured_at,
             )
+            if (len(inference.detections) == 1 and len(aligned) == 1
+                    and aligned[0].status is AlignmentStatus.ALIGNED
+                    and aligned[0].image is not None and not embedding_attempted):
+                try:
+                    embedding_for_face(aligned[0])
+                except Exception:
+                    # A monitoring failure is represented on the step; it is
+                    # not a reason to tear down the live inference session.
+                    monitoring_embedding = None
             aligned_status = aligned[0].status if len(aligned) == 1 else None
             confidence = inference.detections[0].confidence if len(inference.detections) == 1 else None
             score = self._quality.score(
@@ -171,7 +201,9 @@ class RealUIRuntimeAdapter:
             encoded, payload = cv2.imencode(".png", aligned[0].image)
             if encoded:
                 thumbnail_bytes = payload.tobytes()
-        return ProcessingStep(visual, len(inference.detections), guided, thumbnail_bytes)
+        return ProcessingStep(
+            visual, len(inference.detections), guided, thumbnail_bytes, monitoring_embedding
+        )
 
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO(

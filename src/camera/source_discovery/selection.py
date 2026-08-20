@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from collections.abc import Callable
 import uuid
+from urllib.parse import urlsplit
 
 from src.camera.camera_types import CameraConfig, CameraType, ReconnectConfig
 
@@ -92,6 +93,17 @@ class CameraSelectionController:
         }).network_sources[0]
         return self.discovery.probe_network_url(candidate.url)
 
+    def probe_network_source_details(
+        self, name: str, source_type: CameraSourceType, url: str,
+    ) -> tuple[bool, tuple[int, int] | None]:
+        candidate = parse_discovery_config({
+            "source": self.discovery.config.source, "auto_discovery": False,
+            "scan_indices": self.discovery.config.scan_indices,
+            "network_sources": [{"id": "probe", "type": source_type.value,
+                                 "name": name.strip(), "url": url.strip()}],
+        }).network_sources[0]
+        return self.discovery.probe_network_url_details(candidate.url)
+
     def set_preferred(self, source_id: str | None) -> None:
         if source_id is not None and not any(item.source_id == source_id for item in self.sources):
             raise ValueError("La cámara preferida no existe.")
@@ -129,7 +141,7 @@ def classify_camera_source(source: int | str) -> CameraType:
     if isinstance(source, int):
         return CameraType.USB
     lowered = source.lower()
-    if lowered.startswith(("rtsp://", "http://", "https://")):
+    if lowered.startswith(("rtsp://", "rtsps://", "http://", "https://")):
         return CameraType.RTSP
     return CameraType.USB
 
@@ -141,7 +153,7 @@ def parse_discovery_config(value: object) -> CameraDiscoveryConfig:
     if not ((isinstance(source, int) and not isinstance(source, bool) and source >= 0)
             or source == "auto" or (
                 isinstance(source, str)
-                and source.lower().startswith(("rtsp://", "http://", "https://"))
+                and source.lower().startswith(("rtsp://", "rtsps://", "http://", "https://"))
             )):
         raise ValueError("camera.source must be a non-negative index, auto, RTSP or HTTP URL")
     scan_indices = value.get("scan_indices", 10)
@@ -162,7 +174,7 @@ def parse_discovery_config(value: object) -> CameraDiscoveryConfig:
             source_type = CameraSourceType(item.get("type"))
         except (TypeError, ValueError) as exc:
             raise ValueError("network source type must be NETWORK_RTSP or NETWORK_HTTP") from exc
-        expected = (("rtsp://",) if source_type is CameraSourceType.NETWORK_RTSP else
+        expected = (("rtsp://", "rtsps://") if source_type is CameraSourceType.NETWORK_RTSP else
                     ("http://", "https://") if source_type is CameraSourceType.NETWORK_HTTP else
                     None if source_type is CameraSourceType.CUSTOM else ())
         if expected == ():
@@ -171,6 +183,12 @@ def parse_discovery_config(value: object) -> CameraDiscoveryConfig:
             raise ValueError("network source id, name and url are required")
         if expected is not None and not url.lower().startswith(expected):
             raise ValueError("network source URL does not match its type")
+        if source_type is not CameraSourceType.CUSTOM:
+            try:
+                if not urlsplit(url).hostname:
+                    raise ValueError
+            except ValueError as exc:
+                raise ValueError("network source URL is invalid") from exc
         network.append(NetworkSourceConfig(source_id, source_type, name[:120], url))
     auto = value.get("auto_discovery", False)
     if type(auto) is not bool:

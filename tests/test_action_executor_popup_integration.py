@@ -66,9 +66,15 @@ class WindowSpy:
     def dismiss(self): self.dismissed += 1
 
 
-def components(*, popup=True, event_success=True, frames=1):
+def components(*, popup=True, event_success=True, frames=1, monotonic=None):
+    controller_kwargs = {} if monotonic is None else {"monotonic": monotonic}
     controller = IdentificationPresentationController(
-        IdentificationPopupPolicy(True, 0, 0, frames, 60), Provider())
+        IdentificationPopupPolicy(
+            True, 0, 0, frames, 60,
+            registered_popup_timeout_seconds=60,
+        ),
+        Provider(), **controller_kwargs,
+    )
     popup_adapter = IdentificationPopupActionAdapter(controller) if popup else None
     events = EventService(event_success)
     policy = ActionExecutorPolicy(
@@ -101,6 +107,8 @@ def live_session(events, action, decision):
     ))
     live._decision_orchestrator = decision
     live._action_executor = action; live._detection_event_logging_via_executor = True
+    live._identification_presentation = None
+    live._identification_pause_active = False
     live.event_queue = queue.Queue(maxsize=50)
     return live
 
@@ -168,6 +176,7 @@ class ActionExecutorPopupIntegrationTests(unittest.TestCase):
                     UIState.MONITORING, "safe", "Temporary" if person_id else None,
                     .8 if person_id else None, "NOT_EVALUATED", True,
                     recognition_state=state, candidate_person_id=person_id,
+                    evaluated=False,
                 ))
                 result = next(item for item in tuple(live.event_queue.queue)
                               if isinstance(item, ActionExecutorDTO))
@@ -178,6 +187,51 @@ class ActionExecutorPopupIntegrationTests(unittest.TestCase):
                 self.assertEqual(len(events.calls), 1)
                 queued = popup.drain()
                 self.assertEqual(queued[0].popup_type if queued else None, expected_popup)
+
+    def test_registered_popup_pause_suppresses_duplicate_actions_not_matching(self):
+        clock = [0.0]
+        presentation, popup, events, action, decision = components(
+            monotonic=lambda: clock[0],
+        )
+        live = live_session(events, action, decision)
+        live._identification_presentation = presentation
+        candidate = MonitoringDTO(
+            UIState.MONITORING, "safe", "Temporary", .80,
+            "NOT_EVALUATED", True, recognition_state="NOT_EVALUATED",
+            candidate_person_id="person", evaluated=False,
+        )
+
+        live._emit_monitoring(candidate)
+        first_actions = [
+            item for item in tuple(live.event_queue.queue)
+            if isinstance(item, ActionExecutorDTO)
+        ]
+        self.assertEqual(first_actions[-1].executed_actions,
+                         ("SHOW_REGISTERED_POPUP", "LOG_DETECTION_EVENT"))
+        self.assertEqual(len(popup.drain()), 1)
+        self.assertEqual(len(events.calls), 1)
+        self.assertEqual(presentation.registered_pause_remaining_seconds(), 60)
+
+        live._emit_monitoring(candidate)
+        paused_actions = [
+            item for item in tuple(live.event_queue.queue)
+            if isinstance(item, ActionExecutorDTO)
+        ]
+        self.assertEqual(paused_actions[-1].requested_actions, ())
+        self.assertEqual(paused_actions[-1].executed_actions, ())
+        self.assertEqual(popup.drain(), ())
+        self.assertEqual(len(events.calls), 1)
+
+        clock[0] = 60
+        live._emit_monitoring(candidate)
+        resumed_actions = [
+            item for item in tuple(live.event_queue.queue)
+            if isinstance(item, ActionExecutorDTO)
+        ]
+        self.assertEqual(resumed_actions[-1].executed_actions,
+                         ("SHOW_REGISTERED_POPUP", "LOG_DETECTION_EVENT"))
+        self.assertEqual(len(popup.drain()), 1)
+        self.assertEqual(len(events.calls), 2)
 
     def test_popup_and_logging_failures_are_independent(self):
         base = dict(

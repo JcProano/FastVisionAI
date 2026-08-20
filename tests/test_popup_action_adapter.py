@@ -46,12 +46,13 @@ class PopupActionAdapterTests(unittest.TestCase):
             self.controller(provider))
         adapter.show_registered(
             context(ExecutableAction.SHOW_REGISTERED_POPUP, "person"),
-            PopupActionData("NOT_EVALUATED", .91),
+            PopupActionData("NOT_EVALUATED", .91, evaluated=False),
         )
         dto = adapter.drain()[0]
         self.assertEqual(dto.popup_type, IdentificationPopupType.REGISTERED_CANDIDATE)
         self.assertEqual(dto.display_name, "Temporary Person")
-        self.assertEqual(dto.external_identifier, "EXT-1")
+        self.assertIsNone(dto.external_identifier)
+        self.assertIn("CANDIDATO BIOMÉTRICO", dto.message)
         self.assertTrue(dto.thumbnail_available)
         self.assertEqual(provider.person_calls, ["person"])
         self.assertEqual(provider.thumbnail_calls, ["person"])
@@ -72,7 +73,7 @@ class PopupActionAdapterTests(unittest.TestCase):
         clock = [0.0]; controller = self.controller(frames=2, clock=clock)
         adapter = IdentificationPopupActionAdapter(controller)
         general = context(ExecutableAction.SHOW_REGISTERED_POPUP, "person")
-        popup = PopupActionData("NOT_EVALUATED", .8)
+        popup = PopupActionData("NOT_EVALUATED", .8, evaluated=False)
         adapter.show_registered(general, popup)
         adapter.show_registered(general, popup)
         adapter.show_registered(general, popup)

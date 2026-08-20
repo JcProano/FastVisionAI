@@ -97,7 +97,10 @@ class MockUIRuntimeAdapter:
             encoded, payload = cv2.imencode(".png", aligned)
             if encoded:
                 thumbnail_bytes = payload.tobytes()
-        return ProcessingStep(visual, count, guided, thumbnail_bytes)
+        return ProcessingStep(
+            visual, count, guided, thumbnail_bytes,
+            guided.embedding if count == 1 else None,
+        )
 
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO("connected" if self.opened else "disconnected",

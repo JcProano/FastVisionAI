@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from src.core.detection_events import DetectionEventType
 from src.core.security import AuthorizationPermission
 from src.core.time_provider import Clock
+from src.ui.identification_semantics import is_confirmed_match
 from .professional_contracts import (
     DashboardLiveStateDTO, DashboardPhotoDTO, DashboardSnapshotDTO,
     RecentAttendanceRowDTO, RecentRecognitionRowDTO,
@@ -42,7 +43,10 @@ class ProfessionalDashboardController:
                                 if self._can(AuthorizationPermission.VIEW_ATTENDANCE) else None)
             people_present=None if attendance_summary is None else attendance_summary.present
             late=None if attendance_summary is None else attendance_summary.late
-            recognized=(report.registered_candidate_events
+            recognized=(sum(is_confirmed_match(
+                getattr(item,"recognition_state","NOT_EVALUATED"),
+                getattr(item,"evaluated",False),getattr(item,"person_id",None),
+            ) for item in recognitions)
                         if self._can(AuthorizationPermission.VIEW_DETECTION_HISTORY) else None)
             check_ins=(report.attendance_check_ins
                        if self._can(AuthorizationPermission.VIEW_ATTENDANCE) else None)
@@ -71,7 +75,10 @@ class ProfessionalDashboardController:
 
     def _recognition(self,item) -> RecentRecognitionRowDTO:
         return RecentRecognitionRowDTO(self._photo(item.person_id),item.display_name or "Persona registrada",
-            item.timestamp.astimezone(self.timezone).strftime("%H:%M:%S"),item.similarity)
+            item.timestamp.astimezone(self.timezone).strftime("%H:%M:%S"),item.similarity,
+            getattr(item,"recognition_state","NOT_EVALUATED"),
+            is_confirmed_match(getattr(item,"recognition_state","NOT_EVALUATED"),
+                               getattr(item,"evaluated",False),item.person_id))
 
     def _attendance(self,item) -> RecentAttendanceRowDTO:
         return RecentAttendanceRowDTO(self._photo(item.person_id),item.display_name or "Persona registrada",
@@ -101,6 +108,11 @@ def _camera_state(value: str) -> str:
 
 
 def _recognition_state(runtime: str, recognition: str) -> str:
-    if "PAUS" in recognition.upper():return "Pausado"
+    normalized=recognition.upper()
+    if "PAUS" in normalized:return "Pausado"
+    if normalized == "INCOMPATIBLE":return "INCOMPATIBLE"
+    if normalized == "NO_GALLERY":return "SIN GALERÍA"
+    if runtime.upper() in {"STOPPED","ERROR","FAILED"}:return "Detenido"
+    if normalized == "NOT_EVALUATED":return "OPERATIVO — SIN CALIBRAR"
     if runtime.upper() in {"RUNNING","ACTIVE"}:return "Activo"
     return "Detenido"
