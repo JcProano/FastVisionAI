@@ -321,7 +321,7 @@ class LiveFaceSessionTests(unittest.TestCase):
         )
         session.start()
         self.assertTrue(wait_until(
-            lambda: session.dashboard_telemetry()[0].frames_processed >= 3
+            lambda: recognition.calls >= 3
         ))
         self.assertGreaterEqual(recognition.calls, 3)
         self.assertTrue(session.alive)
@@ -381,7 +381,10 @@ class LiveFaceSessionTests(unittest.TestCase):
         adapter = RejectedGuidedAdapter(GuidedCaptureState.TOO_SOON, face_count=1)
         session = LiveFaceSession(adapter, ui, event_queue_size=64)
         session.start()
-        self.assertTrue(wait_until(lambda: recognition.calls > 0))
+        self.assertTrue(wait_until(
+            lambda: session.dashboard_telemetry()[0].frames_processed >= 2
+        ))
+        self.assertGreater(recognition.calls, 0)
         events = session.drain_events()
         session.close()
         self.assertTrue(any(

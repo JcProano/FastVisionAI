@@ -3,9 +3,20 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 
-from src.core.person_database import (
-    PersonRepository, PersonStatus, PersonUpdateRequest,
+from src.core.people.application import (
+    ChangePersonStatusUseCase,
+    GetPersonUseCase,
+    SearchPeopleUseCase,
+    UpdatePersonUseCase,
 )
+from src.core.people.domain import (
+    PersonNotFoundError,
+    PersonSearchQuery,
+    PersonStatus,
+    PersonStatusTransitionError,
+    PersonUpdateRequest,
+)
+from src.core.person_database import PersonRepository
 
 from .contracts import (
     PeopleListDTO, PeopleManagerState, PeopleOperationResultDTO, PersonDetailsDTO,
@@ -22,6 +33,10 @@ class DatabasePeopleManagerController:
         self.authorization = authorization
         self.audit_callback = audit_callback
         self.thumbnail_manager = thumbnail_manager
+        self._get_person = GetPersonUseCase(repository)
+        self._search_people = SearchPeopleUseCase(repository)
+        self._update_person = UpdatePersonUseCase(repository)
+        self._change_status = ChangePersonStatusUseCase(repository)
 
     def _require(self, permission: str) -> None:
         if self.authorization is None:
@@ -40,7 +55,7 @@ class DatabasePeopleManagerController:
     def list_people(self, query: str = "") -> PeopleListDTO:
         self._require("VIEW_PEOPLE")
         normalized = " ".join(query.casefold().split())
-        records = self.repository.list(limit=1_000)
+        records = self._search_people.execute(PersonSearchQuery(limit=1_000))
         people = tuple(
             self._summary(record) for record in records
             if not normalized or normalized in " ".join(filter(None, (
@@ -53,7 +68,7 @@ class DatabasePeopleManagerController:
         )
 
     def details(self, person_id: str) -> PersonDetailsDTO:
-        record = self.repository.get_by_person_id(person_id)
+        record = self._get_person.execute(person_id)
         if record is None:
             raise KeyError("unknown person_id")
         try:
@@ -72,7 +87,7 @@ class DatabasePeopleManagerController:
         notes: str | None = None,
     ) -> PeopleOperationResultDTO:
         self._require("EDIT_PERSON")
-        record = self.repository.get_by_person_id(person_id)
+        record = self._get_person.execute(person_id)
         if record is None:
             return self._fail("edit", "La persona no existe.", person_id)
         try:
@@ -84,7 +99,7 @@ class DatabasePeopleManagerController:
                 field for field, value in optional_values.items()
                 if value is not None and not value.strip()
             )
-            self.repository.update(PersonUpdateRequest(
+            self._update_person.execute(PersonUpdateRequest(
                 person_id, first_name, last_name, address, phone, email,
                 birth_date, sex, notes, external_identifier or None, clear_fields,
             ))
@@ -102,7 +117,7 @@ class DatabasePeopleManagerController:
             return PeopleOperationResultDTO(
                 PeopleManagerState.IDLE,False,"delete","Eliminación cancelada.",person_id,
             )
-        record=self.repository.get_by_person_id(person_id)
+        record=self._get_person.execute(person_id)
         if record is None:return self._fail("delete","La persona no existe.",person_id)
         try:
             # Soft-delete keeps attendance/audit references resolvable.
@@ -127,7 +142,7 @@ class DatabasePeopleManagerController:
 
     def begin_replacement(self, person_id: str) -> PeopleOperationResultDTO:
         self._require("ENROLL_PERSON")
-        record=self.repository.get_by_person_id(person_id)
+        record=self._get_person.execute(person_id)
         if record is None or record.status is not PersonStatus.ACTIVE:
             return self._fail("replacement_start","La persona debe estar ACTIVE.",person_id)
         if not any(
@@ -141,7 +156,7 @@ class DatabasePeopleManagerController:
     def begin_existing_person_enrollment(self, person_id: str) -> PeopleOperationResultDTO:
         """Create biometrics for an ACTIVE civil person that has no gallery identity."""
         self._require("ENROLL_PERSON")
-        record = self.repository.get_by_person_id(person_id)
+        record = self._get_person.execute(person_id)
         if record is None or record.status is not PersonStatus.ACTIVE:
             return self._fail(
                 "missing_identity_start", "La persona debe estar ACTIVE.", person_id,
@@ -156,7 +171,7 @@ class DatabasePeopleManagerController:
 
     def begin_additional(self, person_id: str) -> PeopleOperationResultDTO:
         self._require("ENROLL_PERSON")
-        record = self.repository.get_by_person_id(person_id)
+        record = self._get_person.execute(person_id)
         if record is None or record.status is not PersonStatus.ACTIVE:
             return self._fail(
                 "additional_start", "Solo personas civiles ACTIVE admiten muestras adicionales.",
@@ -175,27 +190,22 @@ class DatabasePeopleManagerController:
                 "Cambio de estado cancelado.", person_id, timestamp=moment,
             )
         try:
-            current = self.repository.get_by_person_id(person_id)
-            if current is None:
-                return PeopleOperationResultDTO(
-                    PeopleManagerState.ERROR, False, "status_change",
-                    "La persona no existe.", person_id, timestamp=moment,
-                )
-            allowed = {
-                (PersonStatus.ACTIVE, PersonStatus.DISABLED),
-                (PersonStatus.DISABLED, PersonStatus.ACTIVE),
-            }
-            if (current.status, target) not in allowed:
-                return PeopleOperationResultDTO(
-                    PeopleManagerState.ERROR, False, "status_change",
-                    "La transición administrativa no está permitida.", person_id,
-                    timestamp=moment,
-                )
-            self.repository.set_status(person_id, target)
+            self._change_status.execute(person_id, target)
             self._audit("PERSON_STATUS_CHANGED", {"person_id": person_id, "status": target.value})
             return PeopleOperationResultDTO(
                 PeopleManagerState.IDLE, True, "status_change",
                 "Estado administrativo actualizado.", person_id, timestamp=moment,
+            )
+        except PersonNotFoundError:
+            return PeopleOperationResultDTO(
+                PeopleManagerState.ERROR, False, "status_change",
+                "La persona no existe.", person_id, timestamp=moment,
+            )
+        except PersonStatusTransitionError:
+            return PeopleOperationResultDTO(
+                PeopleManagerState.ERROR, False, "status_change",
+                "La transición administrativa no está permitida.", person_id,
+                timestamp=moment,
             )
         except Exception:
             return PeopleOperationResultDTO(

@@ -47,6 +47,17 @@ Core principles are bounded memory, explicit cancellation, lazy resources,
 observable execution, relative paths and backend independence. External Python
 plugins are trusted code and must be installed deliberately by an administrator.
 
+### Incremental Clean Architecture migration
+
+New bounded contexts follow the Solintsoft vertical-module convention:
+`domain`, `application` and `infrastructure`, with dependency rules enforced by
+tests. Application operations use one `*UseCase` class per file and are tested
+directly with in-memory port fakes. Existing public imports remain available
+through temporary compatibility facades while each context is migrated.
+Attendance and People are the first migrated slices; see
+[ADR 006](docs/adr/006-clean-architecture-migration.md) and
+[ADR 007](docs/adr/007-people-clean-architecture.md).
+
 ## Data flow
 
 ```text

@@ -1,0 +1,1 @@
+"""Attendance bounded-context tests."""

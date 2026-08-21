@@ -1,0 +1,1 @@
+"""People bounded-context tests."""
