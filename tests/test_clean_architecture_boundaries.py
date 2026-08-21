@@ -7,13 +7,17 @@ import unittest
 from pathlib import Path
 
 from src.core.attendance import AttendanceRepository, SQLiteAttendanceRepository
+from src.core.audit import AuditRepository, SQLiteAuditRepository
 from src.core.people import PersonRepository, SQLitePeopleRepository
+from src.core.security import SQLiteUserRepository, UserRepository
 
 
 ROOT = Path(__file__).resolve().parents[1]
 ATTENDANCE = ROOT / "src/core/attendance"
 PEOPLE = ROOT / "src/core/people"
 BIOMETRICS = ROOT / "src/core/biometrics"
+SECURITY = ROOT / "src/core/security"
+AUDIT = ROOT / "src/core/audit"
 EXPECTED_ATTENDANCE_USE_CASES = {
     "consume_detection_event.py": "ConsumeAttendanceDetectionUseCase",
     "evaluate_observation.py": "EvaluateAttendanceObservationUseCase",
@@ -36,6 +40,24 @@ EXPECTED_BIOMETRICS_USE_CASES = {
     "export_gallery.py": "ExportGalleryUseCase",
     "import_gallery.py": "ImportGalleryUseCase",
     "recognize_face.py": "RecognizeFaceUseCase",
+}
+EXPECTED_SECURITY_USE_CASES = {
+    "authenticate_user.py": "AuthenticateUserUseCase",
+    "authorize_action.py": "AuthorizeActionUseCase",
+    "bootstrap_admin.py": "BootstrapAdminUseCase",
+    "change_password.py": "ChangePasswordUseCase",
+    "change_user_status.py": "ChangeUserStatusUseCase",
+    "create_user.py": "CreateUserUseCase",
+    "list_users.py": "ListUsersUseCase",
+    "reset_user_password.py": "ResetUserPasswordUseCase",
+    "update_user.py": "UpdateUserUseCase",
+}
+EXPECTED_AUDIT_USE_CASES = {
+    "export_audit.py": "ExportAuditUseCase",
+    "query_audit.py": "QueryAuditUseCase",
+    "record_audit.py": "RecordAuditUseCase",
+    "safe_record_audit.py": "SafeRecordAuditUseCase",
+    "summarize_audit.py": "SummarizeAuditUseCase",
 }
 
 
@@ -236,6 +258,104 @@ class BiometricsArchitectureBoundaryTests(unittest.TestCase):
                 discovered[path.name] = use_cases[0]
 
         self.assertEqual(discovered, EXPECTED_BIOMETRICS_USE_CASES)
+
+
+def assert_expected_use_cases(
+    test_case: unittest.TestCase,
+    context: Path,
+    expected: dict[str, str],
+) -> None:
+    discovered: dict[str, str] = {}
+    for path in (context / "application").glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        use_cases = [
+            node.name
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name.endswith("UseCase")
+        ]
+        with test_case.subTest(path=path.name):
+            test_case.assertLessEqual(len(use_cases), 1)
+        if use_cases:
+            discovered[path.name] = use_cases[0]
+    test_case.assertEqual(discovered, expected)
+
+
+class SecurityArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            SECURITY,
+            "domain",
+            (
+                "src.core.security.application",
+                "src.core.security.infrastructure",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_does_not_depend_on_adapters_or_ui(self) -> None:
+        assert_layer_avoids(
+            self,
+            SECURITY,
+            "application",
+            (
+                "src.core.security.infrastructure",
+                "src.core.security.repository",
+                "src.core.security.passwords",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_legacy_repository_is_only_a_compatibility_alias(self) -> None:
+        self.assertIs(UserRepository, SQLiteUserRepository)
+
+    def test_each_public_operation_has_its_own_use_case_file(self) -> None:
+        assert_expected_use_cases(self, SECURITY, EXPECTED_SECURITY_USE_CASES)
+
+
+class AuditArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            AUDIT,
+            "domain",
+            (
+                "src.core.audit.application",
+                "src.core.audit.infrastructure",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_does_not_depend_on_adapters_or_ui(self) -> None:
+        assert_layer_avoids(
+            self,
+            AUDIT,
+            "application",
+            (
+                "src.core.audit.infrastructure",
+                "src.core.audit.repository",
+                "src.core.audit.exporter",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_legacy_repository_is_only_a_compatibility_alias(self) -> None:
+        self.assertIs(AuditRepository, SQLiteAuditRepository)
+
+    def test_each_public_operation_has_its_own_use_case_file(self) -> None:
+        assert_expected_use_cases(self, AUDIT, EXPECTED_AUDIT_USE_CASES)
 
 
 if __name__ == "__main__":

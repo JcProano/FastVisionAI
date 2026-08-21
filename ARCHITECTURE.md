@@ -6,7 +6,7 @@ El orden obligatorio es Configuration → Security → Audit → repositorios/se
 
 ## Administrative Audit Log
 
-`AuditService → AuditRepository → audit.db` es independiente y append-only. Cada controlador o servicio administrativo usa una sola frontera callback; `ApplicationEventBus` no participa. `AuditService.safe_record()` sanitiza metadata plana y aplica best-effort. `AuditController` exige nuevamente `VIEW_AUDIT` o `EXPORT_AUDIT`. `PERSON_CREATED` solo se registra tras enrollment y activación civil verificados; System Health solo al abrir explícitamente su ventana.
+`AuditService → AuditRepository → audit.db` es independiente y append-only. Cada controlador o servicio administrativo usa una sola frontera callback; `ApplicationEventBus` no participa. `AuditService.safe_record()` sanitiza metadata plana y aplica best-effort. Internamente registro estricto, registro best-effort, consulta, resumen y exportación son casos de uso separados; SQLite y CSV son adaptadores. `AuditController` exige nuevamente `VIEW_AUDIT` o `EXPORT_AUDIT`. `PERSON_CREATED` solo se registra tras enrollment y activación civil verificados; System Health solo al abrir explícitamente su ventana.
 
 ## Person Database boundary
 
@@ -54,10 +54,11 @@ New bounded contexts follow the Solintsoft vertical-module convention:
 tests. Application operations use one `*UseCase` class per file and are tested
 directly with in-memory port fakes. Existing public imports remain available
 through temporary compatibility facades while each context is migrated.
-Attendance, People and Biometrics are the first migrated slices; see
+Attendance, People, Biometrics, Security and Audit are the migrated slices; see
 [ADR 006](docs/adr/006-clean-architecture-migration.md) and
 [ADR 007](docs/adr/007-people-clean-architecture.md), and
-[ADR 008](docs/adr/008-biometrics-clean-architecture.md).
+[ADR 008](docs/adr/008-biometrics-clean-architecture.md) and
+[ADR 009](docs/adr/009-security-audit-clean-architecture.md).
 
 ## Data flow
 
