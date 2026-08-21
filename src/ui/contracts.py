@@ -107,6 +107,7 @@ class EnrollmentConflictDTO:
     display_name: str | None = None
     thumbnail_available: bool = False
     template_count: int = 0
+    can_reactivate: bool = False
 
 
 @dataclass(frozen=True, slots=True)

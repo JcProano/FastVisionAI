@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import ipaddress
 from typing import Callable
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 try:
     import tkinter as tk
@@ -12,7 +11,157 @@ except ModuleNotFoundError:  # pragma: no cover
     messagebox = None  # type: ignore[assignment]
     ttk = None  # type: ignore[assignment]
 
-from src.camera.source_discovery import CameraSelectionController, CameraSourceDTO, CameraSourceType
+from src.camera.source_discovery import (
+    CameraSelectionController, CameraSourceDTO, CameraSourceType, redact_url,
+)
+
+
+class NetworkCameraDialog:
+    """Shared add/edit modal; probing never mutates saved or active camera state."""
+
+    CONNECTION_TYPES = ("HTTP/MJPEG", "HTTPS", "RTSP", "RTSPS", "URL personalizada")
+
+    def __init__(self, parent, controller: CameraSelectionController, *,
+                 on_saved: Callable[[CameraSourceDTO], None],
+                 source: CameraSourceDTO | None = None) -> None:
+        if tk is None or ttk is None: raise RuntimeError("Tkinter no está disponible")
+        self.parent = parent; self.controller = controller; self.on_saved = on_saved
+        self.source = source
+        self.window = tk.Toplevel(parent)
+        self.window.title("EDITAR CÁMARA IP" if source else "AGREGAR CÁMARA IP")
+        self.window.geometry("600x500"); self.window.resizable(False, False)
+        self.window.transient(parent); self.window.grab_set()
+        self.window.protocol("WM_DELETE_WINDOW", self.cancel)
+        self.window.configure(background="#07111D")
+        self.name=tk.StringVar(self.window);self.profile=tk.StringVar(self.window)
+        self.connection_type=tk.StringVar(self.window,value="RTSP")
+        self.host=tk.StringVar(self.window);self.port=tk.StringVar(self.window)
+        self.path=tk.StringVar(self.window);self.username=tk.StringVar(self.window)
+        self.password=tk.StringVar(self.window);self.full_url=tk.StringVar(self.window)
+        self.preview=tk.StringVar(self.window);self.result=tk.StringVar(self.window)
+        shell=ttk.Frame(self.window,style="Card.TFrame",padding=14)
+        shell.pack(fill="both",expand=True,padx=12,pady=12)
+        fields=(("Nombre de cámara *",self.name),("Fabricante / Perfil",self.profile),
+                ("Tipo de conexión *",self.connection_type),("Host / IP *",self.host),
+                ("Puerto",self.port),("Ruta / Stream",self.path),
+                ("Usuario",self.username),("Contraseña",self.password),
+                ("URL completa (modo simple)",self.full_url))
+        for row,(label,variable) in enumerate(fields):
+            ttk.Label(shell,text=label,style="CardText.TLabel").grid(
+                row=row,column=0,sticky="w",padx=(0,12),pady=5)
+            if variable is self.connection_type:
+                widget=ttk.Combobox(shell,textvariable=variable,
+                    values=self.CONNECTION_TYPES,state="readonly",width=39)
+            else:
+                widget=ttk.Entry(shell,textvariable=variable,width=44,
+                                 show="*" if variable is self.password else "")
+            widget.grid(row=row,column=1,sticky="ew",pady=5)
+        ttk.Label(shell,text="URL final / Vista previa",style="CardText.TLabel").grid(
+            row=9,column=0,sticky="nw",padx=(0,12),pady=5)
+        ttk.Label(shell,textvariable=self.preview,style="CardText.TLabel",
+                  wraplength=390).grid(row=9,column=1,sticky="w",pady=5)
+        ttk.Label(shell,textvariable=self.result,style="Institution.TLabel",
+                  wraplength=540).grid(row=10,column=0,columnspan=2,sticky="w",pady=(7,3))
+        actions=ttk.Frame(shell,style="CardBody.TFrame")
+        actions.grid(row=11,column=0,columnspan=2,sticky="ew",pady=(10,0))
+        ttk.Button(actions,text="PROBAR CONEXIÓN",command=self.test_connection,
+                   style="Secondary.TButton").pack(side="left")
+        ttk.Button(actions,text="CANCELAR",command=self.cancel,
+                   style="Secondary.TButton").pack(side="right",padx=(8,0))
+        ttk.Button(actions,text="GUARDAR CAMBIOS" if source else "GUARDAR CÁMARA",
+                   command=self.save,style="Primary.TButton").pack(side="right")
+        shell.columnconfigure(1,weight=1)
+        for variable in (self.connection_type,self.host,self.port,self.path,
+                         self.username,self.password,self.full_url):
+            variable.trace_add("write",self._update_preview)
+        if source is not None:self._load(source)
+        self._update_preview();self._center()
+
+    def _load(self, source: CameraSourceDTO) -> None:
+        configured=next(item for item in self.controller.discovery.config.network_sources
+                        if item.source_id == source.source_id)
+        parsed=urlsplit(configured.url);self.name.set(configured.name)
+        self.connection_type.set(_connection_label(configured.source_type,parsed.scheme))
+        self.host.set(parsed.hostname or "")
+        self.port.set("" if parsed.port is None else str(parsed.port))
+        self.path.set(parsed.path.lstrip("/"));self.username.set(parsed.username or "")
+        self.password.set(parsed.password or "")
+        if parsed.username is None:self.full_url.set(configured.url)
+
+    def _source(self) -> tuple[CameraSourceType,str]:
+        name=self.name.get().strip()
+        if not name:raise ValueError("Nombre de cámara es obligatorio.")
+        label=self.connection_type.get();kind=_source_type(label)
+        complete=self.full_url.get().strip()
+        if complete:
+            CameraSelectionWindow.validate_camera_url(complete)
+            return kind,complete
+        if label == "URL personalizada":
+            raise ValueError("Ingrese una URL completa para el tipo personalizado.")
+        host=self.host.get().strip()
+        if not host:raise ValueError("Host / IP es obligatorio.")
+        port=self.port.get().strip()
+        if port and (not port.isdigit() or not 1 <= int(port) <= 65535):
+            raise ValueError("Puerto inválido.")
+        credentials=""
+        if self.username.get().strip():
+            credentials=quote(self.username.get().strip(),safe="")
+            if self.password.get():credentials += ":"+quote(self.password.get(),safe="")
+            credentials += "@"
+        scheme={"HTTP/MJPEG":"http","HTTPS":"https","RTSP":"rtsp","RTSPS":"rtsps"}[label]
+        url=f"{scheme}://{credentials}{host}{(':'+port) if port else ''}"
+        path=self.path.get().strip().lstrip("/")
+        if path:url += "/"+path
+        CameraSelectionWindow.validate_camera_url(url)
+        return kind,url
+
+    def _update_preview(self,*_args) -> None:
+        try:self.preview.set(redact_url(self._source()[1]))
+        except ValueError:self.preview.set("Complete una URL o los campos de conexión.")
+
+    def test_connection(self) -> None:
+        try:
+            kind,url=self._source()
+            connected,resolution=self.controller.probe_network_source_details(
+                self.name.get(),kind,url)
+        except (ValueError,RuntimeError) as exc:self.result.set(str(exc));return
+        detail="N/D" if resolution is None else f"{resolution[0]}×{resolution[1]}"
+        self.result.set(("CONECTADA" if connected else "NO CONECTADA")+
+                        f" · {self.connection_type.get()} · Resolución {detail}")
+
+    def save(self) -> None:
+        try:
+            kind,url=self._source()
+            saved=(self.controller.add_network_source(self.name.get(),kind,url)
+                   if self.source is None else
+                   self.controller.update_network_source(
+                       self.source.source_id,self.name.get(),kind,url,
+                       preferred=self.source.preferred))
+        except (ValueError,RuntimeError) as exc:self.result.set(str(exc));return
+        self.on_saved(saved);self.cancel()
+
+    def cancel(self) -> None:
+        try:self.window.grab_release()
+        except Exception:pass
+        if self.window.winfo_exists():self.window.destroy()
+
+    def _center(self) -> None:
+        self.window.update_idletasks()
+        x=self.parent.winfo_rootx()+max(0,(self.parent.winfo_width()-600)//2)
+        y=self.parent.winfo_rooty()+max(0,(self.parent.winfo_height()-500)//2)
+        self.window.geometry(f"600x500+{x}+{y}")
+
+
+def _source_type(label: str) -> CameraSourceType:
+    return (CameraSourceType.NETWORK_RTSP if label in {"RTSP","RTSPS"} else
+            CameraSourceType.NETWORK_HTTP if label in {"HTTP/MJPEG","HTTPS"} else
+            CameraSourceType.CUSTOM)
+
+
+def _connection_label(kind: CameraSourceType, scheme: str) -> str:
+    if kind is CameraSourceType.CUSTOM:return "URL personalizada"
+    if kind is CameraSourceType.NETWORK_RTSP:return "RTSPS" if scheme == "rtsps" else "RTSP"
+    return "HTTPS" if scheme == "https" else "HTTP/MJPEG"
 
 
 class CameraSelectionWindow:
@@ -53,53 +202,17 @@ class CameraSelectionWindow:
         network_card = ttk.LabelFrame(self.window, text="Cámaras de red", padding=10)
         network_card.pack(fill="both", expand=True, padx=12, pady=6)
         self.network_frame = ttk.Frame(network_card); self.network_frame.pack(fill="both", expand=True)
-        ttk.Button(network_card, text="+ Agregar cámara IP", command=self.show_network_form).pack(anchor="w", pady=(8, 0))
-        self.network_form = ttk.LabelFrame(self.window, text="Agregar cámara IP", padding=10)
-        self.network_name = tk.StringVar(); self.network_type = tk.StringVar(value="RTSP"); self.network_url = tk.StringVar()
-        self.droidcam_ip = tk.StringVar(); self.droidcam_port = tk.StringVar(value="4747")
-        self.network_example = tk.StringVar(); self.network_help = tk.StringVar()
-        self.droidcam_preview = tk.StringVar()
-        ttk.Label(self.network_form, text="Nombre").grid(row=0, column=0, sticky="w")
-        ttk.Entry(self.network_form, textvariable=self.network_name, width=42).grid(row=0, column=1, sticky="ew", padx=5)
-        ttk.Label(self.network_form, text="Tipo").grid(row=1, column=0, sticky="w")
-        self.network_type_combo = ttk.Combobox(
-            self.network_form, textvariable=self.network_type,
-            values=("RTSP", "HTTP/MJPEG", "Personalizada", "DroidCam WiFi"),
-            state="readonly", width=18,
-        )
-        self.network_type_combo.grid(row=1, column=1, sticky="w", padx=5)
-        self.network_type_combo.bind("<<ComboboxSelected>>", self._network_type_changed)
-        ttk.Label(self.network_form, text="URL").grid(row=2, column=0, sticky="w")
-        self.network_url_entry = ttk.Entry(self.network_form, textvariable=self.network_url, width=42)
-        self.network_url_entry.grid(row=2, column=1, sticky="ew", padx=5)
-        ttk.Label(self.network_form, textvariable=self.network_example, foreground="#666666").grid(
-            row=3, column=1, sticky="w", padx=5,
-        )
-        ttk.Label(self.network_form, textvariable=self.network_help, foreground="#555555",
-                  justify="left").grid(row=4, column=1, sticky="w", padx=5, pady=(3, 5))
-        self.droidcam_fields = ttk.Frame(self.network_form)
-        ttk.Label(self.droidcam_fields, text="IP del teléfono").grid(row=0, column=0, sticky="w")
-        ttk.Entry(self.droidcam_fields, textvariable=self.droidcam_ip, width=22).grid(row=0, column=1, sticky="w", padx=5)
-        ttk.Label(self.droidcam_fields, text="Puerto").grid(row=1, column=0, sticky="w")
-        ttk.Entry(self.droidcam_fields, textvariable=self.droidcam_port, width=8).grid(row=1, column=1, sticky="w", padx=5)
-        ttk.Label(self.droidcam_fields, textvariable=self.droidcam_preview,
-                  justify="left").grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
-        self.droidcam_ip.trace_add("write", self._droidcam_fields_changed)
-        self.droidcam_port.trace_add("write", self._droidcam_fields_changed)
-        self.network_form.columnconfigure(1, weight=1)
-        network_actions = ttk.Frame(self.network_form); network_actions.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Button(network_actions, text="Probar", command=self.test_network_form).pack(side="left", padx=3)
-        ttk.Button(network_actions, text="Guardar", command=self.save_network).pack(side="left", padx=3)
-        ttk.Button(network_actions, text="Cancelar", command=self.hide_network_form).pack(side="right", padx=3)
+        ttk.Button(network_card, text="+ AGREGAR CÁMARA IP",
+                   command=self.show_network_form).pack(anchor="w", pady=(8, 0))
+        self.network_dialog: NetworkCameraDialog | None = None
         self.status = ttk.Label(self.window, text=""); self.status.pack(fill="x", padx=12)
-        ttk.Checkbutton(self.window, text="Recordar como cámara principal",
+        ttk.Checkbutton(self.window, text="CÁMARA PRINCIPAL (recordar)",
                         variable=self.preferred).pack(anchor="w", padx=12, pady=(5, 0))
         actions = ttk.Frame(self.window, padding=12); actions.pack(fill="x")
         ttk.Button(actions, text="Actualizar", command=self.refresh).pack(side="left", padx=3)
         ttk.Button(actions, text="Probar", command=self.test_selected).pack(side="left", padx=3)
         ttk.Button(actions, text="USAR ESTA CÁMARA", command=self.use_selected).pack(side="left", padx=3)
         ttk.Button(actions, text="Cancelar", command=self.close).pack(side="right", padx=3)
-        self._update_network_guidance()
         self.refresh()
 
     def focus(self) -> None: self.window.lift(); self.window.focus_force()
@@ -167,35 +280,7 @@ class CameraSelectionWindow:
         self.selected_source_id.set(source.source_id);self._selection_changed();self.test_selected()
 
     def edit_source(self, source: CameraSourceDTO) -> None:
-        configured=next((item for item in self.controller.discovery.config.network_sources
-                         if item.source_id == source.source_id),None)
-        if configured is None:return
-        dialog=tk.Toplevel(self.window);dialog.title("Editar cámara")
-        name=tk.StringVar(dialog,value=configured.name)
-        kind=tk.StringVar(dialog,value=configured.source_type.value)
-        url=tk.StringVar(dialog,value=configured.url)
-        preferred=tk.BooleanVar(dialog,value=source.preferred)
-        for row,(label,variable) in enumerate((("Nombre",name),("Tipo",kind),("URL / origen",url))):
-            ttk.Label(dialog,text=label).grid(row=row,column=0,sticky="w",padx=8,pady=5)
-            if label == "Tipo":
-                ttk.Combobox(dialog,textvariable=variable,state="readonly",
-                    values=("NETWORK_HTTP","NETWORK_RTSP","CUSTOM")).grid(row=row,column=1,sticky="ew",padx=8)
-            else:ttk.Entry(dialog,textvariable=variable,width=52).grid(row=row,column=1,sticky="ew",padx=8)
-        ttk.Label(dialog,text=("HTTP/MJPEG: http://192.168.1.12:4747/video\n"
-                              "RTSP: rtsp://usuario:password@192.168.1.50:554/stream1"),
-                  justify="left").grid(row=3,column=0,columnspan=2,sticky="w",padx=8,pady=5)
-        ttk.Checkbutton(dialog,text="CÁMARA PRINCIPAL",variable=preferred).grid(row=4,column=0,columnspan=2,sticky="w",padx=8)
-        def save() -> None:
-            try:
-                self.validate_camera_url(url.get())
-                self.controller.update_network_source(
-                    source.source_id,name.get(),CameraSourceType(kind.get()),url.get(),
-                    preferred=preferred.get(),
-                )
-            except (ValueError,RuntimeError) as exc:self.status.configure(text=str(exc));return
-            dialog.destroy();self.refresh();self.status.configure(text="Cámara actualizada.")
-        ttk.Button(dialog,text="GUARDAR",command=save).grid(row=5,column=0,padx=8,pady=10)
-        ttk.Button(dialog,text="CANCELAR",command=dialog.destroy).grid(row=5,column=1,padx=8,pady=10)
+        self._open_network_dialog(source)
 
     def delete_source(self, source: CameraSourceDTO) -> None:
         if source.source_type is CameraSourceType.LOCAL_V4L2:return
@@ -226,64 +311,24 @@ class CameraSelectionWindow:
         self.status.configure(text="✓ Cámara disponible" if available
                               else "✗ Cámara offline; no se pudo conectar")
 
-    def show_network_form(self) -> None: self.network_form.pack(fill="x", padx=12, pady=6)
-    def hide_network_form(self) -> None: self.network_url.set(""); self.network_form.pack_forget()
+    def show_network_form(self) -> None:
+        self._open_network_dialog(None)
 
-    def test_network_form(self) -> None:
-        source_type = self._network_source_type()
-        try:
-            self._validate_network_form()
-            available = self.controller.probe_network_source(
-                self.network_name.get(), source_type, self.network_url.get(),
-            )
-        except (ValueError, RuntimeError) as exc: self.status.configure(text=str(exc)); return
-        self.status.configure(text="✓ Cámara disponible" if available else "✗ No se pudo conectar")
-
-    def save_network(self) -> None:
-        try: source = self._add_network()
-        except (ValueError, RuntimeError) as exc: self.status.configure(text=str(exc)); return
-        self.selected.set(source.source_id); self.network_url.set(""); self.network_name.set("")
-        self.hide_network_form(); self.refresh()
-        self.status.configure(text="Cámara IP guardada; las credenciales permanecen ocultas.")
-
-    def _add_network(self) -> CameraSourceDTO:
-        source_type = self._network_source_type()
-        self._validate_network_form()
-        return self.controller.add_network_source(
-            self.network_name.get(), source_type, self.network_url.get(),
+    def _open_network_dialog(self, source: CameraSourceDTO | None) -> None:
+        current=getattr(self,"network_dialog",None)
+        if current is not None and current.window.winfo_exists():
+            current.window.lift();current.window.focus_force();return
+        self.network_dialog=NetworkCameraDialog(
+            self.window,self.controller,on_saved=self._network_saved,source=source,
         )
 
-    def _network_source_type(self) -> CameraSourceType:
-        return (CameraSourceType.NETWORK_RTSP if self.network_type.get() == "RTSP" else
-                CameraSourceType.NETWORK_HTTP if self.network_type.get() in ("HTTP/MJPEG", "DroidCam WiFi") else
-                CameraSourceType.CUSTOM)
-
-    def _network_type_changed(self, _event=None) -> None:
-        """Update guidance without replacing an URL the user already entered."""
-        self._update_network_guidance()
-
-    def _update_network_guidance(self) -> None:
-        selected = self.network_type.get()
-        self.network_example.set(f"Ejemplo: {self.TYPE_EXAMPLES[selected]}")
-        self.network_help.set(self.TYPE_HELP[selected])
-        if selected == "DroidCam WiFi":
-            self.droidcam_fields.grid(row=5, column=0, columnspan=2, sticky="ew", padx=5)
-            self._update_droidcam_preview()
-        else:
-            self.droidcam_fields.grid_remove()
-
-    def _droidcam_fields_changed(self, *_args) -> None:
-        if self.network_type.get() != "DroidCam WiFi": return
-        generated = self.build_droidcam_url(self.droidcam_ip.get(), self.droidcam_port.get())
-        self.droidcam_preview.set(f"URL generada:\n{generated}")
-        if self.droidcam_ip.get().strip(): self.network_url.set(generated)
-
-    def _update_droidcam_preview(self) -> None:
-        generated = self.build_droidcam_url(
-            self.droidcam_ip.get().strip() or "192.168.1.3",
-            self.droidcam_port.get(),
+    def _network_saved(self, source: CameraSourceDTO) -> None:
+        self.refresh()
+        self.selected_source_id.set(source.source_id)
+        self._selection_changed()
+        self.status.configure(
+            text="Cámara guardada y seleccionada. Pulse USAR ESTA CÁMARA para conectarla."
         )
-        self.droidcam_preview.set(f"URL generada:\n{generated}")
 
     @staticmethod
     def build_droidcam_url(phone_ip: str, port: str = "4747") -> str:
@@ -298,13 +343,6 @@ class CameraSelectionWindow:
         except ValueError as exc: raise ValueError("Dirección de cámara inválida.") from exc
         if not parsed.hostname:
             raise ValueError("Dirección de cámara inválida.")
-
-    def _validate_network_form(self) -> None:
-        if self.network_type.get() == "DroidCam WiFi":
-            try: ipaddress.ip_address(self.droidcam_ip.get().strip())
-            except ValueError as exc:
-                raise ValueError("Introduce una IP válida, por ejemplo 192.168.1.3") from exc
-        self.validate_camera_url(self.network_url.get())
 
     def use_selected(self) -> None:
         source_id=self.selected_source_id.get()

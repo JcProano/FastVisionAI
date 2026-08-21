@@ -5,7 +5,7 @@ import unittest
 
 from src.ui.contracts import RuntimeStatusDTO
 from src.ui.tk_app import LocalFaceTkApp
-from src.ui.camera_selection_window import CameraSelectionWindow
+from src.ui.camera_selection_window import CameraSelectionWindow, NetworkCameraDialog
 from src.ui import main as ui_main
 
 
@@ -50,13 +50,17 @@ class CameraDashboardTests(unittest.TestCase):
         self.assertEqual(app.camera_change_button.values["state"], "disabled")
         self.assertEqual(app.camera_retry_button.values["state"], "disabled")
 
-    def test_selector_contains_required_sections_and_visible_url_entry(self):
+    def test_selector_is_compact_and_network_form_lives_in_modal(self):
         source = inspect.getsource(CameraSelectionWindow.__init__)
-        for text in ("Cámaras locales detectadas", "Cámaras de red", "+ Agregar cámara IP",
-                     "Probar", "Guardar", "USAR ESTA CÁMARA"):
+        for text in ("Cámaras locales detectadas", "Cámaras de red",
+                     "+ AGREGAR CÁMARA IP", "Probar", "USAR ESTA CÁMARA"):
             self.assertIn(text, source)
-        self.assertNotIn('show="•"', source)
-        self.assertIn("self.network_url_entry = ttk.Entry", source)
+        self.assertNotIn("self.network_form =", source)
+        modal = inspect.getsource(NetworkCameraDialog.__init__)
+        self.assertIn("tk.Toplevel(parent)", modal)
+        self.assertIn("self.window.transient(parent)", modal)
+        self.assertIn("self.window.grab_set()", modal)
+        self.assertIn('show="*" if variable is self.password', modal)
 
     def test_network_examples_cover_http_rtsp_and_droidcam(self):
         examples = CameraSelectionWindow.TYPE_EXAMPLES
@@ -64,10 +68,9 @@ class CameraDashboardTests(unittest.TestCase):
         self.assertEqual(examples["RTSP"], "rtsp://usuario:clave@192.168.1.100:554/stream1")
         self.assertEqual(examples["DroidCam WiFi"], "http://192.168.1.3:4747/video")
 
-    def test_type_change_updates_help_without_clearing_url(self):
-        source = inspect.getsource(CameraSelectionWindow._network_type_changed)
-        self.assertIn("_update_network_guidance", source)
-        self.assertNotIn("network_url.set", source)
+    def test_modal_supports_all_connection_types(self):
+        self.assertEqual(NetworkCameraDialog.CONNECTION_TYPES,
+            ("HTTP/MJPEG", "HTTPS", "RTSP", "RTSPS", "URL personalizada"))
 
     def test_url_validation_has_friendly_protocol_and_host_errors(self):
         with self.assertRaisesRegex(ValueError, "Debe comenzar"):

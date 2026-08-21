@@ -28,6 +28,8 @@ from src.engine.identification_policy import (
     IdentificationPolicyResult, IdentificationPolicyState,
 )
 from src.engine.stability import StabilityObservation, StabilityTracker
+from src.engine.gallery import FaceGallery
+from src.engine.gallery.persistence import GalleryPersistence
 from src.ui.contracts import (
     ActionExecutorDTO, DecisionOrchestratorDTO, EnrollmentProgressDTO,
     EnrollmentResultDTO, EnrollmentConflictDTO, ErrorDTO, PersonPhotoCaptureDTO,
@@ -44,7 +46,9 @@ from src.ui.runtime_adapter import (
 from src.ui.people.contracts import PeopleOperationResultDTO
 from src.ui.people.controller import PeopleManagerController
 from src.ui.identification import IdentificationPresentationController
-from src.ui.person_enrollment import ExistingActivePersonError, ExistingPendingPersonError
+from src.ui.person_enrollment import (
+    ExistingActivePersonError, ExistingDisabledPersonError, ExistingPendingPersonError,
+)
 from src.ui.photo_capture import (
     AutomaticPhotoPolicy, AutomaticPhotoSelector, PersonPhotoController,
 )
@@ -74,6 +78,36 @@ UIEvent = (MonitoringDTO | EnrollmentProgressDTO | EnrollmentResultDTO | ErrorDT
            ActionExecutorDTO | PersonPhotoCaptureDTO)
 
 
+def _verify_enrollment_commit(
+    result: EnrollmentResultDTO, gallery: FaceGallery,
+    manifest_path: Path | None, archive_path: Path | None,
+    target_samples: int,
+) -> None:
+    """Require the in-memory and persisted galleries to contain the full enrollment."""
+    if result.enrollment_status.casefold() != "enrolled":
+        raise RuntimeError("enrollment service rejected the biometric samples")
+    identities = {item.person_id for item in gallery.list_identities()}
+    if result.person_id not in identities:
+        raise RuntimeError("committed gallery identity is missing")
+    if len(gallery.templates(result.person_id)) < target_samples:
+        raise RuntimeError("committed gallery has fewer templates than requested")
+    if not result.persistence_requested:
+        return
+    if result.persistence_succeeded is not True:
+        raise RuntimeError("gallery persistence did not succeed")
+    if manifest_path is None or archive_path is None:
+        raise RuntimeError("gallery persistence paths are unavailable")
+    persisted = FaceGallery()
+    GalleryPersistence(enabled=True).import_into(
+        persisted, manifest_path, archive_path,
+    )
+    persisted_ids = {item.person_id for item in persisted.list_identities()}
+    if result.person_id not in persisted_ids:
+        raise RuntimeError("persisted gallery identity is missing")
+    if len(persisted.templates(result.person_id)) < target_samples:
+        raise RuntimeError("persisted gallery has fewer templates than requested")
+
+
 def _safe_camera_reference(display_name: str | None, source_id: str | None) -> str | None:
     value = (display_name if display_name and display_name != "N/D" else source_id)
     if not value: return None
@@ -87,6 +121,7 @@ class SessionCommandType(str, Enum):
     STOP = "stop"
     START_ADDITIONAL_ENROLLMENT = "start_additional_enrollment"
     START_FACE_REPLACEMENT = "start_face_replacement"
+    START_EXISTING_PERSON_ENROLLMENT = "start_existing_person_enrollment"
     CAPTURE_ENROLLMENT_SAMPLE = "capture_enrollment_sample"
     START_PERSON_PHOTO = "start_person_photo"
     CAPTURE_PERSON_PHOTO = "capture_person_photo"
@@ -256,11 +291,32 @@ class LiveFaceSession:
         return accepted
 
     def start_face_replacement(self, person_id: str) -> bool:
+        LOGGER.info(
+            "people_face_session_method_invoked person_ref=%s workflow_state=%s",
+            uuid.uuid5(uuid.NAMESPACE_OID, person_id).hex[:12], self.controller.state.value,
+        )
         accepted=self._command(SessionCommand(
             SessionCommandType.START_FACE_REPLACEMENT,person_id=person_id,
         ))
         if accepted:self.set_event_history_suspended(True)
         return accepted
+
+    def start_existing_person_enrollment(self, person_id: str) -> bool:
+        LOGGER.info(
+            "people_face_session_method_invoked person_ref=%s workflow_state=%s",
+            uuid.uuid5(uuid.NAMESPACE_OID, person_id).hex[:12], self.controller.state.value,
+        )
+        accepted = self._command(SessionCommand(
+            SessionCommandType.START_EXISTING_PERSON_ENROLLMENT, person_id=person_id,
+        ))
+        if accepted:
+            self.set_event_history_suspended(True)
+        return accepted
+
+    def active_camera_ready(self) -> bool:
+        """Report only the active runtime's health, never discovery probe results."""
+        with self._metrics_lock:
+            return self.alive and self._frames_received > 0
 
     def start_person_photo(self, person_id: str) -> bool:
         accepted = self._command(SessionCommand(
@@ -500,12 +556,14 @@ class LiveFaceSession:
                         run_id=self._session_id, person_id=command.form.person_id,
                         state="ENROLLING", message="primary_enrollment_started",
                     ))
-                except (ExistingActivePersonError, ExistingPendingPersonError) as exc:
+                except (ExistingActivePersonError, ExistingDisabledPersonError,
+                        ExistingPendingPersonError) as exc:
                     self._plan = None
                     self._capture_requested = False
                     self._clear_thumbnail_samples()
                     self.adapter.set_thumbnail_capture(False)
                     active = isinstance(exc, ExistingActivePersonError)
+                    disabled = isinstance(exc, ExistingDisabledPersonError)
                     display_name = None
                     template_count = 0
                     if self._people is not None:
@@ -521,16 +579,21 @@ class LiveFaceSession:
                     )
                     self._event(EnrollmentConflictDTO(
                         UIState.ERROR, exc.person_id,
-                        "ACTIVE" if active else "PENDING_BIOMETRIC", str(exc),
+                        "ACTIVE" if active else "DISABLED" if disabled else "PENDING_BIOMETRIC",
+                        str(exc),
                         True, active and template_count == 0, False, display_name,
-                        thumbnail_available, template_count,
+                        thumbnail_available, template_count, disabled,
                     ))
-                except Exception:
-                    LOGGER.exception(
-                        "Enrollment start failed before biometric sample collection; "
-                        "target_samples=%d consent_confirmed=%s",
-                        self.controller.enrollment.target_samples,
-                        command.form.consent_confirmed,
+                except Exception as exc:
+                    safe_person = uuid.uuid5(
+                        uuid.NAMESPACE_OID, command.form.person_id,
+                    ).hex[:12]
+                    coordinator = getattr(self.controller, "person_coordinator", None)
+                    workflow_state = getattr(getattr(coordinator, "state", None), "value", None)
+                    LOGGER.error(
+                        "Enrollment start failed; stage=begin_enrollment person_ref=%s "
+                        "error_type=%s workflow_state=%s biometric_payload=omitted",
+                        safe_person, type(exc).__name__, workflow_state or self.controller.state.value,
                     )
                     if self.controller.enrollment.active:
                         self.controller.cancel_enrollment()
@@ -540,9 +603,12 @@ class LiveFaceSession:
                     self.adapter.set_thumbnail_capture(False)
                     self._event_history_suspended.clear()
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
-                                "No se pudo iniciar el registro guiado.", False)
+                                "No se pudo iniciar el registro guiado "
+                                f"({type(exc).__name__}; estado "
+                                f"{workflow_state or self.controller.state.value}).", False)
             elif (command.kind in {SessionCommandType.START_ADDITIONAL_ENROLLMENT,
-                                   SessionCommandType.START_FACE_REPLACEMENT} and
+                                   SessionCommandType.START_FACE_REPLACEMENT,
+                                   SessionCommandType.START_EXISTING_PERSON_ENROLLMENT} and
                   command.person_id is not None):
                 if self._plan is not None or self.controller.enrollment.active or (
                     self._additional_person_id is not None
@@ -554,13 +620,53 @@ class LiveFaceSession:
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
                                 "El administrador de personas no está disponible.", False)
                     continue
+                safe_person = uuid.uuid5(uuid.NAMESPACE_OID, command.person_id).hex[:12]
+                civil_status = "UNKNOWN"
+                identity_present = False
+                template_count = 0
+                try:
+                    summary = self._people.details(command.person_id).summary
+                    civil_status = summary.civil_status or "UNKNOWN"
+                    template_count = summary.template_count
+                    gallery = getattr(self._people, "biometrics", self._people).gallery
+                    identity_present = any(
+                        item.person_id == command.person_id
+                        for item in gallery.list_identities()
+                    )
+                except Exception:
+                    pass
+                LOGGER.info(
+                    "face_enrollment_action_requested person_ref=%s civil_status=%s "
+                    "gallery_identity_present=%s template_count=%d biometric_payload=omitted",
+                    safe_person, civil_status, identity_present, template_count,
+                )
                 try:
                     self._reset_stability(emit=True)
-                    started = (self._people.begin_replacement(command.person_id)
-                               if command.kind is SessionCommandType.START_FACE_REPLACEMENT
-                               else self._people.begin_additional(command.person_id))
+                    LOGGER.info(
+                        "face_enrollment_begin_called person_ref=%s workflow_state=%s",
+                        safe_person, self.controller.state.value,
+                    )
+                    if command.kind is SessionCommandType.START_FACE_REPLACEMENT:
+                        started = self._people.begin_replacement(command.person_id)
+                    elif command.kind is SessionCommandType.START_EXISTING_PERSON_ENROLLMENT:
+                        begin_existing = getattr(
+                            self._people, "begin_existing_person_enrollment", None,
+                        )
+                        if begin_existing is None:
+                            raise RuntimeError("existing-person enrollment is unavailable")
+                        started = begin_existing(command.person_id)
+                    else:
+                        started = self._people.begin_additional(command.person_id)
                     if not started.success:
+                        LOGGER.error(
+                            "face_enrollment_started=false stage=begin_replacement "
+                            "person_ref=%s error_type=WorkflowRejected workflow_state=%s "
+                            "biometric_payload=omitted",
+                            safe_person, started.state.value,
+                        )
                         self._event(started)
+                        self._error(UIErrorCode.ENROLLMENT_ERROR,
+                                    "No se pudo iniciar el registro facial.", False)
                         continue
                     self._plan = GuidedCapturePlan(self.controller.enrollment.target_samples)
                     self._additional_person_id = command.person_id
@@ -572,19 +678,34 @@ class LiveFaceSession:
                         UIState.ENROLLING, "Mire al frente", 0, self._plan.target_samples,
                         (), None, None, True,
                     ))
+                    LOGGER.info(
+                        "face_enrollment_progress_received person_ref=%s workflow_state=%s "
+                        "accepted_samples=0 target_samples=%d",
+                        safe_person, started.state.value, self._plan.target_samples,
+                    )
+                    LOGGER.info(
+                        "face_enrollment_started=true person_ref=%s workflow_state=%s "
+                        "biometric_payload=omitted",
+                        safe_person, started.state.value,
+                    )
                     self._publish_application(EnrollmentStartedEvent(
                         source="live_face_session", session_id=self._session_id,
                         run_id=self._session_id, person_id=command.person_id,
                         state="ENROLLING", message="additional_enrollment_started",
                     ))
-                except Exception:
-                    LOGGER.exception("Additional enrollment start failed; biometric data omitted")
+                except Exception as exc:
+                    workflow_state = self.controller.state.value
+                    LOGGER.exception(
+                        "face_enrollment_started=false stage=begin_replacement person_ref=%s "
+                        "error_type=%s workflow_state=%s biometric_payload=omitted",
+                        safe_person, type(exc).__name__, workflow_state,
+                    )
                     self._plan = None
                     self._additional_person_id = None
                     self._additional_samples.clear()
                     self._event_history_suspended.clear()
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
-                                "No se pudo iniciar la captura adicional.", False)
+                                "No se pudo iniciar el registro facial.", False)
             elif command.kind is SessionCommandType.CAPTURE_ENROLLMENT_SAMPLE:
                 if self._plan is None:
                     self._error(UIErrorCode.ENROLLMENT_ERROR,
@@ -1140,6 +1261,21 @@ class LiveFaceSession:
                     person_id, tuple(self._additional_samples)  # type: ignore[arg-type]
                 )
                 self._event(result)
+                if result.success:
+                    details = self._people.details(person_id).summary
+                    biometric_manager = getattr(self._people, "biometrics", self._people)
+                    template_count = len(biometric_manager.gallery.templates(person_id))
+                    completed = EnrollmentResultDTO(
+                        UIState.ENROLLMENT_COMPLETE, person_id,
+                        details.first_name, details.last_name, details.display_name,
+                        template_count, 0,
+                        details.average_quality or 0.0,
+                        details.minimum_quality or 0.0,
+                        details.maximum_quality or 0.0,
+                        "enrolled", True, True,
+                        "Registro biométrico existente actualizado y verificado.",
+                    )
+                    self._event(completed)
                 self._publish_application(EnrollmentFinishedEvent(
                     source="live_face_session", session_id=self._session_id,
                     run_id=self._session_id, person_id=person_id,
@@ -1196,9 +1332,11 @@ class LiveFaceSession:
                         "Gallery persistence failed after ACTIVE; biometric payload omitted; exception_type=%s",type(exc).__name__
                     )
                 result = replace(result, persistence_succeeded=succeeded)
-            if result.persistence_requested and result.persistence_succeeded is False:
-                self._error(UIErrorCode.PERSISTENCE_ERROR,
-                            "Registro en memoria correcto; la persistencia local falló.", True)
+            _verify_enrollment_commit(
+                result, self.controller.enrollment.gallery,
+                self._manifest_path, self._archive_path,
+                self.controller.enrollment.target_samples,
+            )
             self._event(result)
             gallery = self.controller.enrollment.gallery
             administrative_status = (
@@ -1220,12 +1358,15 @@ class LiveFaceSession:
                 run_id=self._session_id, person_id=result.person_id,
                 state=result.enrollment_status, message=result.message,
             ))
-        except Exception:
-            LOGGER.exception(
-                "Enrollment finalization failed; temporary biometric payload omitted from log"
+        except Exception as exc:
+            LOGGER.error(
+                "Enrollment finalization verification failed; stage=post_commit "
+                "error_type=%s workflow_state=%s biometric_payload=omitted",
+                type(exc).__name__, self.controller.state.value,
             )
             self._error(UIErrorCode.ENROLLMENT_ERROR,
-                        "El registro no pudo completarse.", False)
+                        "El registro biométrico no pudo verificarse ni persistirse. "
+                        "No se marcó como completado.", False)
         finally:
             self._plan = None
             self._enrollment_stability.reset()

@@ -1,9 +1,10 @@
 from .contracts import (
-    ExistingActivePersonError, ExistingPendingPersonError,
+    ExistingActivePersonError, ExistingDisabledPersonError, ExistingPendingPersonError,
     PersonEnrollmentCoordinationError, PersonEnrollmentState,
 )
 from .coordinator import PersonEnrollmentCoordinator
 
-__all__ = ["ExistingActivePersonError", "ExistingPendingPersonError",
+__all__ = ["ExistingActivePersonError", "ExistingDisabledPersonError",
+           "ExistingPendingPersonError",
            "PersonEnrollmentCoordinationError", "PersonEnrollmentCoordinator",
            "PersonEnrollmentState"]

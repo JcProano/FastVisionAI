@@ -68,7 +68,7 @@ class UIMainPersistenceTests(GalleryTestCase):
             self.assertTrue(archive.is_file())
             self.assertEqual(len(gallery), 1)
 
-    def test_existing_target_is_not_overwritten_and_memory_gallery_remains(self):
+    def test_existing_active_target_is_atomically_replaced_after_enrollment(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             callback, manifest, archive = build_persistence(self.settings(), root)
@@ -88,9 +88,12 @@ class UIMainPersistenceTests(GalleryTestCase):
             result = workflow.finish(
                 persistence=callback, manifest_path=manifest, archive_path=archive
             )
-            self.assertFalse(result.persistence_succeeded)
-            self.assertEqual(manifest.read_bytes(), b"existing-manifest")
-            self.assertEqual(archive.read_bytes(), b"existing-archive")
+            self.assertTrue(result.persistence_succeeded)
+            imported = FaceGallery()
+            from src.engine.gallery.persistence import GalleryPersistence
+            GalleryPersistence(enabled=True).import_into(imported, manifest, archive)
+            self.assertEqual(len(imported.list_identities()), 1)
+            self.assertEqual(len(imported.templates()), 1)
             self.assertEqual(len(gallery), 1)
             self.assertEqual(len(gallery.templates()), 1)
 

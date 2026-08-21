@@ -29,3 +29,11 @@ class ExistingPendingPersonError(PersonEnrollmentCoordinationError):
             "Existe un registro biométrico pendiente; requiere resolución administrativa."
         )
         self.person_id = person_id
+
+
+class ExistingDisabledPersonError(PersonEnrollmentCoordinationError):
+    def __init__(self, person_id: str) -> None:
+        super().__init__(
+            "La persona existe pero está deshabilitada. Reactívela explícitamente."
+        )
+        self.person_id = person_id

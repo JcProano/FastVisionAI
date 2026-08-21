@@ -495,8 +495,17 @@ def build_persistence(
     if destination != root and root not in destination.parents:
         raise ValueError("persistence directory escapes the project root")
     persistence = GalleryPersistence(enabled=True)
+
+    def persist_enrollment_gallery(gallery, manifest_path, archive_path):
+        # Enrollment is the authoritative update of the configured active
+        # gallery. Existing startup artifacts (including an empty gallery)
+        # must be atomically replaced after a successful biometric commit.
+        persistence.export(
+            gallery, manifest_path, archive_path, overwrite=True,
+        )
+
     return (
-        persistence.export,
+        persist_enrollment_gallery,
         destination / "gallery.json",
         destination / "gallery.npz",
     )
@@ -1372,6 +1381,20 @@ def main() -> int:
             raise ValueError("Se requiere confirmación.")
         return session.start_face_replacement(person_id)
 
+    def reactivate_person(person_id: str) -> bool:
+        result = people_controller.set_administrative_status(
+            person_id, PersonStatus.ACTIVE, confirmed=True,
+        )
+        return bool(result.success)
+
+    def register_existing_person_face(person_id: str) -> bool:
+        logging.getLogger(__name__).info(
+            "people_face_callback_invoked person_ref=%s workflow_state=%s",
+            uuid.uuid5(uuid.NAMESPACE_OID, person_id).hex[:12],
+            people_controller.state.value,
+        )
+        return session.start_existing_person_enrollment(person_id)
+
     def close():
         nonlocal closing
         if closing:return
@@ -1474,6 +1497,9 @@ def main() -> int:
             advanced_controller=people_search_controller,
             on_capture_photo=session.start_person_photo,
             on_replace_face=session.start_face_replacement,
+            on_register_face=register_existing_person_face,
+            on_reactivate_person=reactivate_person,
+            camera_available=session.active_camera_ready,
             can_edit_photo=security.authorization.can(AuthorizationPermission.EDIT_PERSON),
         )
 
@@ -1762,6 +1788,8 @@ def main() -> int:
         on_capture_enrollment=session.capture_enrollment_sample,
         on_view_person=open_profile,
         on_additional_enrollment=session.start_additional_enrollment,
+        on_replace_face=session.start_face_replacement,
+        on_reactivate_person=reactivate_person,
         on_start_photo=session.start_person_photo,
         on_capture_photo=session.capture_person_photo,
         on_confirm_photo=session.confirm_person_photo,

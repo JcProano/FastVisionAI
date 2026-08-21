@@ -45,7 +45,7 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         )
         self.assertIs(state,OperationalPresentationState.GALLERY_UNREGISTERED)
 
-    def test_empty_gallery_web_offers_register_and_ignore(self):
+    def test_empty_gallery_web_remains_in_api_without_blocking_modal(self):
         dto=empty_gallery_face()
         controller=WebDashboardController(
             lambda:None,presentation_provider=lambda:dto,
@@ -54,9 +54,10 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         )
         value=controller.api("/api/presentation")
         self.assertEqual(value["title"],"PERSONA NO REGISTRADA")
+        self.assertFalse(value["active"])
         self.assertNotIn("CANDIDATO BIOMÉTRICO",str(value))
         modal=_modal_html(value)
-        self.assertIn("REGISTRAR PERSONA",modal);self.assertIn("IGNORAR",modal)
+        self.assertEqual(modal, "")
         controller.action("/api/presentation/ignore",{})
         self.assertFalse(controller.api("/api/presentation")["active"])
 

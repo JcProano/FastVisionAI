@@ -103,16 +103,18 @@ class RC213SafeAdministrationTests(GalleryTestCase):
             self.assertEqual((len(imported.list_identities()),len(imported.templates())),(0,0))
 
     def test_face_replacement_replaces_instead_of_appending(self):
-        gallery=FaceGallery();gallery.register_identity(FaceIdentity("p1","Ada",{}))
-        gallery.add_template("p1",self.embedding([1,0,0]))
-        manager=PeopleManagerController(
-            gallery,EnrollmentService(gallery,EnrollmentPolicy(1,5)),
-            GalleryPersistence(enabled=True),Path("unused.json"),Path("unused.npz"),
-        )
-        self.assertTrue(manager.begin_replacement("p1").success)
-        result=manager.complete_additional("p1",((self.embedding([0,1,0],index=1),None),))
-        self.assertTrue(result.success);self.assertEqual(len(gallery.templates("p1")),1)
-        self.assertAlmostEqual(float(gallery.templates("p1")[0].template.embedding[1]),1.0)
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            gallery=FaceGallery();gallery.register_identity(FaceIdentity("p1","Ada",{}))
+            gallery.add_template("p1",self.embedding([1,0,0]))
+            manager=PeopleManagerController(
+                gallery,EnrollmentService(gallery,EnrollmentPolicy(1,5)),
+                GalleryPersistence(enabled=True),root/"gallery.json",root/"gallery.npz",
+            )
+            self.assertTrue(manager.begin_replacement("p1").success)
+            result=manager.complete_additional("p1",((self.embedding([0,1,0],index=1),None),))
+            self.assertTrue(result.success);self.assertEqual(len(gallery.templates("p1")),1)
+            self.assertAlmostEqual(float(gallery.templates("p1")[0].template.embedding[1]),1.0)
 
     def test_web_person_commands_use_opaque_token_and_strong_confirmation(self):
         calls=[];controller=WebDashboardController(lambda:None,actions={

@@ -15,7 +15,7 @@ from src.ui.contracts import (
 from src.ui.enrollment_workflow import LocalEnrollmentWorkflow
 
 from .contracts import (
-    ExistingActivePersonError, ExistingPendingPersonError,
+    ExistingActivePersonError, ExistingDisabledPersonError, ExistingPendingPersonError,
     PersonEnrollmentCoordinationError, PersonEnrollmentState,
 )
 
@@ -56,6 +56,8 @@ class PersonEnrollmentCoordinator:
                     raise ExistingActivePersonError(existing.person_id)
                 if existing.status is PersonStatus.PENDING_BIOMETRIC:
                     raise ExistingPendingPersonError(existing.person_id)
+                if existing.status is PersonStatus.DISABLED:
+                    raise ExistingDisabledPersonError(existing.person_id)
                 raise PersonEnrollmentCoordinationError(
                     "La persona existe pero no está habilitada para enrollment."
                 )

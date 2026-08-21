@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Callable
+import logging
+import uuid
 
 try:
     import tkinter as tk
@@ -18,6 +20,12 @@ from src.core.person_database import PersonStatus
 from src.ui.thumbnails import ThumbnailError, ThumbnailManager
 from src.ui.thumbnails.presentation import thumbnail_to_ppm
 
+LOGGER = logging.getLogger(__name__)
+
+
+def _person_ref(person_id: str) -> str:
+    return uuid.uuid5(uuid.NAMESPACE_OID, person_id).hex[:12]
+
 
 class PeopleManagerWindow:
     def __init__(
@@ -28,6 +36,9 @@ class PeopleManagerWindow:
         advanced_controller: Any | None = None,
         on_capture_photo: Callable[[str], bool] | None = None,
         on_replace_face: Callable[[str], bool] | None = None,
+        on_register_face: Callable[[str], bool] | None = None,
+        on_reactivate_person: Callable[[str], bool] | None = None,
+        camera_available: Callable[[], bool] | None = None,
         can_edit_photo: bool = True,
     ) -> None:
         if tk is None or ttk is None:
@@ -40,6 +51,9 @@ class PeopleManagerWindow:
         self._advanced = advanced_controller
         self._on_capture_photo = on_capture_photo
         self._on_replace_face = on_replace_face
+        self._on_register_face = on_register_face or on_replace_face
+        self._on_reactivate_person = on_reactivate_person
+        self._camera_available = camera_available
         self._can_edit_photo = can_edit_photo
         self._search_after_id: Any | None = None
         self._page = 1
@@ -88,6 +102,7 @@ class PeopleManagerWindow:
             self.table.heading(key, text=label)
         self.table.grid(row=3, column=0, columnspan=8, sticky="nsew", padx=8, pady=8)
         self.table.bind("<<TreeviewSelect>>", lambda _event: self._show_thumbnail())
+        self.table.bind("<<TreeviewSelect>>", lambda _event: self._update_face_action(), add="+")
         actions = (
             ("Ver ficha", self.view_profile), ("Editar", self.edit), ("Eliminar", self.delete),
             ("Agregar muestras", self.add_samples), ("Refrescar", self.refresh),
@@ -129,7 +144,7 @@ class PeopleManagerWindow:
         )
         self.capture_thumbnail_button.grid(row=7, column=5, padx=4)
         self.replace_face_button=ttk.Button(
-            self.window,text="ACTUALIZAR ROSTRO",command=self.replace_face,
+            self.window,text="REGISTRAR / ACTUALIZAR ROSTRO",command=self.replace_face,
             state="normal" if on_replace_face is not None else "disabled",
         )
         self.replace_face_button.grid(row=7,column=6,padx=4)
@@ -240,6 +255,17 @@ class PeopleManagerWindow:
     def selected(self) -> PersonSummaryDTO | None:
         selection = self.table.selection()
         return self.controller.details(selection[0]).summary if selection else None
+
+    def _update_face_action(self) -> None:
+        person = self.selected()
+        if person is None:
+            self.replace_face_button.configure(text="REGISTRAR / ACTUALIZAR ROSTRO")
+        elif person.civil_status == PersonStatus.DISABLED.value:
+            self.replace_face_button.configure(text="REACTIVAR PERSONA")
+        elif person.template_count == 0:
+            self.replace_face_button.configure(text="REGISTRAR ROSTRO")
+        else:
+            self.replace_face_button.configure(text="ACTUALIZAR ROSTRO")
 
     def _show_thumbnail(self) -> None:
         person = self.selected()
@@ -371,13 +397,61 @@ class PeopleManagerWindow:
     def replace_face(self) -> None:
         person=self.selected()
         if person is None or self._on_replace_face is None:return
+        person_ref = _person_ref(person.person_id)
+        LOGGER.info(
+            "people_face_button_clicked person_ref=%s status=%s template_count=%d",
+            person_ref, person.civil_status or "UNKNOWN", person.template_count,
+        )
+        if person.civil_status == PersonStatus.DISABLED.value:
+            if self._on_reactivate_person is None:
+                self.status.configure(text="Debe reactivar esta persona antes de registrar su rostro.")
+                return
+            if not messagebox.askyesno(
+                "PERSONA DESHABILITADA",
+                "Debe reactivar esta persona antes de registrar o actualizar su rostro.\n\n"
+                "¿REACTIVAR PERSONA?",
+                parent=self.window,
+            ):
+                return
+            if not self._on_reactivate_person(person.person_id):
+                self.status.configure(text="No se pudo reactivar la persona.")
+                return
+            self.refresh()
+            self.status.configure(
+                text="Persona reactivada. Selecciónela para REGISTRAR ROSTRO."
+            )
+            return
+        if self._camera_available is not None and not self._camera_available():
+            self.status.configure(
+                text="Seleccione una cámara antes de iniciar el registro facial."
+            )
+            return
+        missing_face = person.template_count == 0
         if not messagebox.askyesno(
-            "ACTUALIZAR ROSTRO",
-            f"¿Reemplazar todos los templates faciales de {person.display_name}?",
+            "REGISTRAR ROSTRO" if missing_face else "ACTUALIZAR ROSTRO",
+            ("Esta persona no tiene rostro registrado.\n"
+             "¿Desea iniciar el registro facial?" if missing_face else
+             "¿Reemplazar los templates faciales existentes?"),
             parent=self.window,
         ):return
-        if self._on_replace_face(person.person_id):
-            self.status.configure(text="Captura para reemplazo facial iniciada.")
+        LOGGER.info(
+            "people_face_confirmation_accepted person_ref=%s status=%s "
+            "identity_present=%s template_count=%d",
+            person_ref, person.civil_status or "UNKNOWN", not missing_face,
+            person.template_count,
+        )
+        callback = self._on_register_face if missing_face else self._on_replace_face
+        LOGGER.info(
+            "people_face_callback_invoked person_ref=%s workflow_state=REQUESTED",
+            person_ref,
+        )
+        self.status.configure(text="INICIANDO REGISTRO FACIAL…")
+        if callback is not None and callback(person.person_id):
+            self.status.configure(text=(
+                "INICIANDO REGISTRO FACIAL…"
+            ))
+        else:
+            self.status.configure(text="No se pudo iniciar el registro facial.")
 
     def add_samples(self) -> None:
         person = self.selected()

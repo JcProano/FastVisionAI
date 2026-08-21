@@ -130,7 +130,29 @@ class DatabasePeopleManagerController:
         record=self.repository.get_by_person_id(person_id)
         if record is None or record.status is not PersonStatus.ACTIVE:
             return self._fail("replacement_start","La persona debe estar ACTIVE.",person_id)
+        if not any(
+            item.person_id == person_id for item in self.biometrics.gallery.list_identities()
+        ):
+            return self.biometrics.begin_missing_identity(
+                person_id, f"{record.first_name} {record.last_name}",
+            )
         return self.biometrics.begin_replacement(person_id)
+
+    def begin_existing_person_enrollment(self, person_id: str) -> PeopleOperationResultDTO:
+        """Create biometrics for an ACTIVE civil person that has no gallery identity."""
+        self._require("ENROLL_PERSON")
+        record = self.repository.get_by_person_id(person_id)
+        if record is None or record.status is not PersonStatus.ACTIVE:
+            return self._fail(
+                "missing_identity_start", "La persona debe estar ACTIVE.", person_id,
+            )
+        if any(item.person_id == person_id for item in self.biometrics.gallery.list_identities()):
+            return self._fail(
+                "missing_identity_start", "La identidad biométrica ya existe.", person_id,
+            )
+        return self.biometrics.begin_missing_identity(
+            person_id, f"{record.first_name} {record.last_name}",
+        )
 
     def begin_additional(self, person_id: str) -> PeopleOperationResultDTO:
         self._require("ENROLL_PERSON")

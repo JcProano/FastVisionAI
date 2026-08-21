@@ -244,30 +244,29 @@ class WebDashboardController:
         operational = (None if self.operational_state_provider is None else
                        self.operational_state_provider(dto))
         if operational is OperationalPresentationState.GALLERY_UNREGISTERED:
-            key=("GALLERY_UNREGISTERED",None);now=self._monotonic()
-            if key != self._modal_key:
-                self._modal_key=key;self._modal_started=now
-                if key != self._dismissed_key:self._dismissed_key=None
-            remaining=self._modal_timeout-(now-self._modal_started)
-            if remaining <= 0 or key == self._dismissed_key:return {"active":False}
-            return {"active":True,"kind":"GALLERY_UNREGISTERED",
+            return {"active":False,"kind":"GALLERY_UNREGISTERED",
                     "title":"PERSONA NO REGISTRADA","name":None,"photo":None,
                     "similarity":None,"status":"GALERÍA SIN IDENTIDADES",
                     "warning":"No existen rostros registrados en la galería.",
-                    "details":[],"remaining_seconds":max(0,remaining)}
+                    "details":[],"remaining_seconds":0}
         if (operational is not None and
                 operational is not OperationalPresentationState.RECOGNITION_RESULT):
             title=operational_title(operational)
-            return {"active":True,"kind":operational.value,"title":title,
+            return {"active":False,"kind":operational.value,"title":title,
                     "name":None,"photo":None,"similarity":None,"status":title,
                     "warning":None,"details":[],
-                    "remaining_seconds":self._modal_timeout}
+                    "remaining_seconds":0}
         state=str(getattr(dto,"recognition_state","")).upper()
         evaluated=getattr(dto,"evaluated",None);person_id=getattr(dto,"candidate_person_id",None)
         visual_state=identification_visual_state(state,evaluated,person_id)
         valid=(visual_state is not IdentificationVisualState.NOT_PRESENTABLE or
                state in {"NO_GALLERY","INCOMPATIBLE"})
-        if not valid:return {"active":False}
+        if not valid:
+            return {"active":False,"kind":state,"title":"NO EVALUADO",
+                    "name":None,"photo":None,
+                    "similarity":getattr(dto,"similarity",None),
+                    "status":state or "NOT_EVALUATED","warning":None,
+                    "details":[],"remaining_seconds":0}
         key=(state,person_id);now=self._monotonic()
         if key != self._modal_key:
             self._modal_key=key;self._modal_started=now
@@ -290,7 +289,11 @@ class WebDashboardController:
             title,status,warning="CANDIDATO BIOMÉTRICO","NO EVALUADO — SISTEMA PENDIENTE DE CALIBRACIÓN","El candidato más cercano no constituye una identificación."
         elif state == "NO_GALLERY":title,status,warning="GALERÍA VACÍA","NO EVALUADO",None
         else:title,status,warning="MODELO BIOMÉTRICO INCOMPATIBLE","NO EVALUADO",None
-        return {"active":True,"kind":state,"title":title,"name":name,"photo":photo,
+        blocking = visual_state in {
+            IdentificationVisualState.IDENTIFIED,
+            IdentificationVisualState.UNREGISTERED,
+        }
+        return {"active":blocking,"kind":state,"title":title,"name":name,"photo":photo,
                 "similarity":getattr(dto,"similarity",None),"status":status,"warning":warning,
                 "details":details,"remaining_seconds":max(0,remaining)}
 

@@ -204,6 +204,7 @@ class IdentificationPopupWindow:
                 self.details.configure(text=(
                     f"Nombre completo\n{dto.display_name or 'No disponible'}\n\n"
                     f"Cédula\n{dto.external_identifier or 'No disponible'}\n\n"
+                    f"Dirección: {dto.address or 'No disponible'}\n"
                     f"Cargo: {dto.position or 'No disponible'}\n"
                     f"Departamento: {dto.department or 'No disponible'}\n"
                     f"Empresa: {dto.company or 'No disponible'}\n"

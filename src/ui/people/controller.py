@@ -41,6 +41,7 @@ class PeopleManagerController:
         self._pending_import: FaceGallery | None = None
         self._additional_person_id: str | None = None
         self._replacement_person_id: str | None = None
+        self._pending_new_identity: FaceIdentity | None = None
         self._lock = threading.RLock()
 
     @property
@@ -143,11 +144,30 @@ class PeopleManagerController:
         if result.success:self._replacement_person_id=person_id
         return result
 
+    def begin_missing_identity(
+        self, person_id: str, display_name: str,
+    ) -> PeopleOperationResultDTO:
+        """Start face capture for a civil person absent from the gallery."""
+        with self._lock:
+            self._require_idle()
+            if any(item.person_id == person_id for item in self.gallery.list_identities()):
+                return self._fail(
+                    "replacement_start", "La identidad biométrica ya existe.", person_id,
+                )
+            self._state = PeopleManagerState.ENROLLING_MORE
+            self._additional_person_id = person_id
+            self._replacement_person_id = person_id
+            self._pending_new_identity = FaceIdentity(person_id, display_name, {})
+            return self._ok(
+                "replacement_start", "Captura de rostro faltante iniciada.", person_id,
+            )
+
     def cancel_additional(self) -> PeopleOperationResultDTO:
         with self._lock:
             person_id = self._additional_person_id
             self._additional_person_id = None
             self._replacement_person_id = None
+            self._pending_new_identity = None
             self._state = PeopleManagerState.IDLE
             return self._ok("additional_cancel", "Captura adicional cancelada.", person_id)
 
@@ -162,14 +182,30 @@ class PeopleManagerController:
                 return self._fail("additional", "No existe una captura adicional activa.", person_id)
             try:
                 replacing=self._replacement_person_id == person_id
+                pending_identity = self._pending_new_identity
                 temporary = _rebuild(
                     self.gallery,excluded={person_id} if replacing else set(),
-                    identity_overrides={person_id:self._identity(person_id)} if replacing else {},
+                    identity_overrides=(
+                        {person_id: pending_identity} if pending_identity is not None else
+                        {person_id:self._identity(person_id)} if replacing else {}
+                    ),
                     additions={person_id: tuple(samples)},
                 )
-                self.gallery.replace_from(temporary)
+                self.persistence.export(
+                    temporary, self.manifest_path, self.archive_path, overwrite=True,
+                )
+                persisted = FaceGallery()
+                self.persistence.import_into(
+                    persisted, self.manifest_path, self.archive_path,
+                )
+                if (not any(item.person_id == person_id
+                            for item in persisted.list_identities())
+                        or len(persisted.templates(person_id)) < len(samples)):
+                    raise RuntimeError("persisted face replacement verification failed")
+                self.gallery.replace_from(persisted)
                 self._additional_person_id = None
                 self._replacement_person_id = None
+                self._pending_new_identity = None
                 self._state = PeopleManagerState.IDLE
                 return PeopleOperationResultDTO(
                     PeopleManagerState.IDLE, True, "additional",
@@ -179,6 +215,7 @@ class PeopleManagerController:
             except Exception:
                 self._additional_person_id = None
                 self._replacement_person_id = None
+                self._pending_new_identity = None
                 self._state = PeopleManagerState.ERROR
                 return self._fail(
                     "additional", "Los templates adicionales no superaron la validación.",
@@ -273,6 +310,8 @@ class PeopleManagerController:
             self._pending_import = None
             if self._state is PeopleManagerState.ENROLLING_MORE:
                 self._additional_person_id = None
+                self._replacement_person_id = None
+                self._pending_new_identity = None
             self._state = PeopleManagerState.IDLE
 
     def _summaries(self) -> tuple[PersonSummaryDTO, ...]:
