@@ -57,6 +57,14 @@ from src.ui.operational_semantics import (
 )
 
 LOGGER = logging.getLogger(__name__)
+ENROLLMENT_ASSET_DIR = Path(__file__).resolve().parent / "assets" / "enrollment"
+ENROLLMENT_POSES = (
+    ("Frontal", "pose_frontal.png"),
+    ("Ligero giro izquierda", "pose_left.png"),
+    ("Ligero giro derecha", "pose_right.png"),
+    ("Frontal estable", "pose_frontal_stable.png"),
+    ("Natural", "pose_natural.png"),
+)
 from src.ui.identification.tk_popup import IdentificationPopupWindow
 from src.core.detection_events import DetectionEventDTO
 
@@ -354,6 +362,11 @@ class LocalFaceTkApp:
         self._enrollment_progress: Any | None = None
         self._enrollment_quality: Any | None = None
         self._enrollment_reasons: Any | None = None
+        self._enrollment_step_widgets: list[tuple[Any, Any, Any]] = []
+        self._enrollment_top_steps: list[Any] = []
+        self._enrollment_pose_photos: list[Any] = []
+        self._enrollment_progressbar: Any | None = None
+        self._enrollment_photo: Any | None = None
         self._capture_button: Any | None = None
         self._photo_capture_window: Any | None = None
         self._photo_capture_preview: Any | None = None
@@ -911,6 +924,10 @@ class LocalFaceTkApp:
         dto: EnrollmentProgressDTO,
     ) -> None:
         self.latest_enrollment_event = dto
+        LOGGER.debug(
+            "enrollment_frame_correlation progress_frame_id=%s visual_frame_id=%s",
+            dto.frame_id, getattr(self, "_latest_visual_frame_id", None),
+        )
         if hasattr(self, "_form") and self._form is None:
             self._form = tk.Toplevel(self.root)
             self._form.protocol("WM_DELETE_WINDOW", self._cancel)
@@ -946,6 +963,11 @@ class LocalFaceTkApp:
                       f"Paso actual: {min(dto.accepted_samples+1,dto.target_samples)} de {dto.target_samples}\n"
                       f"{_enrollment_progress_bar(dto.accepted_samples, dto.target_samples)}")
             )
+        if getattr(self, "_enrollment_progressbar", None) is not None:
+            self._enrollment_progressbar.configure(
+                maximum=max(1, dto.target_samples), value=dto.accepted_samples,
+            )
+        self._render_enrollment_steps(dto.accepted_samples, dto.target_samples)
         if hasattr(self,"video_samples"):
             self.video_samples.configure(
                 text=f"MUESTRAS\n{dto.accepted_samples} / {dto.target_samples}")
@@ -957,8 +979,8 @@ class LocalFaceTkApp:
                 and self._enrollment_guide_text is not None):
             self._enrollment_video.itemconfigure(
                 self._enrollment_guide_text,
-                text=(f"Paso {min(dto.accepted_samples + 1, dto.target_samples)}/"
-                      f"{dto.target_samples} · {dto.instruction}"),
+                text=("Score: N/D" if dto.quality_score is None
+                      else f"Score: {dto.quality_score:.1f}/100"),
             )
         if getattr(self, "_enrollment_quality", None) is not None:
             quality = "No disponible" if dto.quality_score is None else f"{dto.quality_score:.1f}/100"
@@ -970,10 +992,9 @@ class LocalFaceTkApp:
                 "No capturada: " + ", ".join(
                     _enrollment_reason(reason) for reason in dto.current_reasons
                 )
-            checklist = _enrollment_checklist(dto.accepted_samples, dto.target_samples)
             self._enrollment_reasons.configure(
                 text=(f"Paso {min(dto.accepted_samples + 1, dto.target_samples)} de "
-                      f"{dto.target_samples}\n{dto.instruction}\n{reasons}\n\n{checklist}")
+                      f"{dto.target_samples} · {dto.instruction}\n{reasons}")
             )
         if getattr(self, "_capture_button", None) is not None:
             self._capture_button.configure(state="normal")
@@ -1260,6 +1281,7 @@ class LocalFaceTkApp:
         visual = session.take_latest_visual()
 
         if visual is not None:
+            self._latest_visual_frame_id = visual.sequence_id
             self.show_rgb_frame(
                 visual.width,
                 visual.height,
@@ -1615,6 +1637,7 @@ class LocalFaceTkApp:
         """
 
         source_width,source_height=width,height
+        source_rgb_bytes = rgb_bytes
         self._video_resolution=f"{source_width}×{source_height}"
         if hasattr(self,"video_resolution"):
             self.video_resolution.configure(text=f"RESOLUCIÓN\n{self._video_resolution}")
@@ -1649,10 +1672,23 @@ class LocalFaceTkApp:
                     if self._enrollment_video_item is not None:
                         area_width = max(1, enrollment_video.winfo_width())
                         area_height = max(1, enrollment_video.winfo_height())
+                        enrollment_width, enrollment_height, enrollment_bytes = render_rgb(
+                            source_rgb_bytes, source_width, source_height,
+                            area_width, area_height, self._video_presentation,
+                        )
+                        enrollment_header = (
+                            f"P6 {enrollment_width} {enrollment_height} 255\n".encode("ascii")
+                        )
+                        enrollment_photo = tk.PhotoImage(
+                            data=enrollment_header + enrollment_bytes, format="PPM",
+                        )
                         enrollment_video.coords(
                             self._enrollment_video_item, area_width // 2, area_height // 2,
                         )
-                        enrollment_video.itemconfigure(self._enrollment_video_item, image=photo)
+                        enrollment_video.itemconfigure(
+                            self._enrollment_video_item, image=enrollment_photo,
+                        )
+                        self._enrollment_photo = enrollment_photo
             except Exception:
                 self._enrollment_video = None
         photo_preview = getattr(self, "_photo_capture_preview", None)
@@ -2038,40 +2074,122 @@ class LocalFaceTkApp:
         self._enrollment_active = True
         self._registration_flow_state = RegistrationFlowState.ENROLLMENT
         form.title("REGISTRO FACIAL")
-        form.geometry("820x760")
+        window_width, window_height = _enrollment_window_dimensions(
+            form.winfo_screenwidth(), form.winfo_screenheight(),
+        )
+        form.geometry(f"{window_width}x{window_height}")
+        form.minsize(min(1100, window_width), min(650, window_height))
         form.configure(background="#07111D")
-        shell=ttk.Frame(form,style="Card.TFrame",padding=16)
-        shell.pack(fill="both",expand=True,padx=14,pady=14)
-        ttk.Label(shell,text="REGISTRO FACIAL",style="Title.TLabel").pack(anchor="w")
-        ttk.Label(shell,text="① ─ ② ─ ③ ─ ④ ─ ⑤",style="Institution.TLabel").pack(
-            anchor="e",pady=(0,4))
+        form.columnconfigure(0, weight=1)
+        form.rowconfigure(0, weight=1)
+        shell=ttk.Frame(form,style="Card.TFrame",padding=10)
+        shell.grid(row=0,column=0,sticky="nsew",padx=8,pady=8)
+        shell.columnconfigure(0,weight=3,minsize=700)
+        shell.columnconfigure(1,weight=1,minsize=300)
+        shell.rowconfigure(1,weight=1)
+
+        header=ttk.Frame(shell,style="CardBody.TFrame")
+        header.grid(row=0,column=0,columnspan=2,sticky="ew",pady=(0,6))
+        header.columnconfigure(0,weight=1)
+        ttk.Label(header,text="REGISTRO FACIAL",style="Title.TLabel").grid(
+            row=0,column=0,sticky="w")
+        top_steps=tk.Frame(header,background="#10263A")
+        top_steps.grid(row=0,column=1,sticky="e")
+        self._enrollment_top_steps=[]
+        for index in range(5):
+            label=tk.Label(
+                top_steps,text=str(index+1),width=2,padx=3,pady=2,
+                background="#10263A",foreground="#7C93A8",
+                font=("TkDefaultFont",10,"bold"),
+                highlightthickness=1,highlightbackground="#31526B",
+            )
+            label.grid(row=0,column=index*2)
+            self._enrollment_top_steps.append(label)
+            if index < 4:
+                tk.Label(top_steps,text="—",background="#10263A",
+                         foreground="#31526B").grid(row=0,column=index*2+1)
+
+        left=ttk.Frame(shell,style="CardBody.TFrame")
+        left.grid(row=1,column=0,sticky="nsew",padx=(0,8))
+        left.columnconfigure(0,weight=1)
+        left.rowconfigure(1,weight=1)
         self._enrollment_heading=ttk.Label(
-            shell,text="Paso 1/5 — Frontal",style="Institution.TLabel")
-        self._enrollment_heading.pack(anchor="w",pady=(0,8))
+            left,text="Paso 1/5 — Frontal",style="Institution.TLabel")
+        self._enrollment_heading.grid(row=0,column=0,sticky="w",pady=(0,6))
         self._enrollment_video=tk.Canvas(
-            shell,background="#07111D",highlightthickness=1,
-            highlightbackground="#23445E",height=430)
-        self._enrollment_video.pack(fill="both",expand=True)
+            left,background="#02080E",highlightthickness=1,
+            highlightbackground="#23445E",width=700,height=360)
+        self._enrollment_video.grid(row=1,column=0,sticky="nsew")
         self._enrollment_video_item=self._enrollment_video.create_image(0,0,anchor="center")
         self._enrollment_guide_text=self._enrollment_video.create_text(
-            16,16,anchor="nw",text="Centre el rostro y siga la pose indicada",
-            fill="#22D3D3",font=("TkDefaultFont",11,"bold"))
-        enrollment_metrics=ttk.Frame(shell,style="CardBody.TFrame")
-        enrollment_metrics.pack(fill="x",pady=(8,0))
+            12,12,anchor="nw",text="Score: N/D",fill="#F3F6F9",
+            font=("TkDefaultFont",10,"bold"))
+        enrollment_metrics=ttk.Frame(left,style="CardBody.TFrame")
+        enrollment_metrics.grid(row=2,column=0,sticky="ew",pady=(7,0))
+        enrollment_metrics.columnconfigure(0,weight=1)
+        enrollment_metrics.columnconfigure(1,weight=1)
         self._enrollment_quality=ttk.Label(
             enrollment_metrics,text="Calidad: N/D\nEstado: ESPERANDO",style="CardText.TLabel")
-        self._enrollment_quality.pack(side="left")
+        self._enrollment_quality.grid(row=0,column=0,sticky="w")
         self._enrollment_progress=ttk.Label(
             enrollment_metrics,
             text=f"Muestras: 0 / {self._enrollment_target_samples}\nProgreso: 0 %",
             style="CardText.TLabel",justify="right")
-        self._enrollment_progress.pack(side="right")
+        self._enrollment_progress.grid(row=0,column=1,sticky="e")
+        self._enrollment_progressbar=ttk.Progressbar(
+            enrollment_metrics,orient="horizontal",mode="determinate",
+            maximum=max(1,self._enrollment_target_samples),value=0,
+        )
+        self._enrollment_progressbar.grid(row=1,column=0,columnspan=2,sticky="ew",pady=(5,0))
         self._enrollment_reasons=ttk.Label(
-            shell,text=("INSTRUCCIONES\nMantenga una expresión neutral, buena iluminación "
-                        "y siga cada pose: frontal, izquierda, derecha, frontal estable y natural."),
-            style="CardText.TLabel",wraplength=740,justify="left")
-        self._enrollment_reasons.pack(fill="x",pady=9)
-        controls=ttk.Frame(shell,style="CardBody.TFrame");controls.pack(fill="x")
+            left,text="Paso 1 de 5 · Frontal\nEsperando evaluación de captura",
+            style="CardText.TLabel",wraplength=760,justify="left")
+        self._enrollment_reasons.grid(row=3,column=0,sticky="ew",pady=(6,0))
+
+        right=ttk.Frame(shell,style="CardBody.TFrame",padding=(8,6))
+        right.grid(row=1,column=1,sticky="nsew")
+        right.columnconfigure(0,weight=1)
+        ttk.Label(right,text="PROCESO DE REGISTRO",style="Institution.TLabel").grid(
+            row=0,column=0,sticky="w",pady=(0,4))
+        self._enrollment_step_widgets=[]
+        self._enrollment_pose_photos=[]
+        for index,(pose_name,asset_name) in enumerate(ENROLLMENT_POSES):
+            row=tk.Frame(right,background="#0B1B29",highlightthickness=1,
+                         highlightbackground="#23445E")
+            row.grid(row=index+1,column=0,sticky="ew",pady=2)
+            row.columnconfigure(1,weight=1)
+            number=tk.Label(row,text=str(index+1),width=2,background="#0B1B29",
+                            foreground="#22D3D3",font=("TkDefaultFont",10,"bold"))
+            number.grid(row=0,column=0,padx=(5,3))
+            name=tk.Label(row,text=pose_name,anchor="w",justify="left",
+                          background="#0B1B29",foreground="#F3F6F9",
+                          font=("TkDefaultFont",9))
+            name.grid(row=0,column=1,sticky="ew")
+            photo=tk.PhotoImage(file=str(ENROLLMENT_ASSET_DIR/asset_name))
+            photo=photo.subsample(max(1,photo.width()//62),max(1,photo.height()//62))
+            self._enrollment_pose_photos.append(photo)
+            tk.Label(row,image=photo,background="#D9EFF4",width=62,height=62).grid(
+                row=0,column=2,padx=4,pady=3)
+            state=tk.Label(row,text="○ Pendiente",anchor="w",width=12,
+                           background="#0B1B29",foreground="#B8C5D1",
+                           font=("TkDefaultFont",9))
+            state.grid(row=0,column=3,padx=(2,5))
+            self._enrollment_step_widgets.append((row,number,state))
+
+        guidance=ttk.Frame(right,style="Card.TFrame",padding=8)
+        guidance.grid(row=6,column=0,sticky="ew",pady=(6,0))
+        ttk.Label(guidance,text="RECOMENDACIONES",style="Institution.TLabel").pack(anchor="w")
+        ttk.Label(
+            guidance,style="CardText.TLabel",justify="left",wraplength=300,
+            text=("• Mantenga el rostro dentro del marco.\n"
+                  "• Buena iluminación frontal.\n"
+                  "• Mantenga una distancia adecuada.\n"
+                  "• Evite reflejos fuertes en los lentes.\n"
+                  "• Siga la orientación indicada."),
+        ).pack(anchor="w",pady=(3,0))
+
+        controls=ttk.Frame(shell,style="CardBody.TFrame")
+        controls.grid(row=2,column=0,columnspan=2,sticky="ew",pady=(6,0))
         self._capture_button=ttk.Button(
             controls,text="CAPTURAR MUESTRA",command=self._request_enrollment_capture,
             style="Primary.TButton",
@@ -2080,7 +2198,31 @@ class LocalFaceTkApp:
             self._capture_button.pack(side="right",padx=(6,0))
         ttk.Button(controls,text="CANCELAR",command=self._cancel,
                    style="Secondary.TButton").pack(side="right")
+        self._render_enrollment_steps(0,self._enrollment_target_samples)
         form.protocol("WM_DELETE_WINDOW",self._cancel)
+
+    def _render_enrollment_steps(self, accepted: int, target: int) -> None:
+        """Render DTO-derived states; it never changes enrollment progress."""
+        states=_enrollment_step_states(accepted,target)
+        for index,(row,number,state_label) in enumerate(
+                getattr(self,"_enrollment_step_widgets",())):
+            state=states[index] if index < len(states) else "pending"
+            colors={"completed":("#66D447","✓ Completado"),
+                    "current":("#22D3D3","● Actual"),
+                    "pending":("#B8C5D1","○ Pendiente")}
+            color,text=colors[state]
+            background="#0E2635" if state=="current" else "#0B1B29"
+            row.configure(background=background,highlightbackground=color)
+            number.configure(background=background,foreground=color)
+            state_label.configure(background=background,foreground=color,text=text)
+        for index,label in enumerate(getattr(self,"_enrollment_top_steps",())):
+            state=states[index] if index < len(states) else "pending"
+            foreground={"completed":"#66D447","current":"#07111D",
+                        "pending":"#7C93A8"}[state]
+            background="#22D3D3" if state=="current" else "#10263A"
+            border="#22D3D3" if state=="current" else foreground
+            label.configure(background=background,foreground=foreground,
+                            highlightbackground=border)
 
     def _request_enrollment_capture(self) -> None:
         callback = self._on_capture_enrollment
@@ -2099,6 +2241,11 @@ class LocalFaceTkApp:
         self._enrollment_progress = None
         self._enrollment_quality = None
         self._enrollment_reasons = None
+        self._enrollment_step_widgets = []
+        self._enrollment_top_steps = []
+        self._enrollment_pose_photos = []
+        self._enrollment_progressbar = None
+        self._enrollment_photo = None
         self._capture_button = None
         self._registration_submit_button = None
         if form is not None:
@@ -2274,6 +2421,26 @@ def _enrollment_checklist(accepted: int, target: int) -> str:
         f"{labels[index] if index < len(labels) else f'Muestra {index + 1}'}"
         for index in range(target)
     )
+
+
+def _enrollment_step_states(accepted: int, target: int) -> tuple[str, ...]:
+    """Presentation-only mapping from accepted sample count to five guide rows."""
+    visible_steps=len(ENROLLMENT_POSES)
+    completed=max(0,min(accepted,target,visible_steps))
+    current=min(completed,max(0,min(target,visible_steps)-1))
+    return tuple(
+        "completed" if index < completed else
+        "current" if index == current and completed < target else
+        "pending"
+        for index in range(visible_steps)
+    )
+
+
+def _enrollment_window_dimensions(screen_width: int,screen_height: int) -> tuple[int,int]:
+    """Largest practical enrollment window that remains inside the screen."""
+    usable_width=max(1,screen_width-32)
+    usable_height=max(1,screen_height-48)
+    return (min(1600,usable_width),min(980,usable_height))
 
 
 def _enrollment_progress_bar(accepted: int, target: int) -> str:

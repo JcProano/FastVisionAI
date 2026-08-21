@@ -25,7 +25,7 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         source=inspect.getsource(main)
         self.assertIn("start_network_camera_discovery",source)
         self.assertIn('name="camera-startup-discovery"',source)
-        self.assertIn("if len(available) == 1",source)
+        self.assertIn("if result.selected is not None",source)
         self.assertIn("if tk_enabled",source)
         self.assertNotIn("show_network_form()",source)
 

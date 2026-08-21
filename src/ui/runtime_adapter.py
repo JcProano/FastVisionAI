@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
@@ -33,6 +34,77 @@ from src.engine.runtime.registry import RuntimeRegistry
 from src.engine.scheduler.inference_scheduler import InferenceScheduler
 from src.ui.contracts import RuntimeStatusDTO, VisualFrameDTO
 
+LOGGER = logging.getLogger(__name__)
+
+
+def _log_detection_diagnostic(inference, frame, run_id: str) -> None:
+    """Log scalar detection provenance without mutating the inference result."""
+    if len(inference.detections) == 1:
+        return
+    values = []
+    for index, detection in enumerate(inference.detections):
+        box = detection.bounding_box
+        x1, y1, x2, y2 = (box.x1, box.y1, box.x2, box.y2)
+        if not box.normalized:
+            x1, x2 = x1 / frame.width, x2 / frame.width
+            y1, y2 = y1 / frame.height, y2 / frame.height
+        values.append({
+            "index": index,
+            "confidence": round(detection.confidence, 6),
+            "bbox": (
+                round(x1, 6), round(y1, 6), round(x2, 6), round(y2, 6),
+            ),
+        })
+    LOGGER.debug(
+        "face_detection_diag frame_id=%d frame_ts=%.6f run_id=%s "
+        "detection_count=%d inference_ms=%.3f detections=%s",
+        frame.sequence_id, frame.monotonic_timestamp, run_id,
+        len(inference.detections), inference.metrics.inference_ms, tuple(values),
+    )
+
+
+def _log_enrollment_quality_diagnostic(
+    inference, frame, guided: GuidedCaptureResult, policy: GuidedCapturePolicy,
+) -> None:
+    """Log existing scalar quality/pose values for relevant one-face rejections."""
+    reasons = tuple(reason.value for reason in guided.reasons)
+    relevant = {
+        "low_detection_confidence", "face_too_small",
+        "low_interocular_distance", "pose_not_requested",
+    }
+    if len(inference.detections) != 1 or not relevant.intersection(reasons):
+        return
+    detection = inference.detections[0]
+    box = detection.bounding_box
+    x1, y1, x2, y2 = box.x1, box.y1, box.x2, box.y2
+    if not box.normalized:
+        x1, x2 = x1 / frame.width, x2 / frame.width
+        y1, y2 = y1 / frame.height, y2 / frame.height
+    width, height = max(0.0, x2 - x1), max(0.0, y2 - y1)
+    metrics = guided.quality_metrics
+    score = guided.face_quality_score
+    LOGGER.debug(
+        "enrollment_quality_diag frame_id=%d step=%s face_count=1 "
+        "detection_confidence=%.6f min_detection_confidence=%.6f "
+        "bbox_width=%.6f bbox_height=%.6f bbox_area=%.6f "
+        "face_ratio=%s min_face_ratio=%.6f interocular_ratio=%s "
+        "min_interocular_ratio=%.6f eye_nose_yaw_ratio=%s "
+        "mouth_nose_yaw_ratio=%s expected_pose=%s detected_pose=%s "
+        "quality_score=%s quality_state=%s reasons=%s",
+        frame.sequence_id, guided.requested_pose.value, detection.confidence,
+        policy.min_detection_confidence, width, height, width * height,
+        _diag_float(metrics.relative_face_size), policy.min_relative_face_size,
+        _diag_float(metrics.normalized_interocular_distance),
+        policy.min_interocular_distance, _diag_float(metrics.eye_nose_yaw_ratio),
+        _diag_float(metrics.mouth_nose_yaw_ratio), guided.requested_pose.value,
+        guided.estimated_pose.value, _diag_float(None if score is None else score.total_score),
+        "N/D" if score is None else score.quality_band.value, reasons,
+    )
+
+
+def _diag_float(value: float | None) -> str:
+    return "N/D" if value is None else f"{value:.6f}"
+
 
 class CameraAdapterError(RuntimeError):
     pass
@@ -51,6 +123,7 @@ class ProcessingStep:
     # This is deliberately separate from guided.embedding: the latter is an
     # enrollment sample and is therefore subject to capture cadence/diversity.
     monitoring_embedding: FaceEmbedding | None = None
+    frame_id: int | None = None
 
 
 class UIRuntimeAdapter(Protocol):
@@ -140,6 +213,7 @@ class RealUIRuntimeAdapter:
             inference = self._runtime.infer(
                 self._preprocessor.prepare(frame), InferenceContext(run_id=self._run_id)
             )
+            _log_detection_diagnostic(inference, frame, self._run_id)
             aligned = self._aligner.align_result(inference)
             # The evaluator only asks for an embedding after its enrollment
             # gates have passed.  Cache the result so monitoring can reuse it,
@@ -178,6 +252,7 @@ class RealUIRuntimeAdapter:
                 guided.reasons, aligned_status, confidence, guided.run_id, guided.face_index,
             )
             guided = replace(guided, face_quality_score=score)
+            _log_enrollment_quality_diagnostic(inference, frame, guided, self._policy)
         except Exception as exc:
             raise InferenceAdapterError("biometric inference failed") from exc
         display = frame.image.copy()
@@ -202,7 +277,8 @@ class RealUIRuntimeAdapter:
             if encoded:
                 thumbnail_bytes = payload.tobytes()
         return ProcessingStep(
-            visual, len(inference.detections), guided, thumbnail_bytes, monitoring_embedding
+            visual, len(inference.detections), guided, thumbnail_bytes,
+            monitoring_embedding, frame.sequence_id,
         )
 
     def status(self) -> RuntimeStatusDTO:

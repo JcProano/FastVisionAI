@@ -194,6 +194,7 @@ class EnrollmentProgressDTO:
     quality_score: float | None
     quality_band: str | None
     cancellation_enabled: bool
+    frame_id: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import signal
+import sys
 import threading
 import time
 
@@ -80,6 +81,13 @@ def run(max_frames: int | None = None, max_duration: float | None = None) -> int
 
 
 def main() -> int:
+    # The supported demonstration entry point is the integrated UI. Keep the
+    # historical bounded camera-engine commands available for validation.
+    if not any(option in sys.argv[1:] for option in ("--max-frames", "--max-duration")):
+        if "--config" not in sys.argv[1:]:
+            sys.argv[1:1] = ["--config", "config/local_face_validation.jetson.json"]
+        from src.ui.main import main as ui_main
+        return ui_main()
     args = build_parser().parse_args()
     return run(max_frames=args.max_frames, max_duration=args.max_duration)
 

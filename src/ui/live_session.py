@@ -181,6 +181,7 @@ class LiveFaceSession:
         stay_alive_disconnected: bool = False,
         camera_display_name: str = "N/D", camera_source_type: str = "N/D",
         presentation_frame_sink: Callable[[VisualFrameDTO], object] | None = None,
+        active_frame_max_age_seconds: float = 3.0,
     ) -> None:
         if min(event_queue_size, command_queue_size) <= 0 or close_timeout_seconds <= 0:
             raise ValueError("queue sizes and close timeout must be positive")
@@ -228,6 +229,9 @@ class LiveFaceSession:
         self._camera_display_name = camera_display_name
         self._camera_source_type = camera_source_type
         self._presentation_frame_sink = presentation_frame_sink
+        if active_frame_max_age_seconds <= 0:
+            raise ValueError("active frame maximum age must be positive")
+        self._active_frame_max_age_seconds = float(active_frame_max_age_seconds)
         self._photo_person_id: str | None = None
         self._photo_replace = False
         self._photo_capture_requested = False
@@ -248,6 +252,7 @@ class LiveFaceSession:
         self._metrics_lock = threading.Lock()
         self._started_at = time.monotonic()
         self._frames_received = 0
+        self._last_frame_monotonic: float | None = None
         self._frames_processed = 0
         self._visual_frames_dropped = 0
         self._faces_detected_total = 0
@@ -316,7 +321,12 @@ class LiveFaceSession:
     def active_camera_ready(self) -> bool:
         """Report only the active runtime's health, never discovery probe results."""
         with self._metrics_lock:
-            return self.alive and self._frames_received > 0
+            last_frame = self._last_frame_monotonic
+            return bool(
+                self.alive and last_frame is not None
+                and time.monotonic()-last_frame <= self._active_frame_max_age_seconds
+                and self.adapter.status().camera_state.casefold() == "connected"
+            )
 
     def start_person_photo(self, person_id: str) -> bool:
         accepted = self._command(SessionCommand(
@@ -458,6 +468,7 @@ class LiveFaceSession:
                     except Exception:pass
                 with self._metrics_lock:
                     self._frames_received += 1
+                    self._last_frame_monotonic = time.monotonic()
                     self._frames_processed += 1
                     self._visual_frames_dropped += int(dropped)
                     self._faces_detected_total += step.face_count
@@ -472,7 +483,10 @@ class LiveFaceSession:
                 elif self._plan is not None:
                     if not self.manual_enrollment_capture or self._capture_requested:
                         self._capture_requested = False
-                        self._enrollment_step(step.guided, step.aligned_face_bytes)
+                        self._enrollment_step(
+                            step.guided, step.aligned_face_bytes,
+                            frame_id=step.frame_id, detection_count=step.face_count,
+                        )
                     else:
                         score = step.guided.face_quality_score
                         self._event(EnrollmentProgressDTO(
@@ -482,7 +496,17 @@ class LiveFaceSession:
                             tuple(reason.value for reason in step.guided.reasons),
                             None if score is None else score.total_score,
                             None if score is None else score.quality_band.value, True,
+                            step.frame_id,
                         ))
+                        if "multiple_faces" in {
+                            reason.value for reason in step.guided.reasons
+                        }:
+                            LOGGER.debug(
+                                "enrollment_multiple_faces frame_id=%s detection_count=%d "
+                                "workflow_state=%s accepted_samples=%d current_step=%s",
+                                step.frame_id, step.face_count, self.controller.state.value,
+                                self._plan.accepted_count, self._plan.current.requested_pose.value,
+                            )
                 else:
                     self._monitoring_step(
                         step.face_count, step.guided, step.monitoring_embedding
@@ -635,7 +659,7 @@ class LiveFaceSession:
                     )
                 except Exception:
                     pass
-                LOGGER.info(
+                LOGGER.debug(
                     "face_enrollment_action_requested person_ref=%s civil_status=%s "
                     "gallery_identity_present=%s template_count=%d biometric_payload=omitted",
                     safe_person, civil_status, identity_present, template_count,
@@ -733,6 +757,8 @@ class LiveFaceSession:
                                 "No se puede cambiar la cámara durante una operación sensible.", True)
                     continue
                 try:
+                    with self._metrics_lock:
+                        self._last_frame_monotonic = None
                     opened = self.adapter.switch_camera(command.camera_config)
                     self._camera_id = command.camera_config.name
                     self._camera_display_name = command.camera_config.name
@@ -1162,7 +1188,10 @@ class LiveFaceSession:
             "N/D" if executor is None else executor.policy.policy_version,
         )
 
-    def _enrollment_step(self, guided, aligned_face_bytes: bytes | None = None) -> None:
+    def _enrollment_step(
+        self, guided, aligned_face_bytes: bytes | None = None, *,
+        frame_id: int | None = None, detection_count: int = 0,
+    ) -> None:
         plan = self._plan
         if plan is None:
             return
@@ -1180,7 +1209,7 @@ class LiveFaceSession:
                 plan.accepted_count, plan.target_samples,
                 ("quality_below_enrollment_minimum",),
                 None if score is None else score.total_score,
-                None if score is None else score.quality_band.value, True,
+                None if score is None else score.quality_band.value, True, frame_id,
             ))
             return
         if guided.accepted and guided.embedding is not None and score is not None \
@@ -1200,6 +1229,7 @@ class LiveFaceSession:
                     UIState.ENROLLMENT_CAPTURE, "Mantenga la posición...",
                     plan.accepted_count, plan.target_samples, (), score.total_score,
                     score.quality_band.value, True,
+                    frame_id,
                 ))
                 return
             guided = stable.best_guided
@@ -1233,7 +1263,7 @@ class LiveFaceSession:
                     operator_instruction(plan.current, self.mirrored_source),
                     plan.accepted_count, plan.target_samples, (),
                     None if score is None else score.total_score,
-                    None if score is None else score.quality_band.value, True,
+                    None if score is None else score.quality_band.value, True, frame_id,
                 )
             else:
                 progress = self.controller.add_enrollment_sample(
@@ -1241,16 +1271,25 @@ class LiveFaceSession:
                     "Registro completo" if plan.completed else
                     operator_instruction(plan.current, self.mirrored_source),
                 )
+                progress = replace(progress, frame_id=frame_id)
             self._event(progress)
         else:
-            self._event(EnrollmentProgressDTO(
+            progress = EnrollmentProgressDTO(
                 UIState.ENROLLING,
                 operator_instruction(plan.current, self.mirrored_source),
                 plan.accepted_count,
                 plan.target_samples, tuple(reason.value for reason in guided.reasons),
                 None if score is None else score.total_score,
-                None if score is None else score.quality_band.value, True,
-            ))
+                None if score is None else score.quality_band.value, True, frame_id,
+            )
+            if "multiple_faces" in progress.current_reasons:
+                LOGGER.debug(
+                    "enrollment_multiple_faces frame_id=%s detection_count=%d "
+                    "workflow_state=%s accepted_samples=%d current_step=%s",
+                    frame_id, detection_count, self.controller.state.value,
+                    plan.accepted_count, plan.current.requested_pose.value,
+                )
+            self._event(progress)
         if not plan.completed:
             return
         if self._additional_person_id is not None:

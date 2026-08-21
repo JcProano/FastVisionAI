@@ -32,7 +32,7 @@ class RC22SaasTkLayoutTests(unittest.TestCase):
     def test_registration_guidance_and_progress_are_in_separate_window(self):
         source=inspect.getsource(LocalFaceTkApp._show_enrollment_capture)
         for text in (
-            "REGISTRO FACIAL", "Paso 1/5 — Frontal", "INSTRUCCIONES",
+            "REGISTRO FACIAL", "Paso 1/5 — Frontal", "RECOMENDACIONES",
             "Calidad:", "Muestras:", "CAPTURAR MUESTRA", "CANCELAR",
         ):
             self.assertIn(text, source)

@@ -37,7 +37,8 @@ class RC222FinalDashboardTests(unittest.TestCase):
     def test_enrollment_remains_a_separate_rectangular_window(self):
         self.assertNotIn("REGISTRO FACIAL",self.dashboard)
         self.assertIn('form.title("REGISTRO FACIAL")',self.enrollment)
-        self.assertIn('form.geometry("820x760")',self.enrollment)
+        self.assertIn("_enrollment_window_dimensions",self.enrollment)
+        self.assertNotIn('form.geometry("820x760")',self.enrollment)
         self.assertIn("self._enrollment_video=tk.Canvas",self.enrollment)
         self.assertNotIn("create_oval",self.enrollment)
         self.assertNotIn("VideoCapture",self.enrollment)
