@@ -54,11 +54,13 @@ New bounded contexts follow the Solintsoft vertical-module convention:
 tests. Application operations use one `*UseCase` class per file and are tested
 directly with in-memory port fakes. Existing public imports remain available
 through temporary compatibility facades while each context is migrated.
-Attendance, People, Biometrics, Security and Audit are the migrated slices; see
+Attendance, People, Biometrics, Security, Audit, Backup and Configuration are the
+migrated slices; see
 [ADR 006](docs/adr/006-clean-architecture-migration.md) and
 [ADR 007](docs/adr/007-people-clean-architecture.md), and
 [ADR 008](docs/adr/008-biometrics-clean-architecture.md) and
-[ADR 009](docs/adr/009-security-audit-clean-architecture.md).
+[ADR 009](docs/adr/009-security-audit-clean-architecture.md), and
+[ADR 010](docs/adr/010-backup-configuration-clean-architecture.md).
 
 ## Data flow
 

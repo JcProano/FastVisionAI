@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.core.attendance import AttendanceRepository, SQLiteAttendanceRepository
 from src.core.audit import AuditRepository, SQLiteAuditRepository
+from src.core.configuration import ConfigurationLoader, JSONConfigurationLoader
 from src.core.people import PersonRepository, SQLitePeopleRepository
 from src.core.security import SQLiteUserRepository, UserRepository
 
@@ -18,6 +19,8 @@ PEOPLE = ROOT / "src/core/people"
 BIOMETRICS = ROOT / "src/core/biometrics"
 SECURITY = ROOT / "src/core/security"
 AUDIT = ROOT / "src/core/audit"
+BACKUP = ROOT / "src/core/backup"
+CONFIGURATION = ROOT / "src/core/configuration"
 EXPECTED_ATTENDANCE_USE_CASES = {
     "consume_detection_event.py": "ConsumeAttendanceDetectionUseCase",
     "evaluate_observation.py": "EvaluateAttendanceObservationUseCase",
@@ -58,6 +61,21 @@ EXPECTED_AUDIT_USE_CASES = {
     "record_audit.py": "RecordAuditUseCase",
     "safe_record_audit.py": "SafeRecordAuditUseCase",
     "summarize_audit.py": "SummarizeAuditUseCase",
+}
+EXPECTED_BACKUP_USE_CASES = {
+    "create_backup.py": "CreateBackupUseCase",
+    "prepare_restore.py": "PrepareRestoreUseCase",
+    "restore_backup.py": "RestoreBackupUseCase",
+    "verify_backup.py": "VerifyBackupUseCase",
+}
+EXPECTED_CONFIGURATION_USE_CASES = {
+    "diff_configuration.py": "DiffConfigurationUseCase",
+    "export_configuration.py": "ExportConfigurationUseCase",
+    "get_configuration.py": "GetConfigurationUseCase",
+    "import_configuration.py": "ImportConfigurationUseCase",
+    "reload_configuration.py": "ReloadConfigurationUseCase",
+    "save_configuration.py": "SaveConfigurationUseCase",
+    "validate_configuration.py": "ValidateConfigurationUseCase",
 }
 
 
@@ -356,6 +374,84 @@ class AuditArchitectureBoundaryTests(unittest.TestCase):
 
     def test_each_public_operation_has_its_own_use_case_file(self) -> None:
         assert_expected_use_cases(self, AUDIT, EXPECTED_AUDIT_USE_CASES)
+
+
+class BackupArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            BACKUP,
+            "domain",
+            (
+                "src.core.backup.application",
+                "src.core.backup.infrastructure",
+                "src.engine",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_does_not_depend_on_adapters_or_ui(self) -> None:
+        assert_layer_avoids(
+            self,
+            BACKUP,
+            "application",
+            (
+                "src.core.backup.infrastructure",
+                "src.engine",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_each_public_operation_has_its_own_use_case_file(self) -> None:
+        assert_expected_use_cases(self, BACKUP, EXPECTED_BACKUP_USE_CASES)
+
+
+class ConfigurationArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            CONFIGURATION,
+            "domain",
+            (
+                "src.core.configuration.application",
+                "src.core.configuration.infrastructure",
+                "src.camera",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_does_not_depend_on_adapters_or_ui(self) -> None:
+        assert_layer_avoids(
+            self,
+            CONFIGURATION,
+            "application",
+            (
+                "src.core.configuration.infrastructure",
+                "src.core.configuration.validators",
+                "src.camera",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_legacy_loader_is_only_a_compatibility_alias(self) -> None:
+        self.assertIs(ConfigurationLoader, JSONConfigurationLoader)
+
+    def test_each_public_operation_has_its_own_use_case_file(self) -> None:
+        assert_expected_use_cases(
+            self, CONFIGURATION, EXPECTED_CONFIGURATION_USE_CASES
+        )
 
 
 if __name__ == "__main__":
