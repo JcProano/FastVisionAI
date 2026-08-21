@@ -63,7 +63,7 @@ from src.ui.photo_capture import PersonPhotoController
 from src.ui.photo_capture import AutomaticPhotoPolicy
 from src.ui.video_presentation import VideoPresentation
 from src.ui.web_dashboard import (
-    LatestPresentationFrameStore, WebDashboardController, WebDashboardServer, detect_lan_ip,
+    LatestPresentationFrameStore, WebDashboardContainer, detect_lan_ip,
 )
 from src.ui.web_dashboard.contracts import WebDashboardPolicy
 from src.ui.operational_semantics import operational_presentation_state
@@ -1732,7 +1732,9 @@ def main() -> int:
     web_server=None
     web_policy=configured_web
     if web_policy.enabled:
-        web_controller=WebDashboardController(
+        web_components=WebDashboardContainer.build(
+            web_policy,
+            presentation_frame_store,
             lambda:None if dashboard_coordinator is None else dashboard_coordinator.last_snapshot,
             people=people_search_controller,history=history_controller,
             attendance=attendance_controller,reports=report_controller,
@@ -1780,10 +1782,10 @@ def main() -> int:
             },
             audit=audit_controller, backups=backup_controller,
             configuration=configuration_controller,
+            authorization=security.authorization,
+            server_options={"printer": lambda _message: None},
         )
-        web_server=WebDashboardServer(
-            web_policy,web_controller,presentation_frame_store,printer=lambda _message: None,
-        )
+        web_server=web_components.server
         if not web_server.start():
             LOGGER.warning("Web dashboard did not start; Tk and Runtime continue")
         else:

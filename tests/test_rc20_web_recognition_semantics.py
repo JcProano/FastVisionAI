@@ -1,9 +1,13 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.ui.contracts import MonitoringDTO, UIState
 from src.ui.contracts import EnrollmentProgressDTO, EnrollmentResultDTO
 from src.ui.web_dashboard.controller import WebDashboardController
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def monitoring(state, evaluated, person_id, similarity):
@@ -48,16 +52,15 @@ class RC20WebRecognitionSemanticsTests(unittest.TestCase):
             self.assertFalse(self.controller(dto).api("/api/presentation")["active"])
 
     def test_single_modal_owns_header_photo_content_and_actions(self):
-        page = self.controller(monitoring("UNKNOWN", True, None, None)).render("/").decode()
-        self.assertEqual(page.count('id="modal-overlay"'), 1)
-        self.assertEqual(page.count('id="modal"'), 1)
-        self.assertNotIn('id="enrollment-flow"', page)
-        card = page[page.index('id="modal"'):page.index('</section>', page.index('id="modal"'))]
-        for class_name in ("modal-header", "modal-photo", "modal-content", "modal-actions"):
-            self.assertIn(class_name, card)
-        self.assertIn("position:fixed", page)
-        self.assertIn("z-index:1000", page)
-        self.assertIn("display:flex", page)
+        page = (ROOT / "web/src/components/enrollment-dialog.tsx").read_text(
+            encoding="utf-8"
+        )
+        self.assertEqual(page.count("<DialogContent"), 1)
+        self.assertIn("<DialogHeader", page)
+        self.assertIn("<DialogTitle", page)
+        self.assertIn("<DialogDescription", page)
+        self.assertIn("/api/video.mjpeg", page)
+        self.assertNotIn("dangerouslySetInnerHTML", page)
 
     def test_informative_states_never_become_identity_or_unknown(self):
         for state,title in (("NO_GALLERY","GALERÍA VACÍA"),

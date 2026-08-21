@@ -107,9 +107,6 @@ class RC226WebOperationalModalTests(unittest.TestCase):
             self.assertFalse(value["active"])
             self.assertTrue(value["kind"])
             self.assertTrue(value["status"])
-            page = controller.render("/").decode()
-            self.assertIn('id="modal-overlay"', page)
-            self.assertIn('id="modal-overlay" class="modal-overlay" hidden', page)
 
     def test_no_gallery_and_not_evaluated_are_non_blocking_but_reported(self):
         for state in ("NO_GALLERY", "NOT_EVALUATED"):

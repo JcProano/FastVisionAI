@@ -34,7 +34,7 @@ class WebDashboardTests(unittest.TestCase):
         self.assertTrue(self.server.start())
     def tearDown(self):self.server.close();self.store.close()
     def request(self,method,path):
-        connection=http.client.HTTPConnection("127.0.0.1",self.port,timeout=2);connection.request(method,path);response=connection.getresponse();body=response.read();headers=dict(response.getheaders());connection.close();return response.status,headers,body
+        connection=http.client.HTTPConnection("127.0.0.1",self.port,timeout=2);connection.request(method,path);response=connection.getresponse();body=response.read();headers={key.lower():value for key,value in response.getheaders()};connection.close();return response.status,headers,body
 
     def test_dashboard_json_pages_disconnected_camera_and_no_biometrics(self):
         status,headers,body=self.request("GET","/api/dashboard");self.assertEqual(status,200)
@@ -44,13 +44,15 @@ class WebDashboardTests(unittest.TestCase):
         for forbidden in ("embedding","template","password","hash","salt","rgb_bytes","person_id"):self.assertNotIn(forbidden,lowered)
         for path in ("/","/people","/history","/attendance","/reports","/system"):
             page_status,_,_=self.request("GET",path);self.assertIn(page_status,(200,503))
-        self.assertEqual(headers["X-Content-Type-Options"],"nosniff");self.assertIn("Content-Security-Policy",headers);self.assertEqual(headers["Cache-Control"],"no-store");self.assertNotIn("Access-Control-Allow-Origin",headers)
+        self.assertEqual(headers["x-content-type-options"],"nosniff");self.assertIn("content-security-policy",headers);self.assertEqual(headers["cache-control"],"no-store");self.assertNotIn("access-control-allow-origin",headers)
 
     def test_methods_directory_and_thumbnail_traversal_are_rejected(self):
         for method in ("POST","PUT","DELETE","PATCH","OPTIONS"):
-            status,headers,_=self.request(method,"/");self.assertEqual(status,405);self.assertEqual(headers["Allow"],"GET")
-        for path in ("/api/thumbnails/..%2Fsecret","/api/thumbnails/%2Fetc%2Fpasswd","/api/thumbnails/not-a-token","/unknown"):
+            status,headers,_=self.request(method,"/");self.assertEqual(status,405);self.assertEqual(headers["allow"],"GET")
+        for path in ("/api/thumbnails/..%2Fsecret","/api/thumbnails/%2Fetc%2Fpasswd","/api/thumbnails/not-a-token"):
             self.assertEqual(self.request("GET",path)[0],404)
+        status,_,body=self.request("GET","/unknown")
+        self.assertEqual(status,200);self.assertIn(b'<div id="root">',body)
 
     def test_no_frame_available_and_capacity_one_owned_copy(self):
         self.assertEqual(self.request("GET","/api/video.mjpeg")[0],503)

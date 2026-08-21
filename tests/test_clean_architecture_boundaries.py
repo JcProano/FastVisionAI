@@ -21,6 +21,7 @@ SECURITY = ROOT / "src/core/security"
 AUDIT = ROOT / "src/core/audit"
 BACKUP = ROOT / "src/core/backup"
 CONFIGURATION = ROOT / "src/core/configuration"
+WEB_DASHBOARD = ROOT / "src/core/web_dashboard"
 EXPECTED_ATTENDANCE_USE_CASES = {
     "consume_detection_event.py": "ConsumeAttendanceDetectionUseCase",
     "evaluate_observation.py": "EvaluateAttendanceObservationUseCase",
@@ -76,6 +77,15 @@ EXPECTED_CONFIGURATION_USE_CASES = {
     "reload_configuration.py": "ReloadConfigurationUseCase",
     "save_configuration.py": "SaveConfigurationUseCase",
     "validate_configuration.py": "ValidateConfigurationUseCase",
+}
+EXPECTED_WEB_DASHBOARD_USE_CASES = {
+    "begin_capture.py": "BeginWebEnrollmentCaptureUseCase",
+    "cancel_enrollment.py": "CancelWebEnrollmentUseCase",
+    "confirm_enrollment.py": "ConfirmWebEnrollmentUseCase",
+    "get_enrollment_status.py": "GetWebEnrollmentStatusUseCase",
+    "select_photo.py": "SelectWebEnrollmentPhotoUseCase",
+    "start_enrollment.py": "StartWebEnrollmentUseCase",
+    "submit_person.py": "SubmitWebEnrollmentPersonUseCase",
 }
 
 
@@ -454,6 +464,37 @@ class ConfigurationArchitectureBoundaryTests(unittest.TestCase):
         )
 
 
+class WebDashboardArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            WEB_DASHBOARD,
+            "domain",
+            (
+                "src.core.web_dashboard.application",
+                "src.ui",
+                "fastapi",
+                "uvicorn",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_does_not_depend_on_web_or_device_adapters(self) -> None:
+        assert_layer_avoids(
+            self,
+            WEB_DASHBOARD,
+            "application",
+            ("src.ui", "fastapi", "uvicorn", "sqlite3", "cv2", "numpy"),
+        )
+
+    def test_each_public_operation_has_its_own_use_case_file(self) -> None:
+        assert_expected_use_cases(
+            self, WEB_DASHBOARD, EXPECTED_WEB_DASHBOARD_USE_CASES
+        )
+
+
 class ContainerArchitectureBoundaryTests(unittest.TestCase):
     def test_context_containers_never_depend_on_presentation(self) -> None:
         for context in (
@@ -464,6 +505,7 @@ class ContainerArchitectureBoundaryTests(unittest.TestCase):
             AUDIT,
             BACKUP,
             CONFIGURATION,
+            WEB_DASHBOARD,
         ):
             path = context / "container.py"
             with self.subTest(context=context.name):

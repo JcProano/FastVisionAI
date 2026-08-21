@@ -75,10 +75,13 @@ People fue migrado como segundo slice en
 [ADR 008](008-biometrics-clean-architecture.md). Security y Audit se migraron en
 [ADR 009](009-security-audit-clean-architecture.md), y Backup y Configuration en
 [ADR 010](010-backup-configuration-clean-architecture.md). Los containers de los
-siete contextos se extrajeron en
-[ADR 011](011-bounded-context-containers.md). La fase restante es:
+siete contextos iniciales se extrajeron en
+[ADR 011](011-bounded-context-containers.md). La presentación web y su flujo de
+enrolamiento se separaron en [ADR 012](012-fastapi-react-web-dashboard.md). La
+fase restante es:
 
-1. Separar presentación Tk y web de los controladores/casos de uso compartidos.
+1. Continuar reduciendo la composición histórica de la presentación Tk sin
+   volver a introducir reglas de negocio en UI.
 
 ## Controles
 

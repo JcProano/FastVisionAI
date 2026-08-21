@@ -31,6 +31,10 @@ Cada container interpreta únicamente la configuración de su contexto, valida r
 y valores, selecciona adaptadores y devuelve un grafo de dependencias listo para la
 presentación. Sus factories concretas se pueden reemplazar explícitamente en tests.
 
+El flujo de enrolamiento web agregó posteriormente `WebEnrollmentContainer`.
+Este octavo container solo compone estado y casos de uso del contexto web; FastAPI,
+Uvicorn, React y el controlador de presentación permanecen fuera de `src/core`.
+
 `src/ui/main.py` conserva la coordinación global y la creación de controladores de
 presentación, pero delega al container correspondiente la construcción de políticas,
 repositorios y servicios. Ningún container puede importar `src.ui`.
@@ -56,7 +60,7 @@ invertir la regla de dependencias.
 
 `tests/test_clean_architecture_containers.py` prueba la composición mediante factories
 falsas, sin levantar UI ni infraestructura real. La regla estática de arquitectura
-inspecciona los siete `container.py` y prohíbe dependencias hacia presentación.
+inspecciona los ocho `container.py` y prohíbe dependencias hacia presentación.
 
 Las pruebas históricas continúan entrando por los builders públicos de
 `src/ui/main.py`, lo que comprueba la compatibilidad del bootstrap.

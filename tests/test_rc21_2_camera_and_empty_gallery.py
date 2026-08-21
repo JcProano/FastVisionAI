@@ -10,7 +10,7 @@ from src.ui.camera_selection_window import CameraSelectionWindow
 from src.ui.operational_semantics import (
     OperationalPresentationState, operational_presentation_state,
 )
-from src.ui.web_dashboard.controller import WebDashboardController, _modal_html
+from src.ui.web_dashboard.controller import WebDashboardController
 
 
 def empty_gallery_face() -> MonitoringDTO:
@@ -56,8 +56,6 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         self.assertEqual(value["title"],"PERSONA NO REGISTRADA")
         self.assertFalse(value["active"])
         self.assertNotIn("CANDIDATO BIOMÉTRICO",str(value))
-        modal=_modal_html(value)
-        self.assertEqual(modal, "")
         controller.action("/api/presentation/ignore",{})
         self.assertFalse(controller.api("/api/presentation")["active"])
 

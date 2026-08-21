@@ -2,3 +2,5 @@
 # GStreamer/CUDA support instead of installing this wheel.
 opencv-python>=4.8,<6
 ultralytics>=8,<9
+fastapi==0.141.1
+uvicorn==0.52.4
