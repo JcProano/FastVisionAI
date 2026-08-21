@@ -71,21 +71,20 @@ infraestructura.
 ## Fases siguientes
 
 People fue migrado como segundo slice en
-[ADR 007](007-people-clean-architecture.md). Las fases restantes son:
+[ADR 007](007-people-clean-architecture.md) y Biometrics como tercero en
+[ADR 008](008-biometrics-clean-architecture.md). Las fases restantes son:
 
-1. Separar `recognition`, `gallery`, `enrollment` y calibración como contexto
-   Biometrics; OpenCV/ONNX serán adaptadores de infraestructura.
-2. Migrar Security, Audit, Backup y Configuration con puertos explícitos.
-3. Reducir `src/ui/main.py` a un composition root que construya contenedores por
+1. Migrar Security, Audit, Backup y Configuration con puertos explícitos.
+2. Reducir `src/ui/main.py` a un composition root que construya contenedores por
    contexto, siguiendo los containers de Solintsoft sin introducir un framework DI.
-4. Separar presentación Tk y web de los controladores/casos de uso compartidos.
+3. Separar presentación Tk y web de los controladores/casos de uso compartidos.
 
 ## Controles
 
 `tests/test_clean_architecture_boundaries.py` inspecciona imports y falla si dominio
 o aplicación vuelven a depender de UI, SQLite, OpenCV, NumPy o infraestructura.
-También exige que las cuatro operaciones públicas de Attendance permanezcan como
-casos de uso independientes, con máximo una clase `*UseCase` por archivo.
+También fija los casos de uso públicos de cada contexto migrado y exige como máximo
+una clase `*UseCase` por archivo.
 
 ## Consecuencias
 

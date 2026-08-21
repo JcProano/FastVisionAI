@@ -13,6 +13,7 @@ from src.core.people import PersonRepository, SQLitePeopleRepository
 ROOT = Path(__file__).resolve().parents[1]
 ATTENDANCE = ROOT / "src/core/attendance"
 PEOPLE = ROOT / "src/core/people"
+BIOMETRICS = ROOT / "src/core/biometrics"
 EXPECTED_ATTENDANCE_USE_CASES = {
     "consume_detection_event.py": "ConsumeAttendanceDetectionUseCase",
     "evaluate_observation.py": "EvaluateAttendanceObservationUseCase",
@@ -28,6 +29,13 @@ EXPECTED_PEOPLE_USE_CASES = {
     "get_person.py": "GetPersonUseCase",
     "search_people.py": "SearchPeopleUseCase",
     "update_person.py": "UpdatePersonUseCase",
+}
+EXPECTED_BIOMETRICS_USE_CASES = {
+    "calibrate_biometrics.py": "CalibrateBiometricsUseCase",
+    "enroll_identity.py": "EnrollIdentityUseCase",
+    "export_gallery.py": "ExportGalleryUseCase",
+    "import_gallery.py": "ImportGalleryUseCase",
+    "recognize_face.py": "RecognizeFaceUseCase",
 }
 
 
@@ -179,6 +187,55 @@ class PeopleArchitectureBoundaryTests(unittest.TestCase):
                 discovered[path.name] = use_cases[0]
 
         self.assertEqual(discovered, EXPECTED_PEOPLE_USE_CASES)
+
+
+class BiometricsArchitectureBoundaryTests(unittest.TestCase):
+    def test_domain_is_framework_and_adapter_independent(self) -> None:
+        assert_layer_avoids(
+            self,
+            BIOMETRICS,
+            "domain",
+            (
+                "src.core.biometrics.application",
+                "src.core.biometrics.infrastructure",
+                "src.engine",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_application_depends_only_on_biometrics_domain(self) -> None:
+        assert_layer_avoids(
+            self,
+            BIOMETRICS,
+            "application",
+            (
+                "src.core.biometrics.infrastructure",
+                "src.engine",
+                "src.ui",
+                "sqlite3",
+                "cv2",
+                "numpy",
+            ),
+        )
+
+    def test_each_public_application_operation_has_its_own_use_case_file(self) -> None:
+        discovered: dict[str, str] = {}
+        for path in (BIOMETRICS / "application").glob("*.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            use_cases = [
+                node.name
+                for node in tree.body
+                if isinstance(node, ast.ClassDef) and node.name.endswith("UseCase")
+            ]
+            with self.subTest(path=path.name):
+                self.assertLessEqual(len(use_cases), 1)
+            if use_cases:
+                discovered[path.name] = use_cases[0]
+
+        self.assertEqual(discovered, EXPECTED_BIOMETRICS_USE_CASES)
 
 
 if __name__ == "__main__":

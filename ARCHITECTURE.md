@@ -54,9 +54,10 @@ New bounded contexts follow the Solintsoft vertical-module convention:
 tests. Application operations use one `*UseCase` class per file and are tested
 directly with in-memory port fakes. Existing public imports remain available
 through temporary compatibility facades while each context is migrated.
-Attendance and People are the first migrated slices; see
+Attendance, People and Biometrics are the first migrated slices; see
 [ADR 006](docs/adr/006-clean-architecture-migration.md) and
-[ADR 007](docs/adr/007-people-clean-architecture.md).
+[ADR 007](docs/adr/007-people-clean-architecture.md), and
+[ADR 008](docs/adr/008-biometrics-clean-architecture.md).
 
 ## Data flow
 
@@ -156,6 +157,12 @@ keeps optional decisions separate and disabled by default. No template fusion
 or identity-level aggregation is performed. Optional JSON+NPZ development
 persistence is explicit, integrity-checked and transactionally imported, but
 is neither encrypted nor production-ready.
+
+Recognition, enrollment, calibration and gallery transfer are now explicit
+application use cases in the Biometrics bounded context. Their policies and safe
+results live in `domain`; numerical vector operations, the existing gallery model
+and JSON+NPZ serialization remain infrastructure adapters. The historical engine
+services are compatibility facades and no longer own those workflow rules.
 
 `EnrollmentService` is a transactional layer above `FaceGallery`. It validates
 quality, provenance, exact duplicates and optional pairwise bounds before any
