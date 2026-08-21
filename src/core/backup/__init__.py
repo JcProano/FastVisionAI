@@ -9,3 +9,4 @@ from .maintenance import ApplicationMaintenanceCoordinator
 from .restore import RestoreService
 from .service import BackupService
 from .sqlite_snapshot import SQLiteSnapshotProvider
+from .container import BackupComponents, BackupContainer

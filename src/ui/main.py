@@ -19,14 +19,12 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.action_executor import ActionExecutor, ActionExecutorPolicy
 from src.engine.decision_orchestrator import (
     DecisionOrchestrator, DecisionOrchestratorPolicy,
 )
-from src.engine.gallery import FaceGallery, FaceMatcher, MatchPolicy
+from src.engine.gallery import FaceGallery
 from src.engine.gallery.persistence import GalleryPersistence
-from src.engine.recognition import RecognitionPolicy, RecognitionService
 from src.engine.identification_policy import (
     IdentificationPolicy, IdentificationPolicyEngine,
 )
@@ -96,13 +94,16 @@ from src.ui.identification import SQLiteThumbnailIdentityInfoProvider
 from src.core.person_database import (
     PersonRepository, SQLiteIdentityDataProvider, PersonStatus,
 )
+from src.core.people import PeopleContainer
 from src.ui.person_enrollment import PersonEnrollmentCoordinator
 from src.ui.person_profile import PersonProfileController
 from src.ui.person_profile.tk_window import PersonProfileWindow
 from src.core.detection_events import DetectionEventRepository, DetectionEventService
 from src.ui.detection_history import DetectionHistoryController
 from src.ui.detection_history.tk_window import DetectionHistoryWindow
-from src.core.attendance import AttendancePolicy, AttendanceRepository, AttendanceService
+from src.core.attendance import (
+    AttendanceContainer, AttendanceRepository, AttendanceService,
+)
 from src.ui.attendance import AttendanceUIController
 from src.ui.attendance.tk_window import AttendanceHistoryWindow
 from src.ui.action_adapters import (
@@ -116,13 +117,13 @@ from src.ui.people.search_controller import (
     AdvancedPeopleSearchController, PeopleSearchPolicy,
 )
 from src.core.security import (
-    AuthenticationPolicy, AuthenticationService, AuthenticatedSessionManager,
-    AuthorizationEngine, AuthorizationPermission, PasswordHasher, PasswordPolicy, UserRepository,
-    AuthenticatedSessionDTO, UserDTO, UserRole, UserStatus,
+    AuthenticationService, AuthenticatedSessionManager, AuthorizationEngine,
+    AuthorizationPermission, PasswordHasher, UserRepository,
+    AuthenticatedSessionDTO, SecurityContainer, UserDTO, UserRole, UserStatus,
 )
 from src.ui.security import AuthorizationController, LoginWindow, SecurityController
 from src.core.backup import (
-    ApplicationMaintenanceCoordinator, BackupArchive, BackupService,
+    ApplicationMaintenanceCoordinator, BackupArchive, BackupContainer, BackupService,
     BackupSourceCatalog, RestoreService, SQLiteSnapshotProvider,
 )
 from src.ui.backup import BackupController, BackupWindow
@@ -133,12 +134,13 @@ from src.core.system_health import (
 )
 from src.ui.system_health import SystemHealthController, SystemHealthWindow
 from src.core.configuration import (
-    ConfigurationLoader, ConfigurationProfile, ConfigurationService,
+    ConfigurationContainer, ConfigurationLoader, ConfigurationService,
     ConfigurationValidator,
 )
 from src.ui.configuration import ConfigurationController, ConfigurationWindow
 from src.core.time_provider import Clock
-from src.core.audit import AuditCallbackAdapter, AuditRepository, AuditService
+from src.core.audit import AuditCallbackAdapter, AuditContainer, AuditRepository, AuditService
+from src.core.biometrics.container import BiometricsContainer
 from src.ui.audit import AuditController, AuditLogWindow
 
 LOGGER = logging.getLogger(__name__)
@@ -370,63 +372,36 @@ def build_security(
     settings: dict[str, object], project_root: Path = PROJECT_ROOT,
 ) -> SecurityController:
     """Build fail-closed operator security with a project-relative users.db."""
-    configuration = settings.get("security", {})
-    if not isinstance(configuration, dict):
-        raise ValueError("security configuration must be an object")
-    enabled = bool(configuration.get("enabled", True))
-    sessions = AuthenticatedSessionManager(
-        float(configuration.get("session_idle_timeout_seconds", 1800))
+    components = SecurityContainer.build(
+        settings,
+        project_root,
+        repository_type=UserRepository,
+        hasher_type=PasswordHasher,
+        session_type=AuthenticatedSessionManager,
+        authentication_type=AuthenticationService,
+        authorization_type=AuthorizationEngine,
     )
-    engine = AuthorizationEngine(enabled=enabled)
-    authorization = AuthorizationController(engine, sessions, enabled=enabled)
-    if not enabled:
-        # This is the sole explicit authorization bypass. No database is touched.
-        repository = UserRepository(project_root / ".security-disabled-unused.db")
-        hasher = PasswordHasher(PasswordPolicy())
-        authentication = AuthenticationService(repository, hasher)
-        return SecurityController(authentication, sessions, authorization, enabled=False)
-    configured = Path(str(configuration.get("database_path", "data/fastvision/users.db")))
-    if configured.is_absolute() or ".." in configured.parts:
-        raise ValueError("security database path must be project-relative and safe")
-    root = project_root.resolve(); database = (root / configured).resolve()
-    if root not in database.parents:
-        raise ValueError("security database path escapes project root")
-    repository = UserRepository(database)
-    appliance=configuration.get("appliance_mode",False)
-    if type(appliance) is not bool:raise ValueError("security.appliance_mode must be boolean")
-    if not appliance:
-        repository.initialize()  # normal login/bootstrap remains fail-closed
-    password_policy = PasswordPolicy(
-        int(configuration.get("minimum_password_length", 10)),
-        int(configuration.get("maximum_password_length", 128)),
+    authorization = AuthorizationController(
+        components.authorization,
+        components.sessions,
+        enabled=components.enabled,
     )
-    hasher = PasswordHasher(password_policy)
-    authentication = AuthenticationService(repository, hasher, AuthenticationPolicy(
-        int(configuration.get("max_failed_attempts", 5)),
-        int(configuration.get("lockout_seconds", 300)),
-    ))
     return SecurityController(
-        authentication, sessions, authorization, enabled=True,
-        bootstrap_enabled=bool(configuration.get("bootstrap_admin_enabled", True)),
+        components.authentication,
+        components.sessions,
+        authorization,
+        enabled=components.enabled,
+        bootstrap_enabled=components.bootstrap_enabled,
     )
 
 
 def build_audit(settings: dict[str, object], project_root: Path = PROJECT_ROOT) -> AuditService:
-    configuration=settings.get("audit",{})
-    if not isinstance(configuration,dict):raise ValueError("audit configuration must be an object")
-    enabled=bool(configuration.get("enabled",False))
-    configured=Path(str(configuration.get("database_path","data/fastvision/audit.db")))
-    if configured.is_absolute() or ".." in configured.parts:raise ValueError("audit database path must be project-relative and safe")
-    root=project_root.resolve();database=(root/configured).resolve()
-    if root not in database.parents:raise ValueError("audit database path escapes project root")
-    repository=AuditRepository(database,timeout=float(configuration.get("sqlite_timeout_seconds",5.0)))
-    service=AuditService(repository,enabled=enabled,metadata_max_items=int(configuration.get("metadata_max_items",20)),metadata_value_max_length=int(configuration.get("metadata_value_max_length",256)),message_max_length=int(configuration.get("message_max_length",500)))
-    if enabled:
-        try:repository.initialize()
-        except Exception:
-            LOGGER.warning("Administrative audit initialization failed; audit remains unavailable")
-            service.enabled=False
-    return service
+    return AuditContainer.build(
+        settings,
+        project_root,
+        repository_type=AuditRepository,
+        service_type=AuditService,
+    ).service
 
 
 @dataclass(frozen=True, slots=True)
@@ -533,89 +508,32 @@ def build_controller(
     person_repository: PersonRepository | None = None,
 ) -> LocalFaceUIController:
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    enrollment_config = config["enrollment"]
-    recognition_config = config["recognition"]
-    if not isinstance(recognition_config, dict):
-        raise ValueError("recognition configuration must be an object")
-    gallery = gallery if gallery is not None else FaceGallery()
-    automatic_recognition = bool(recognition_config.get("automatic_decision_enabled"))
-    if not automatic_recognition and (
-        recognition_config.get("match_threshold") is not None
-        or recognition_config.get("ambiguity_margin") is not None
-    ):
-        raise ValueError("disabled recognition requires null threshold and ambiguity_margin")
-    calibration_invalid = False
-    if automatic_recognition:
-        from src.engine.calibration import validate_approved_calibration
-        calibration_file = config.get("recognition_calibration_file")
-        try:
-            if not isinstance(calibration_file, str) or not calibration_file.strip():
-                raise ValueError("missing calibration file")
-            calibration_path = Path(calibration_file)
-            if not calibration_path.is_absolute():
-                calibration_path = PROJECT_ROOT / calibration_path
-            validate_approved_calibration(calibration_path, gallery, recognition_config)
-        except Exception:
-            LOGGER.error("RECONOCIMIENTO DESACTIVADO — CALIBRACIÓN INVÁLIDA")
-            automatic_recognition = False
-            calibration_invalid = True
-    matcher = FaceMatcher(
-        top_k=int(config["matcher"]["top_k"]),
-        policy=MatchPolicy(automatic_decision_enabled=False, threshold=None),
-    )
-    recognition_policy = RecognitionPolicy(
-        automatic_decision_enabled=automatic_recognition,
-        match_threshold=(recognition_config.get("match_threshold")
-                         if automatic_recognition else None),
-        ambiguity_margin=(recognition_config.get("ambiguity_margin")
-                          if automatic_recognition else None),
-        top_k=int(recognition_config["top_k"]),
-        minimum_quality_score=recognition_config["minimum_quality_score"],
-        allow_low_quality=bool(recognition_config["allow_low_quality"]),
-        policy_name=str(recognition_config["policy_name"]),
-        policy_version=str(recognition_config["policy_version"]),
-    )
-    recognition_service = RecognitionService(gallery, matcher, recognition_policy)
-    policy = EnrollmentPolicy(
-        min_templates=int(enrollment_config["min_templates"]),
-        max_templates=int(enrollment_config["max_templates"]),
-        allow_low_quality=bool(enrollment_config["allow_low_quality"]),
-        min_pairwise_similarity=enrollment_config["min_pairwise_similarity"],
-        max_pairwise_similarity=enrollment_config["max_pairwise_similarity"],
-        reject_exact_duplicates=bool(enrollment_config["reject_exact_duplicates"]),
-    )
-    service = EnrollmentService(gallery, policy)
+    components = BiometricsContainer.build(config, PROJECT_ROOT, gallery)
     workflow = LocalEnrollmentWorkflow(
-        gallery, service, target_samples=int(config["guided_capture"]["target_samples"])
+        components.gallery,
+        components.enrollment,
+        target_samples=int(config["guided_capture"]["target_samples"]),
     )
     coordinator = (None if person_repository is None else
-                   PersonEnrollmentCoordinator(person_repository, gallery, workflow))
+                   PersonEnrollmentCoordinator(
+                       person_repository, components.gallery, workflow
+                   ))
     return LocalFaceUIController(
         ExperimentalRecognitionSession(
-            recognition_service, calibration_invalid=calibration_invalid), workflow, coordinator,
+            components.recognition,
+            calibration_invalid=components.calibration_invalid,
+        ),
+        workflow,
+        coordinator,
     )
 
 
 def build_person_repository(
     settings: dict[str, object], project_root: Path = PROJECT_ROOT,
 ) -> PersonRepository | None:
-    database = settings.get("person_database", {})
-    if not isinstance(database, dict):
-        raise ValueError("person_database configuration must be an object")
-    if not bool(database.get("enabled", False)):
-        return None
-    configured = Path(str(database.get("path", "data/fastvision/people.db")))
-    if configured.is_absolute():
-        raise ValueError("person database path must be relative")
-    root = project_root.resolve()
-    resolved = (root / configured).resolve()
-    if root not in resolved.parents:
-        raise ValueError("person database path escapes project root")
-    repository = PersonRepository(
-        resolved, timeout=float(database.get("timeout_seconds", 5.0))
+    return PeopleContainer.build_repository(
+        settings, project_root, repository_type=PersonRepository
     )
-    repository.initialize()
-    return repository
 
 
 def build_detection_event_service(
@@ -649,67 +567,21 @@ def build_attendance(
     settings: dict[str, object], people: PersonRepository | None,
     project_root: Path = PROJECT_ROOT, authorization=None,
 ) -> AttendanceUIController | None:
-    configuration = settings.get("attendance", {})
-    if not isinstance(configuration, dict):
-        raise ValueError("attendance configuration must be an object")
-    # Return before even resolving a path: disabled mode must not access the database.
-    if not bool(configuration.get("enabled", False)) or people is None:
-        return None
-    if (settings.get("profile_name") == "local_face_validation_prod"
-            and bool(configuration.get("automatic_attendance_enabled", False))
-            and not isinstance(configuration.get("work_schedule"), dict)):
-        raise ValueError("production automatic attendance requires explicit work_schedule")
-    configured = Path(str(
-        configuration.get("database_path", "data/fastvision/attendance.db")
-    ))
-    if configured.is_absolute():
-        raise ValueError("attendance database path must be relative")
-    root = project_root.resolve()
-    resolved = (root / configured).resolve()
-    if root not in resolved.parents:
-        raise ValueError("attendance database path escapes project root")
-    repository = AttendanceRepository(
-        resolved, timeout=float(configuration.get("timeout_seconds", 5.0)),
+    components = AttendanceContainer.build(
+        settings,
+        people,
+        project_root,
+        repository_type=AttendanceRepository,
+        service_type=AttendanceService,
     )
-    try:
-        repository.initialize()
-    except Exception:
-        LOGGER.warning("Attendance initialization failed; attendance remains disabled")
+    if components is None:
         return None
-    policy = AttendancePolicy(
-        enabled=True,
-        automatic_attendance_enabled=bool(
-            configuration.get("automatic_attendance_enabled", False)
-        ),
-        minimum_stable_observations=int(
-            configuration.get("minimum_stable_observations", 3)
-        ),
-        minimum_observation_seconds=float(
-            configuration.get("minimum_observation_seconds", 2)
-        ),
-        duplicate_event_cooldown_seconds=float(
-            configuration.get("duplicate_event_cooldown_seconds", 60)
-        ),
-        minimum_time_between_check_in_out_seconds=float(
-            configuration.get("minimum_time_between_check_in_out_seconds", 60)
-        ),
-        allow_manual_events=bool(configuration.get("allow_manual_events", True)),
-        policy_name=str(configuration.get("policy_name", "attendance_manual_validation")),
-        policy_version=str(configuration.get("policy_version", "1.0")),
-        automatic_mode=str(configuration.get("automatic_mode", "TOGGLE_DAILY")),
-        timezone=str((configuration.get("work_schedule") or {}).get(
-            "timezone", "America/Guayaquil")),
-        workday_start=str((configuration.get("work_schedule") or {}).get(
-            "workday_start", "08:00")),
-        workday_end=str((configuration.get("work_schedule") or {}).get(
-            "workday_end", "17:00")),
-        late_after=str((configuration.get("work_schedule") or {}).get(
-            "late_after", "08:10")),
-        overtime_after=str((configuration.get("work_schedule") or {}).get(
-            "overtime_after", "17:00")),
+    return AttendanceUIController(
+        components.service,
+        components.repository,
+        people,
+        authorization,
     )
-    service = AttendanceService(repository, people, policy)
-    return AttendanceUIController(service, repository, people, authorization)
 
 
 def build_stability_tracker(settings: dict[str, object]) -> StabilityTracker | None:
@@ -1044,16 +916,13 @@ def main() -> int:
         raise ValueError("configuration_manager configuration must be an object")
     configuration_service = configuration_controller = None
     if bool(manager_settings.get("enabled", False)):
-        try:
-            profile = ConfigurationProfile(str(manager_settings.get("profile", "DEVELOPMENT")))
-        except ValueError as exc:
-            raise ValueError("configuration profile is unavailable") from exc
-        if profile not in {ConfigurationProfile.DEVELOPMENT,ConfigurationProfile.PRODUCTION}:
-            raise ValueError("configuration profile is unavailable")
-        loader = ConfigurationLoader(ConfigurationValidator(PROJECT_ROOT))
-        configuration_service = ConfigurationService(
-            loader, args.config, profile,
-            backup_count=int(manager_settings.get("backup_count", 10)),
+        configuration_service = ConfigurationContainer.build_service(
+            args.config,
+            manager_settings,
+            PROJECT_ROOT,
+            loader_type=ConfigurationLoader,
+            validator_type=ConfigurationValidator,
+            service_type=ConfigurationService,
         )
         settings = configuration_service.current().as_mapping()
     else:
@@ -1624,24 +1493,22 @@ def main() -> int:
     backup_settings = settings.get("backup", {})
     if not isinstance(backup_settings, dict):
         raise ValueError("backup configuration must be an object")
-    for key in ("maximum_archive_size_bytes", "maximum_file_count",
-                "operation_history_limit"):
-        if int(backup_settings.get(key, 0)) <= 0:
-            raise ValueError(f"backup {key} must be positive")
-    for key in ("restore_timeout_seconds", "sqlite_snapshot_timeout_seconds"):
-        if float(backup_settings.get(key, 0)) <= 0:
-            raise ValueError(f"backup {key} must be positive")
-    maintenance = ApplicationMaintenanceCoordinator()
-    catalog = BackupSourceCatalog(PROJECT_ROOT, settings)
-    backup_archive = BackupArchive(
-        maximum_archive_size_bytes=int(backup_settings["maximum_archive_size_bytes"]),
-        maximum_file_count=int(backup_settings["maximum_file_count"]),
+    backup_components = BackupContainer.build(
+        settings,
+        PROJECT_ROOT,
+        backup_audit_callback=audit("backup"),
+        restore_audit_callback=audit("restore"),
+        maintenance_type=ApplicationMaintenanceCoordinator,
+        catalog_type=BackupSourceCatalog,
+        archive_type=BackupArchive,
+        snapshot_type=SQLiteSnapshotProvider,
+        backup_service_type=BackupService,
+        restore_service_type=RestoreService,
     )
-    snapshots = SQLiteSnapshotProvider(
-        float(backup_settings["sqlite_snapshot_timeout_seconds"])
-    )
-    backup_service = BackupService(catalog, backup_archive, snapshots, maintenance,audit_callback=audit("backup"))
-    restore_service = RestoreService(catalog, backup_archive, snapshots, maintenance,audit_callback=audit("restore"))
+    maintenance = backup_components.maintenance
+    catalog = backup_components.catalog
+    backup_service = backup_components.backup_service
+    restore_service = backup_components.restore_service
 
     def quiesce_for_restore() -> None:
         completed = threading.Event(); failure: list[BaseException] = []

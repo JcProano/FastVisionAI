@@ -16,7 +16,6 @@ class AuditService:
         message_max_length=500,
     ) -> None:
         self.repository = repository
-        self.enabled = enabled
         self.metadata_max_items = metadata_max_items
         self.metadata_value_max_length = metadata_value_max_length
         self.message_max_length = message_max_length
@@ -28,6 +27,17 @@ class AuditService:
             message_max_length=message_max_length,
         )
         self._safe_record = SafeRecordAuditUseCase(self._record)
+        self._enabled = enabled
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = bool(value)
+        if hasattr(self, "_record"):
+            self._record.enabled = self._enabled
 
     def record(self, action, entity_type, **arguments):
         return self._record.execute(action, entity_type, **arguments)

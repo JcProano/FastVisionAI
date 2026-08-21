@@ -454,5 +454,27 @@ class ConfigurationArchitectureBoundaryTests(unittest.TestCase):
         )
 
 
+class ContainerArchitectureBoundaryTests(unittest.TestCase):
+    def test_context_containers_never_depend_on_presentation(self) -> None:
+        for context in (
+            ATTENDANCE,
+            PEOPLE,
+            BIOMETRICS,
+            SECURITY,
+            AUDIT,
+            BACKUP,
+            CONFIGURATION,
+        ):
+            path = context / "container.py"
+            with self.subTest(context=context.name):
+                imports = imported_modules(path)
+                violations = {
+                    module
+                    for module in imports
+                    if module == "src.ui" or module.startswith("src.ui.")
+                }
+                self.assertEqual(violations, set())
+
+
 if __name__ == "__main__":
     unittest.main()

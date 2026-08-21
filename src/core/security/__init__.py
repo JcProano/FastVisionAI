@@ -9,6 +9,7 @@ from .infrastructure import (
     SQLiteUserRepository,
     ScryptPasswordHasher,
 )
+from .container import SecurityComponents, SecurityContainer
 
 # Temporary compatibility names used by composition and historical tests.
 AuthenticatedSessionManager = InMemoryAuthenticatedSessionManager

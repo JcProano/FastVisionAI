@@ -14,6 +14,7 @@ from .domain.policy import AttendancePolicy
 from .domain.ports import AttendanceRepositoryPort, LocalDayClockPort, PersonReaderPort
 from .infrastructure import SQLiteAttendanceRepository
 from .service import AttendanceService
+from .container import AttendanceComponents, AttendanceContainer
 
 # Temporary compatibility name used by existing composition and tests.
 AttendanceRepository = SQLiteAttendanceRepository

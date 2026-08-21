@@ -74,11 +74,11 @@ People fue migrado como segundo slice en
 [ADR 007](007-people-clean-architecture.md) y Biometrics como tercero en
 [ADR 008](008-biometrics-clean-architecture.md). Security y Audit se migraron en
 [ADR 009](009-security-audit-clean-architecture.md), y Backup y Configuration en
-[ADR 010](010-backup-configuration-clean-architecture.md). Las fases restantes son:
+[ADR 010](010-backup-configuration-clean-architecture.md). Los containers de los
+siete contextos se extrajeron en
+[ADR 011](011-bounded-context-containers.md). La fase restante es:
 
-1. Reducir `src/ui/main.py` a un composition root que construya contenedores por
-   contexto, siguiendo los containers de Solintsoft sin introducir un framework DI.
-2. Separar presentación Tk y web de los controladores/casos de uso compartidos.
+1. Separar presentación Tk y web de los controladores/casos de uso compartidos.
 
 ## Controles
 

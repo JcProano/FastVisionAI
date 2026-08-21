@@ -446,3 +446,27 @@ existentes durante la migración progresiva. Los snapshots son profundamente
 inmutables. IO y validación se realizan fuera del `RLock`; `current()` no hace IO.
 El guardado usa temporal en el mismo directorio, `fsync`, revalidación, backup
 independiente en `config/backups/` y `os.replace()`.
+
+# Clean Architecture — containers por contexto
+
+Los bounded contexts migrados (`attendance`, `people`, `biometrics`, `security`,
+`audit`, `backup` y `configuration`) exponen un `container.py` como composition root
+local. Cada container valida su configuración y construye políticas, puertos y
+adaptadores; `src/ui/main.py` conserva únicamente la composición global y los
+controladores de presentación.
+
+```text
+src/ui/main.py
+  ├─ AttendanceContainer  → use cases + SQLiteAttendanceRepository
+  ├─ PeopleContainer      → SQLitePeopleRepository
+  ├─ BiometricsContainer  → recognition + enrollment adapters
+  ├─ SecurityContainer    → authentication + session + authorization
+  ├─ AuditContainer       → record use case + SQLiteAuditRepository
+  ├─ BackupContainer      → backup/restore + shared maintenance graph
+  └─ ConfigurationContainer → lifecycle use cases + JSON/atomic storage
+```
+
+Los containers pueden conocer infraestructura, pero no presentación. Dominio y
+application mantienen sus reglas anteriores: dependen hacia adentro y cada operación
+pública tiene un caso de uso dedicado. La decisión completa está documentada en
+[ADR 011](docs/adr/011-bounded-context-containers.md).
