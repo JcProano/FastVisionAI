@@ -26,6 +26,7 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         source=inspect.getsource(main)
         self.assertIn("start_network_camera_discovery",source)
         self.assertIn('name="camera-startup-discovery"',source)
+        self.assertEqual(source.count("start_network_camera_discovery()"),1)
         finish=source[source.index("def finish_startup_camera_discovery"):
                       source.index("def start_network_camera_discovery")]
         self.assertIn("camera_selection.refresh()",finish)

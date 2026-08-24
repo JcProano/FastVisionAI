@@ -85,6 +85,11 @@ def _video_presentation_settings(settings: dict[str, object]) -> dict[str, objec
         "crop_left_percent": float(crop.get("left_percent", 0)),
         "crop_right_percent": float(crop.get("right_percent", 0)),
     }
+
+
+def capture_mirror_from_presentation(settings: dict[str,object]) -> bool:
+    """Single capture/UI mirror source; disconnected guided flags are ignored."""
+    return bool(_video_presentation_settings(settings)["mirror_horizontal"])
 from src.ui.identification import (
     IdentificationPopupPolicy, IdentificationPresentationController,
     PeopleThumbnailIdentityInfoProvider,
@@ -877,7 +882,7 @@ def build_dashboard_configuration(settings: dict[str, object]) -> DashboardConfi
     )
     return DashboardConfigurationDTO(
         safe_camera_source, str(camera.get("resolution", "N/D")),
-        bool(guided.get("mirrored_source", False)), str(guided.get("policy_file", "N/D")),
+        capture_mirror_from_presentation(settings), str(guided.get("policy_file", "N/D")),
         str(quality.get("profile_file", "N/D")), int(guided["target_samples"]),
         bool(persistence.get("enabled_by_default", False)),
         bool(persistence.get("load_on_startup", False)),
@@ -1097,17 +1102,21 @@ def main() -> int:
     current_camera_source = {"id": None}
     initial_camera_name = "Sin cámara seleccionada"
     initial_camera_type = "N/D"
+    inference_mirrored = capture_mirror_from_presentation(settings)
+    guided_policy = replace(
+        load_guided_profile(Path(settings["guided_capture"]["policy_file"])).policy,
+        mirrored_source=inference_mirrored,
+    )
     if args.mock_camera:
         adapter = MockUIRuntimeAdapter(
             delay=float(settings["worker"]["mock_frame_delay_seconds"]),
             thumbnail_capture_enabled=thumbnail_manager.enabled,
         )
     else:
-        policy_path = Path(settings["guided_capture"]["policy_file"])
         quality_path = Path(settings["quality"]["profile_file"])
         adapter = RealUIRuntimeAdapter(
             source=None,
-            policy=load_guided_profile(policy_path).policy,
+            policy=guided_policy,
             quality_profile_path=quality_path,
             cancel_event=cancel_event,
             thumbnail_capture_enabled=thumbnail_manager.enabled,
@@ -1117,7 +1126,7 @@ def main() -> int:
         event_queue_size=int(settings["queues"]["event_size"]),
         command_queue_size=int(settings["queues"]["command_size"]),
         close_timeout_seconds=float(settings["worker"]["close_timeout_seconds"]),
-        mirrored_source=bool(settings["guided_capture"].get("mirrored_source", False)),
+        mirrored_source=inference_mirrored,
         persistence=persistence,
         manifest_path=manifest_path,
         archive_path=archive_path,
@@ -1153,6 +1162,9 @@ def main() -> int:
         camera_display_name=initial_camera_name,
         camera_source_type=initial_camera_type,
         presentation_frame_sink=presentation_frame_store.publish,
+        active_frame_max_age_seconds=float(
+            settings.get("system_health",{}).get("stale_frame_seconds",3.0)
+        ),
     )
     people_window: dict[str, PeopleManagerWindow] = {}
     configuration_window: dict[str, object] = {}
@@ -1764,7 +1776,6 @@ def main() -> int:
             UIState.ERROR, UIErrorCode.PERSISTENCE_ERROR, GALLERY_SYNC_ERROR, True,
         ))
     session.start()
-    start_network_camera_discovery()
     app.poll_session(session, int(settings["worker"]["ui_poll_interval_ms"]))
     if args.mock_auto_enroll:
         mock_form = validate_registration_form(

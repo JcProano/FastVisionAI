@@ -17,7 +17,7 @@ from src.engine.enrollment import EnrollmentPolicy, EnrollmentService
 from src.engine.gallery import FaceGallery
 from src.engine.gallery.persistence import GalleryPersistence
 from src.ui import tk_app
-from src.ui.tk_app import ENROLLMENT_ASSET_DIR, ENROLLMENT_POSE_ASSETS
+from src.ui.tk_app import ENROLLMENT_ASSET_DIR, ENROLLMENT_POSES
 from src.validation.guided_face_capture import load_guided_profile
 
 
@@ -98,8 +98,8 @@ class RC2217GuidedEnrollmentTests(unittest.TestCase):
         self.assertEqual(checklist.count("PENDIENTE"), 2)
 
     def test_five_fixed_pose_assets_exist(self):
-        self.assertEqual(len(ENROLLMENT_POSE_ASSETS), 5)
-        for _label, filename in ENROLLMENT_POSE_ASSETS:
+        self.assertEqual(len(ENROLLMENT_POSES), 5)
+        for _label, filename in ENROLLMENT_POSES:
             path = ENROLLMENT_ASSET_DIR / filename
             self.assertTrue(path.is_file())
             self.assertGreater(path.stat().st_size, 10_000)

@@ -100,6 +100,7 @@ class MockUIRuntimeAdapter:
         return ProcessingStep(
             visual, count, guided, thumbnail_bytes,
             guided.embedding if count == 1 else None,
+            self.sequence,
         )
 
     def status(self) -> RuntimeStatusDTO:
