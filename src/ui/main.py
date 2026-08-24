@@ -1091,47 +1091,12 @@ def main() -> int:
     cancel_event = threading.Event()
     presentation_frame_store=LatestPresentationFrameStore()
     camera_discovery_config = parse_discovery_config(settings["camera"])
-    preferred_source_id = camera_discovery_config.preferred_source
-    camera_discovery = CameraSourceDiscovery(
-        camera_discovery_config,
-        # Saved network endpoints are probed after UI construction so their
-        # bounded timeouts never freeze Tk startup.
-        probe_network_sources=False,
-    )
-    initial_selection = None
+    # Startup is always camera-free. Saved/preferred sources remain available in
+    # the selector, but only an explicit user action activates one.
     initial_selection_result = None
-    if (camera_discovery_config.preferred_source is not None
-            or camera_discovery_config.source == "auto"):
-        initial_selection_result = CameraSelectionController(camera_discovery).refresh()
-        initial_selection = initial_selection_result.selected
-    initial_source = camera_discovery_config.source
-    if initial_selection is not None:
-        initial_source = camera_config_for_source(initial_selection, camera_discovery_config).source
-    elif initial_source == "auto" or preferred_source_id is not None:
-        # Deliberately invalid local index: the app remains DISCONNECTED until selection.
-        initial_source = camera_discovery_config.scan_indices + 10_000
-    explicit_legacy_source = (
-        preferred_source_id is None and camera_discovery_config.source != "auto"
-    )
-    current_camera_source = {"id": (
-        initial_selection.source_id if initial_selection is not None else
-        f"v4l2:{initial_source}" if isinstance(initial_source, int)
-        and explicit_legacy_source else None
-    )}
-    initial_camera_name = (
-        initial_selection.display_name if initial_selection is not None else
-        f"Cámara de video #{initial_source}" if isinstance(initial_source, int)
-        and explicit_legacy_source else
-        "Cámara RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else
-        "Cámara HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
-        "Sin cámara seleccionada"
-    )
-    initial_camera_type = (
-        "DroidCam-OBS" if initial_selection is not None and initial_selection.details.get("virtual") else
-        "V4L2" if isinstance(initial_source, int) and explicit_legacy_source else
-        "HTTP/MJPEG" if isinstance(initial_source, str) and initial_source.lower().startswith(("http://", "https://")) else
-        "RTSP" if isinstance(initial_source, str) and initial_source.lower().startswith("rtsp://") else "N/D"
-    )
+    current_camera_source = {"id": None}
+    initial_camera_name = "Sin cámara seleccionada"
+    initial_camera_type = "N/D"
     if args.mock_camera:
         adapter = MockUIRuntimeAdapter(
             delay=float(settings["worker"]["mock_frame_delay_seconds"]),
@@ -1141,7 +1106,7 @@ def main() -> int:
         policy_path = Path(settings["guided_capture"]["policy_file"])
         quality_path = Path(settings["quality"]["profile_file"])
         adapter = RealUIRuntimeAdapter(
-            source=initial_source,
+            source=None,
             policy=load_guided_profile(policy_path).policy,
             quality_profile_path=quality_path,
             cancel_event=cancel_event,
@@ -1176,10 +1141,10 @@ def main() -> int:
             settings["guided_capture"].get("manual_capture", True)
         ),
         enrollment_minimum_quality_score=float(
-            settings["guided_capture"].get("minimum_quality_score", 75.0)
+            settings["guided_capture"].get("minimum_quality_score", 55.0)
         ),
         enrollment_stability_frames=int(
-            settings["guided_capture"].get("stability_frames", 3)
+            settings["guided_capture"].get("stability_frames", 2)
         ),
         profile_photo_after_enrollment=True,
         photo_controller=photo_controller,
@@ -1433,18 +1398,8 @@ def main() -> int:
         )
 
     def finish_startup_camera_discovery() -> None:
-        """Apply startup choice after bounded network probes complete."""
-        result = camera_selection.refresh()
-        available = tuple(source for source in result.sources if source.available)
-        if not available:
-            return
-        if len(available) == 1:
-            source = available[0]
-            if current_camera_source["id"] != source.source_id:
-                use_camera(source)
-            return
-        if tk_enabled:
-            open_camera_selection()
+        """Refresh choices without selecting or opening a camera at startup."""
+        camera_selection.refresh()
 
     def start_network_camera_discovery() -> None:
         """Probe saved network sources concurrently without blocking the UI."""

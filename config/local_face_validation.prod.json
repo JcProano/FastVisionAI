@@ -60,11 +60,11 @@
   },
   "guided_capture": {
     "manual_capture": false,
-    "minimum_quality_score": 75,
-    "stability_frames": 3,
+    "minimum_quality_score": 55,
+    "stability_frames": 2,
     "target_samples": 5,
     "policy_file": "config/guided_capture.dev.json",
-    "mirrored_source": true
+    "mirrored_source": false
   },
   "quality": {
     "profile_file": "config/face_quality.dev.json"

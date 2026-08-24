@@ -495,7 +495,7 @@ class LiveFaceSessionTests(unittest.TestCase):
             "Mire directamente a la cámara",
             "Gire ligeramente el rostro hacia la izquierda",
             "Gire ligeramente el rostro hacia la derecha",
-            "Mantenga otra posición frontal estable",
+            "Mire al frente y manténgase quieto",
             "Mantenga una posición natural",
         ])
 

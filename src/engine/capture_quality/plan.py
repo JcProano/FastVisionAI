@@ -23,7 +23,7 @@ DEFAULT_STEPS = (
     # The RGB evaluator has no vertical pitch category. This is a second frontal
     # stability/diversity step rather than an unverifiable "look up" instruction.
     CapturePlanStep("frontal_stable", CapturePose.FRONTAL,
-                    "Mantenga otra posición frontal estable"),
+                    "Mire al frente y manténgase quieto"),
     CapturePlanStep("natural", CapturePose.FRONTAL, "Mantenga una posición natural"),
 )
 

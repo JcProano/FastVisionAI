@@ -6,6 +6,7 @@ import unittest
 from src.ui.contracts import MonitoringDTO, UIState
 from src.ui.identification import IdentificationPresentationController
 from src.ui.main import main
+from src.ui.runtime_adapter import RealUIRuntimeAdapter
 from src.ui.camera_selection_window import CameraSelectionWindow
 from src.ui.operational_semantics import (
     OperationalPresentationState, operational_presentation_state,
@@ -25,9 +26,25 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         source=inspect.getsource(main)
         self.assertIn("start_network_camera_discovery",source)
         self.assertIn('name="camera-startup-discovery"',source)
-        self.assertIn("if len(available) == 1",source)
-        self.assertIn("if tk_enabled",source)
+        finish=source[source.index("def finish_startup_camera_discovery"):
+                      source.index("def start_network_camera_discovery")]
+        self.assertIn("camera_selection.refresh()",finish)
+        self.assertNotIn("use_camera(",finish)
+        self.assertNotIn("open_camera_selection(",finish)
         self.assertNotIn("show_network_form()",source)
+
+    def test_real_runtime_starts_without_a_camera_manager(self):
+        source=inspect.getsource(main)
+        construction=source[source.index("adapter = RealUIRuntimeAdapter"):
+                            source.index("session = LiveFaceSession")]
+        self.assertIn("source=None",construction)
+        adapter_source=inspect.getsource(RealUIRuntimeAdapter)
+        initializer=adapter_source[adapter_source.index("def __init__"):
+                                   adapter_source.index("def open")]
+        switch=adapter_source[adapter_source.index("def switch_camera"):
+                              adapter_source.index("def retry_camera")]
+        self.assertNotIn("CameraManager(",initializer)
+        self.assertIn("CameraManager(config",switch)
 
     def test_session_selection_does_not_persist_implicitly(self):
         source=inspect.getsource(main)

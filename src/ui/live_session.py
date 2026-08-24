@@ -173,7 +173,7 @@ class LiveFaceSession:
         application_event_bus: ApplicationEventBus | None = None,
         identification_presentation: IdentificationPresentationController | None = None,
         manual_enrollment_capture: bool = False,
-        enrollment_minimum_quality_score: float = 75.0,
+        enrollment_minimum_quality_score: float = 55.0,
         enrollment_stability_frames: int = 1,
         profile_photo_after_enrollment: bool = False,
         photo_controller: PersonPhotoController | None = None,
