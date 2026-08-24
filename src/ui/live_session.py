@@ -173,7 +173,7 @@ class LiveFaceSession:
         application_event_bus: ApplicationEventBus | None = None,
         identification_presentation: IdentificationPresentationController | None = None,
         manual_enrollment_capture: bool = False,
-        enrollment_minimum_quality_score: float = 75.0,
+        enrollment_minimum_quality_score: float = 55.0,
         enrollment_stability_frames: int = 1,
         profile_photo_after_enrollment: bool = False,
         photo_controller: PersonPhotoController | None = None,
@@ -433,9 +433,9 @@ class LiveFaceSession:
                             "No se pudo preparar el motor biométrico.", False)
                 return
             if not opened:
-                self._error(UIErrorCode.CAMERA_ERROR,
-                            "Cámara desconectada. Use Buscar cámaras para seleccionar otra.", True)
                 if not self._stay_alive_disconnected:
+                    self._error(UIErrorCode.CAMERA_ERROR,
+                                "No se pudo abrir la cámara", False)
                     return
             self._event(self._safe_status())
             while not self._stop.is_set():
@@ -448,11 +448,14 @@ class LiveFaceSession:
                 )
                 try:
                     step = self.adapter.process(requested)
-                except CameraAdapterError:
+                except CameraAdapterError as exc:
                     self._event(self._safe_status())
-                    self._error(UIErrorCode.CAMERA_ERROR,
-                                "La cámara no está disponible; se aplicó su política de reconexión.",
-                                True)
+                    if "not_selected" not in str(exc):
+                        self._error(
+                            UIErrorCode.CAMERA_ERROR,
+                            "La cámara no está disponible; se aplicó su política de reconexión.",
+                            True,
+                        )
                     continue
                 except InferenceAdapterError:
                     self._error(UIErrorCode.INFERENCE_ERROR,

@@ -77,7 +77,7 @@ class GuidedCapturePolicy:
             self.pose_ambiguity_tolerance, self.min_sample_interval_seconds,
         )):
             raise ValueError("guided-capture limits must be finite and non-negative")
-        if not self.frontal_max_yaw_ratio < self.slight_turn_min_yaw_ratio:
+        if not self.frontal_max_yaw_ratio <= self.slight_turn_min_yaw_ratio:
             raise ValueError("frontal and turned pose ranges must not overlap")
         if self.slight_turn_max_yaw_ratio < self.slight_turn_min_yaw_ratio:
             raise ValueError("slight turn limits are invalid")

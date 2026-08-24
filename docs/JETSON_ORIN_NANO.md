@@ -11,6 +11,11 @@
 
 Crear un `venv`, instalar solo dependencias compatibles y colocar los modelos en `models/face/` y `models/face_embedding/`. No versionar pesos ni `data/`.
 
+El runtime web requiere FastAPI/Uvicorn pero no Node.js. Los assets React ya
+compilados bajo `src/ui/web_dashboard/static/` deben incluirse en el artefacto de
+despliegue. Si se modifica `web/`, ejecutar `npm ci && npm run build` en la etapa
+de build (CI o estación de desarrollo), no en la Jetson de producción.
+
 Validar primero:
 
 ```bash
@@ -24,4 +29,3 @@ venv/bin/python -m src.ui.main --config config/local_face_validation.prod.json -
 ```
 
 Para CSI se añadirá posteriormente un source GStreamer sin modificar los contratos de Camera Service. TensorRT/DeepStream no están integrados en este RC. Verifique permisos de cámara, disponibilidad de modelos, memoria y backend OpenCV antes de iniciar.
-

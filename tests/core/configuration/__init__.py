@@ -1,0 +1,1 @@
+"""Configuration bounded-context tests."""

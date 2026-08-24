@@ -28,11 +28,11 @@
     "policy_version": "1.0",
     "timeout_seconds": 5.0,
     "work_schedule": {
-      "timezone": "America/Guayaquil",
-      "workday_start": "08:00",
-      "workday_end": "17:00",
       "late_after": "08:10",
-      "overtime_after": "17:00"
+      "overtime_after": "17:00",
+      "timezone": "America/Guayaquil",
+      "workday_end": "17:00",
+      "workday_start": "08:00"
     }
   },
   "audit": {
@@ -63,10 +63,10 @@
     "auto_discovery": true,
     "network_sources": [
       {
-        "id": "network-9d954832-7fd0-4cd5-81fe-3eefd87a7306",
-        "name": "Jc",
+        "id": "network-ca694588-a67d-4ba3-971a-930345be237d",
+        "name": "Android",
         "type": "NETWORK_HTTP",
-        "url": "http://192.168.1.3:4747/video"
+        "url": "http://192.168.1.10:4747/video"
       }
     ],
     "preferred_source": null,
@@ -74,9 +74,6 @@
     "source": 0
   },
   "config_schema_version": 1,
-  "data_namespace": {
-    "root": "data/ui_validation"
-  },
   "configuration_manager": {
     "allow_export": true,
     "allow_import": true,
@@ -90,10 +87,13 @@
     "initial_height": 720,
     "initial_width": 1100,
     "metrics_refresh_ms": 250,
-    "refresh_seconds": 5,
-    "statistics_refresh_seconds": 10,
     "minimum_height": 600,
-    "minimum_width": 820
+    "minimum_width": 820,
+    "refresh_seconds": 5,
+    "statistics_refresh_seconds": 10
+  },
+  "data_namespace": {
+    "root": "data/ui_validation"
   },
   "decision_orchestrator": {
     "allow_attendance_proposal": false,
@@ -125,10 +125,10 @@
   },
   "guided_capture": {
     "manual_capture": false,
-    "minimum_quality_score": 75,
-    "stability_frames": 3,
-    "mirrored_source": true,
+    "minimum_quality_score": 55,
+    "mirrored_source": false,
     "policy_file": "config/guided_capture.dev.json",
+    "stability_frames": 2,
     "target_samples": 5
   },
   "identification_policy": {
@@ -176,16 +176,16 @@
     "enabled_by_default": false,
     "load_on_startup": false
   },
-  "photo_capture": {
-    "mode": "automatic",
-    "stability_frames": 5,
-    "countdown_seconds": 3,
-    "minimum_quality_score": 75
-  },
   "person_database": {
     "enabled": true,
     "path": "data/ui_validation/people.db",
     "timeout_seconds": 5.0
+  },
+  "photo_capture": {
+    "countdown_seconds": 3,
+    "minimum_quality_score": 75,
+    "mode": "automatic",
+    "stability_frames": 5
   },
   "profile_name": "local_face_validation_dev",
   "profile_version": "1.0",
@@ -226,20 +226,6 @@
     "session_idle_timeout_seconds": 1800,
     "skip_login_for_local_validation": true
   },
-  "web_dashboard": {
-    "enabled": false,
-    "host": "127.0.0.1",
-    "port": 8080,
-    "open_browser_on_start": false,
-    "allow_remote_lan": false,
-    "video_max_fps": 10,
-    "video_jpeg_quality": 75,
-    "max_stream_clients": 3
-  },
-  "ui": {
-    "startup_mode": "TK",
-    "tk_enabled": true
-  },
   "stability": {
     "enabled": true,
     "maximum_gap_seconds": 0.75,
@@ -265,6 +251,20 @@
     "jpeg_quality": 90,
     "replace_existing": false,
     "width": 224
+  },
+  "ui": {
+    "startup_mode": "TK",
+    "tk_enabled": true
+  },
+  "web_dashboard": {
+    "allow_remote_lan": false,
+    "enabled": false,
+    "host": "127.0.0.1",
+    "max_stream_clients": 3,
+    "open_browser_on_start": false,
+    "port": 8080,
+    "video_jpeg_quality": 75,
+    "video_max_fps": 10
   },
   "worker": {
     "close_timeout_seconds": 5.0,

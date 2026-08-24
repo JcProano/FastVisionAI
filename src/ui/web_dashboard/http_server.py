@@ -1,193 +1,193 @@
-"""Bounded standard-library HTTP/MJPEG server for a trusted local network."""
+"""Uvicorn lifecycle adapter for the embedded FastAPI dashboard."""
+
 from __future__ import annotations
-import json
+
 import logging
 import socket
 import threading
 import time
-import secrets
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlsplit
+
+import uvicorn
 
 from .contracts import WebDashboardPolicy
+from .fastapi_app import create_fastapi_app
+from .session_store import InMemoryWebSessionStore
 
-LOGGER=logging.getLogger(__name__)
-SECURITY_HEADERS={
-    "X-Content-Type-Options":"nosniff",
-    "Content-Security-Policy":"default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'",
-    "Referrer-Policy":"no-referrer",
-}
-
-
-class _BoundedHTTPServer(ThreadingHTTPServer):
-    daemon_threads=True
-    allow_reuse_address=True
+LOGGER = logging.getLogger(__name__)
 
 
 class WebDashboardServer:
-    def __init__(self,policy:WebDashboardPolicy,controller,frame_store,*,browser_open=webbrowser.open,printer=print) -> None:
-        self.policy=policy;self.controller=controller;self.frame_store=frame_store
-        self.browser_open=browser_open;self.printer=printer;self._httpd=None;self._thread=None
-        self._closing=threading.Event();self._streams=threading.BoundedSemaphore(policy.max_stream_clients)
-        self._lock=threading.Lock()
-        self._sessions={};self._sessions_lock=threading.Lock()
+    """Preserve the existing lifecycle while delegating HTTP to FastAPI/Uvicorn."""
+
+    def __init__(
+        self,
+        policy: WebDashboardPolicy,
+        controller,
+        frame_store,
+        *,
+        browser_open=webbrowser.open,
+        printer=print,
+    ) -> None:
+        self.policy = policy
+        self.controller = controller
+        self.frame_store = frame_store
+        self.browser_open = browser_open
+        self.printer = printer
+        self._closing = threading.Event()
+        self._streams = threading.BoundedSemaphore(policy.max_stream_clients)
+        self._session_store = InMemoryWebSessionStore()
+        self._lock = threading.RLock()
+        self._server: uvicorn.Server | None = None
+        self._thread: threading.Thread | None = None
+        self._socket: socket.socket | None = None
+        self._thread_error: BaseException | None = None
+        self.app = create_fastapi_app(
+            policy,
+            controller,
+            frame_store,
+            closing=self._closing,
+            streams=self._streams,
+            sessions=self._session_store,
+        )
 
     @property
-    def running(self)->bool:return self._thread is not None and self._thread.is_alive() and not self._closing.is_set()
-    @property
-    def local_url(self)->str:return f"http://127.0.0.1:{self.policy.port}"
+    def running(self) -> bool:
+        return (
+            self._thread is not None
+            and self._thread.is_alive()
+            and self._server is not None
+            and self._server.started
+            and not self._closing.is_set()
+        )
 
-    def start(self)->bool:
+    @property
+    def local_url(self) -> str:
+        return f"http://127.0.0.1:{self.policy.port}"
+
+    def start(self) -> bool:
         with self._lock:
-            if self.running:return True
-            if not self.policy.enabled:return False
+            if self.running:
+                return True
+            if not self.policy.enabled:
+                return False
             self._closing.clear()
-            try:self._httpd=_BoundedHTTPServer((self.policy.host,self.policy.port),self._handler())
+            self._thread_error = None
+            try:
+                self._socket = _listening_socket(
+                    self.policy.host, self.policy.port
+                )
             except OSError as exc:
-                self._httpd=None;LOGGER.warning("Web dashboard unavailable; Runtime may continue; exception_type=%s",type(exc).__name__);return False
-            self._thread=threading.Thread(target=self._httpd.serve_forever,name="fastvision-web",daemon=True);self._thread.start()
+                LOGGER.warning(
+                    "Web dashboard unavailable; Runtime may continue; "
+                    "exception_type=%s",
+                    type(exc).__name__,
+                )
+                return False
+            config = uvicorn.Config(
+                self.app,
+                host=self.policy.host,
+                port=self.policy.port,
+                log_level="warning",
+                access_log=False,
+                lifespan="off",
+                timeout_keep_alive=5,
+                timeout_graceful_shutdown=2,
+                limit_concurrency=64,
+            )
+            self._server = uvicorn.Server(config)
+            self._thread = threading.Thread(
+                target=self._serve,
+                name="fastvision-web",
+                daemon=True,
+            )
+            self._thread.start()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if self.running:
+                break
+            if self._thread is None or not self._thread.is_alive():
+                break
+            time.sleep(0.01)
+        if not self.running:
+            self.close()
+            return False
         self._announce()
         if self.policy.open_browser_on_start:
-            try:self.browser_open(self.local_url)
-            except Exception:LOGGER.warning("Default browser could not be opened safely")
+            try:
+                self.browser_open(self.local_url)
+            except Exception:
+                LOGGER.warning("Default browser could not be opened safely")
         return True
 
-    def close(self)->None:
+    def close(self) -> None:
         with self._lock:
-            if self._closing.is_set():return
-            self._closing.set();server=self._httpd;thread=self._thread
-        if server is not None:
-            try:server.shutdown()
-            except Exception:pass
-            try:server.server_close()
-            except Exception:pass
-        if thread is not None and thread is not threading.current_thread():thread.join(2.0)
-        with self._lock:self._httpd=None;self._thread=None
+            if self._closing.is_set() and self._thread is None:
+                return
+            self._closing.set()
+            server = self._server
+            thread = self._thread
+            listening_socket = self._socket
+            if server is not None:
+                server.should_exit = True
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(3.0)
+        if listening_socket is not None:
+            try:
+                listening_socket.close()
+            except OSError:
+                pass
+        self._session_store.close()
+        with self._lock:
+            self._server = None
+            self._thread = None
+            self._socket = None
 
-    def _announce(self)->None:
+    def _serve(self) -> None:
+        server = self._server
+        listening_socket = self._socket
+        if server is None or listening_socket is None:
+            return
+        try:
+            server.run(sockets=[listening_socket])
+        except BaseException as exc:
+            self._thread_error = exc
+            LOGGER.warning(
+                "Web dashboard stopped unexpectedly; exception_type=%s",
+                type(exc).__name__,
+            )
+
+    def _announce(self) -> None:
         self.printer("FASTVISION AI WEB DASHBOARD")
         self.printer(f"Local: {self.local_url}")
-        address=detect_lan_ip()
-        if address:self.printer(f"Red: http://{address}:{self.policy.port}")
-
-    def _handler(self):
-        owner=self
-        class Handler(BaseHTTPRequestHandler):
-            server_version="FastVisionWeb/1"
-            sys_version=""
-            def log_message(self,format,*args):LOGGER.debug("Web request: "+format,*args)
-            def do_GET(self):
-                split=urlsplit(self.path);path=unquote(split.path)
-                try:
-                    if path=="/api/session":return self._session()
-                    if path=="/api/video/status":return self._json(200,owner.frame_store.status())
-                    if path=="/api/events":return self._events()
-                    if path.startswith("/api/") and not path.startswith("/api/thumbnails/") and path != "/api/video.mjpeg":
-                        return self._json(200,owner.controller.api(path,split.query))
-                    if path=="/api/video.mjpeg":return self._stream()
-                    if path.startswith("/api/thumbnails/"):
-                        token=path.removeprefix("/api/thumbnails/")
-                        value=owner.controller.thumbnail(token)
-                        if value is None:return self._error(404,"Recurso no disponible")
-                        return self._bytes(200,value[0],value[1],sensitive=True)
-                    return self._bytes(200,"text/html; charset=utf-8",owner.controller.render(path,split.query),sensitive=True)
-                except KeyError:return self._error(404,"Página no disponible")
-                except PermissionError:return self._error(403,"Acceso denegado")
-                except Exception:
-                    LOGGER.warning("Web request failed safely; path=%s",path);return self._error(503,"Servicio temporalmente no disponible")
-            def do_HEAD(self):return self._method_not_allowed()
-            def do_POST(self):return self._mutate()
-            def do_PUT(self):return self._method_not_allowed()
-            def do_DELETE(self):return self._mutate()
-            def do_PATCH(self):return self._mutate()
-            def do_OPTIONS(self):return self._method_not_allowed()
-            def _method_not_allowed(self):
-                self.send_response(405);self.send_header("Allow","GET");self._security(True);self.end_headers()
-            def _error(self,status,message):return self._bytes(status,"application/json; charset=utf-8",json.dumps({"error":message},ensure_ascii=False).encode(),sensitive=True)
-            def _json(self,status,value):return self._bytes(status,"application/json; charset=utf-8",json.dumps(value,ensure_ascii=False,separators=(",",":"),default=str).encode(),sensitive=True)
-            def _session(self):
-                token=secrets.token_urlsafe(32);cookie=secrets.token_urlsafe(24)
-                with owner._sessions_lock:owner._sessions[cookie]=token
-                self.send_response(200);self.send_header("Set-Cookie",f"fv_session={cookie}; HttpOnly; SameSite=Strict; Path=/")
-                payload=json.dumps({"csrf_token":token}).encode();self.send_header("Content-Type","application/json; charset=utf-8");self.send_header("Content-Length",str(len(payload)));self._security(True);self.end_headers();self.wfile.write(payload)
-            def _mutate(self):
-                split=urlsplit(self.path);path=unquote(split.path)
-                if not path.startswith("/api/"):return self._method_not_allowed()
-                try:
-                    payload=self._request_json()
-                    self._require_same_origin();self._require_csrf(payload)
-                    if self.command == "DELETE":return self._json(200,owner.controller.delete(path))
-                    return self._json(200,owner.controller.action(path,payload))
-                except ValueError as exc:return self._error(400,str(exc))
-                except PermissionError:return self._error(403,"Acceso denegado")
-                except KeyError:return self._error(404,"Endpoint no disponible")
-                except Exception:
-                    LOGGER.warning("Web mutation failed safely; path=%s",path);return self._error(503,"Servicio temporalmente no disponible")
-            def _request_json(self):
-                if self.headers.get("Content-Type","").split(";",1)[0].strip().lower() != "application/json":raise ValueError("Se requiere Content-Type application/json.")
-                try:length=int(self.headers.get("Content-Length","0"))
-                except ValueError:raise ValueError("Longitud inválida.")
-                if length < 0 or length > 32_768:raise ValueError("Solicitud demasiado grande.")
-                try:value=json.loads(self.rfile.read(length).decode("utf-8"))
-                except (UnicodeDecodeError,json.JSONDecodeError):raise ValueError("JSON inválido.")
-                if not isinstance(value,dict):raise ValueError("El JSON debe ser un objeto.")
-                return value
-            def _require_same_origin(self):
-                origin=self.headers.get("Origin")
-                host=self.headers.get("Host","")
-                if not host or (origin is not None and urlsplit(origin).netloc != host):raise PermissionError()
-            def _require_csrf(self,payload):
-                cookie=next((part.strip().partition("=")[2] for part in self.headers.get("Cookie","").split(";") if part.strip().startswith("fv_session=")),None)
-                token=self.headers.get("X-CSRF-Token") or payload.get("csrf_token")
-                with owner._sessions_lock:expected=owner._sessions.get(cookie)
-                if not isinstance(token,str) or expected is None or not secrets.compare_digest(token,expected):raise PermissionError()
-            def _events(self):
-                # A bounded heartbeat keeps browser state fresh without polling camera resources.
-                self.send_response(200);self.send_header("Content-Type","text/event-stream");self.send_header("Cache-Control","no-store");self._security(True);self.end_headers()
-                try:
-                    while not owner._closing.wait(10):
-                        self.wfile.write(b"event: system_health\ndata: {}\n\n");self.wfile.flush()
-                except (BrokenPipeError,ConnectionResetError,OSError):pass
-            def _security(self,sensitive=False):
-                for key,value in SECURITY_HEADERS.items():self.send_header(key,value)
-                self.send_header("Cache-Control","no-store" if sensitive else "private, max-age=60")
-            def _bytes(self,status,mime,payload,*,sensitive=False):
-                self.send_response(status);self.send_header("Content-Type",mime);self.send_header("Content-Length",str(len(payload)));self._security(sensitive);self.end_headers()
-                try:self.wfile.write(payload)
-                except (BrokenPipeError,ConnectionResetError):pass
-            def _stream(self):
-                frame=owner.frame_store.latest()
-                if frame is None or owner._closing.is_set() or owner.frame_store.closed:return self._error(503,"Video no disponible")
-                if not owner._streams.acquire(blocking=False):return self._error(503,"Límite de video alcanzado")
-                try:
-                    self.send_response(200);self.send_header("Content-Type","multipart/x-mixed-replace; boundary=frame");self._security(True);self.end_headers()
-                    sequence=None;period=1.0/owner.policy.video_max_fps;deadline=0.0
-                    while not owner._closing.is_set() and not owner.frame_store.closed:
-                        frame=owner.frame_store.wait_for_new(sequence,1.0)
-                        if frame is None:continue
-                        delay=deadline-time.monotonic()
-                        if delay>0 and owner._closing.wait(delay):break
-                        jpeg=_jpeg(frame,owner.policy.video_jpeg_quality);sequence=frame.sequence_id;deadline=time.monotonic()+period
-                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "+str(len(jpeg)).encode()+b"\r\n\r\n"+jpeg+b"\r\n");self.wfile.flush()
-                except (BrokenPipeError,ConnectionResetError,OSError):pass
-                finally:owner._streams.release()
-        return Handler
+        address = detect_lan_ip()
+        if address:
+            self.printer(f"Red: http://{address}:{self.policy.port}")
 
 
-def _jpeg(frame,quality:int)->bytes:
-    import cv2
-    import numpy as np
-    rgb=np.frombuffer(frame.rgb_bytes,dtype=np.uint8).reshape((frame.height,frame.width,3))
-    ok,encoded=cv2.imencode(".jpg",cv2.cvtColor(rgb,cv2.COLOR_RGB2BGR),[cv2.IMWRITE_JPEG_QUALITY,quality])
-    if not ok:raise RuntimeError("presentation JPEG encoding failed")
-    return encoded.tobytes()
-
-
-def detect_lan_ip()->str|None:
-    connection=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+def _listening_socket(host: str, port: int) -> socket.socket:
+    family, socktype, protocol, _, address = socket.getaddrinfo(
+        host, port, type=socket.SOCK_STREAM
+    )[0]
+    result = socket.socket(family, socktype, protocol)
     try:
-        connection.connect(("192.0.2.1",9));value=connection.getsockname()[0]
-        return None if value.startswith("127.") or value=="0.0.0.0" else value
-    except OSError:return None
-    finally:connection.close()
+        result.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        result.bind(address)
+        result.listen(128)
+        result.setblocking(False)
+        return result
+    except BaseException:
+        result.close()
+        raise
+
+
+def detect_lan_ip() -> str | None:
+    connection = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        connection.connect(("192.0.2.1", 9))
+        value = connection.getsockname()[0]
+        return None if value.startswith("127.") or value == "0.0.0.0" else value
+    except OSError:
+        return None
+    finally:
+        connection.close()

@@ -8,8 +8,32 @@ temporal en memoria y el dashboard web para el despliegue posterior en Jetson.
 > Este dashboard sin autenticación web está diseñado exclusivamente para
 > localhost o una LAN privada confiable. No exponer directamente a Internet.
 
+El dashboard usa FastAPI/Uvicorn como adaptador HTTP y sirve una SPA compilada
+con React, Vite, Tailwind CSS y componentes shadcn/ui. Las consultas y comandos
+reutilizan la autorización de la sesión activa del appliance; las mutaciones
+requieren además una sesión CSRF de mismo origen, acotada y expirable. Esto no
+reemplaza un login web independiente ni TLS.
+
 El servidor no configura UPnP, el router, HTTPS ni acceso desde Internet. En
 Jetson debe conservarse el OpenCV suministrado por JetPack.
+
+### Desarrollo del dashboard web
+
+Node se usa solamente para desarrollar y compilar el frontend; no forma parte
+del runtime del appliance. FastAPI sirve los archivos generados en
+`src/ui/web_dashboard/static/`.
+
+```bash
+cd web
+npm ci
+npm run format:check
+npm run build
+```
+
+Durante desarrollo, `npm run dev` levanta Vite en el puerto 5173 y redirige
+`/api` al backend local en el puerto 8080. La arquitectura y la decisión de
+framework están documentadas en
+[ADR 012](docs/adr/012-fastapi-react-web-dashboard.md).
 
 **Versión candidata:** `1.0.0-rc1`. Consulte [release notes](docs/RELEASE_NOTES_v1.0.0-rc1.md), [despliegue Ubuntu](docs/DEPLOYMENT_UBUNTU.md), [Jetson Orin Nano](docs/JETSON_ORIN_NANO.md) y [checklist](docs/RELEASE_CHECKLIST.md).
 

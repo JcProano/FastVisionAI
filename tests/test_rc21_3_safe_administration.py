@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 import tempfile
 import unittest
 import uuid
@@ -127,8 +128,10 @@ class RC213SafeAdministrationTests(GalleryTestCase):
             "token":token,"confirmed":True,"confirmation":"ELIMINAR",
         })
         self.assertEqual(calls,[("safe-person",True)])
-        page=inspect.getsource(WebDashboardController._people_page)
-        for label in ("VER","EDITAR","ELIMINAR","ACTUALIZAR FOTO","ACTUALIZAR ROSTRO"):
+        page=(Path(__file__).resolve().parents[1] / "web/src/pages/people.tsx").read_text(
+            encoding="utf-8"
+        )
+        for label in ("Editar","Eliminar","Actualizar fotografía","Actualizar rostro"):
             self.assertIn(label,page)
 
     def test_tk_person_confirmation_and_separate_photo_face_actions(self):

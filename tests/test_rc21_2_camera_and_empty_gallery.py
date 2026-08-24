@@ -6,11 +6,12 @@ import unittest
 from src.ui.contracts import MonitoringDTO, UIState
 from src.ui.identification import IdentificationPresentationController
 from src.ui.main import main
+from src.ui.runtime_adapter import RealUIRuntimeAdapter
 from src.ui.camera_selection_window import CameraSelectionWindow
 from src.ui.operational_semantics import (
     OperationalPresentationState, operational_presentation_state,
 )
-from src.ui.web_dashboard.controller import WebDashboardController, _modal_html
+from src.ui.web_dashboard.controller import WebDashboardController
 
 
 def empty_gallery_face() -> MonitoringDTO:
@@ -25,9 +26,26 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         source=inspect.getsource(main)
         self.assertIn("start_network_camera_discovery",source)
         self.assertIn('name="camera-startup-discovery"',source)
-        self.assertIn("if result.selected is not None",source)
-        self.assertIn("if tk_enabled",source)
+        self.assertEqual(source.count("start_network_camera_discovery()"),1)
+        finish=source[source.index("def finish_startup_camera_discovery"):
+                      source.index("def start_network_camera_discovery")]
+        self.assertIn("camera_selection.refresh()",finish)
+        self.assertNotIn("use_camera(",finish)
+        self.assertNotIn("open_camera_selection(",finish)
         self.assertNotIn("show_network_form()",source)
+
+    def test_real_runtime_starts_without_a_camera_manager(self):
+        source=inspect.getsource(main)
+        construction=source[source.index("adapter = RealUIRuntimeAdapter"):
+                            source.index("session = LiveFaceSession")]
+        self.assertIn("source=None",construction)
+        adapter_source=inspect.getsource(RealUIRuntimeAdapter)
+        initializer=adapter_source[adapter_source.index("def __init__"):
+                                   adapter_source.index("def open")]
+        switch=adapter_source[adapter_source.index("def switch_camera"):
+                              adapter_source.index("def retry_camera")]
+        self.assertNotIn("CameraManager(",initializer)
+        self.assertIn("CameraManager(config",switch)
 
     def test_session_selection_does_not_persist_implicitly(self):
         source=inspect.getsource(main)
@@ -56,8 +74,6 @@ class RC212CameraAndEmptyGalleryTests(unittest.TestCase):
         self.assertEqual(value["title"],"PERSONA NO REGISTRADA")
         self.assertFalse(value["active"])
         self.assertNotIn("CANDIDATO BIOMÉTRICO",str(value))
-        modal=_modal_html(value)
-        self.assertEqual(modal, "")
         controller.action("/api/presentation/ignore",{})
         self.assertFalse(controller.api("/api/presentation")["active"])
 

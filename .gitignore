@@ -35,3 +35,9 @@ bus.jpg
 
 # Datos biométricos locales y sesiones de validación
 data/
+
+# Frontend dependencies and TypeScript incremental build state
+web/node_modules/
+web/*.tsbuildinfo
+web/vite.config.js
+web/vite.config.d.ts

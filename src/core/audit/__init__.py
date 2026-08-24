@@ -1,8 +1,12 @@
-"""Administrative audit subsystem."""
-from .contracts import *
+"""Administrative-audit bounded context."""
+
+from .application import *
+from .domain import *
 from .exporter import AuditCSVExporter
-from .repository import AuditRepository
-from .sanitizer import sanitize_message,sanitize_metadata
+from .infrastructure import CSVAuditExporter, SQLiteAuditRepository
 from .service import AuditService
 from .subscriber import AuditCallbackAdapter
+from .container import AuditComponents, AuditContainer
 
+# Temporary compatibility name used by composition and historical tests.
+AuditRepository = SQLiteAuditRepository

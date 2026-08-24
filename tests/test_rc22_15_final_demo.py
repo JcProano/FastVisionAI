@@ -93,13 +93,14 @@ class RC2215FinalDemoTests(unittest.TestCase):
         self.assertIn("from src.ui.main import main as ui_main",source)
         self.assertNotIn("192.168.",source)
 
-    def test_startup_uses_selected_preference_before_opening_selector(self):
+    def test_startup_refreshes_sources_without_activating_a_camera(self):
         source=inspect.getsource(main)
+        self.assertEqual(source.count("start_network_camera_discovery()"),1)
         finish=source[source.index("def finish_startup_camera_discovery"):
                       source.index("def start_network_camera_discovery")]
-        self.assertIn("if result.selected is not None",finish)
-        self.assertIn("use_camera(source)",finish)
-        self.assertIn("open_camera_selection()",finish)
+        self.assertIn("camera_selection.refresh()",finish)
+        self.assertNotIn("use_camera(",finish)
+        self.assertNotIn("open_camera_selection(",finish)
 
 
 if __name__ == "__main__":

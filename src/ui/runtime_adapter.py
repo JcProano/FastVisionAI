@@ -12,8 +12,7 @@ from typing import Protocol
 import cv2
 
 from src.camera.camera_manager import CameraManager
-from src.camera.camera_types import CameraConfig, CameraType, ReadStatus, ReconnectConfig
-from src.camera.source_discovery.selection import classify_camera_source
+from src.camera.camera_types import CameraConfig, CameraType, ReadStatus
 from src.core.config_manager import PROJECT_ROOT, load_config
 from src.engine.alignment import FaceAligner
 from src.engine.alignment.contracts import AlignmentStatus
@@ -143,7 +142,7 @@ class RealUIRuntimeAdapter:
     """Owns camera and biometric resources while exposing only safe presentation data."""
 
     def __init__(
-        self, *, source: int | str, policy: GuidedCapturePolicy,
+        self, *, source: int | str | None, policy: GuidedCapturePolicy,
         quality_profile_path: Path, cancel_event: threading.Event,
         thumbnail_capture_enabled: bool = False,
     ) -> None:
@@ -165,10 +164,10 @@ class RealUIRuntimeAdapter:
         self._embedding_models = ModelManager(PROJECT_ROOT)
         self._embedding = FaceEmbeddingPlugin(embedding.settings, self._embedding_models)
         self._cancel_event = cancel_event
-        self._camera = CameraManager(
-            CameraConfig("local_face_ui", classify_camera_source(source), source,
-                         reconnect=ReconnectConfig(True, 3, .5)), cancel_event,
-        )
+        # Camera ownership is intentionally deferred until the operator chooses
+        # a source from the dashboard. This keeps application startup independent
+        # from camera availability and avoids opening a configured/stale device.
+        self._camera: CameraManager | None = None
         self._aligner = FaceAligner()
         self._quality = FaceQualityScorer(load_face_quality_profile(quality_profile_path))
         self._policy = policy
@@ -181,16 +180,17 @@ class RealUIRuntimeAdapter:
 
     def open(self) -> bool:
         self._runtime.prepare()
-        return self._camera.open()
+        return False
 
     def switch_camera(self, config: CameraConfig) -> bool:
         """Replace the sole owned camera after releasing it; runtime remains untouched."""
-        self._camera.release()
+        if self._camera is not None:
+            self._camera.release()
         self._camera = CameraManager(config, self._cancel_event)
         return self._camera.open()
 
     def retry_camera(self) -> bool:
-        return self._camera.open()
+        return self._camera is not None and self._camera.open()
 
     def new_evaluator(self) -> None:
         self._evaluator = FaceCaptureQualityEvaluator(self._policy)
@@ -205,6 +205,9 @@ class RealUIRuntimeAdapter:
         return self._evaluator.restore_accepted(guided)
 
     def process(self, requested_pose: CapturePose) -> ProcessingStep:
+        if self._camera is None:
+            self._cancel_event.wait(0.1)
+            raise CameraAdapterError("camera unavailable: not_selected")
         read = self._camera.read()
         if read.status is not ReadStatus.FRAME or read.frame is None:
             raise CameraAdapterError(f"camera unavailable: {read.status.value}")
@@ -283,7 +286,8 @@ class RealUIRuntimeAdapter:
 
     def status(self) -> RuntimeStatusDTO:
         return RuntimeStatusDTO(
-            "connected" if self._camera.connected else "disconnected", self._runtime.state.value,
+            "connected" if self._camera is not None and self._camera.connected
+            else "disconnected", self._runtime.state.value,
             self._detector_models.state(
                 self._detector_models.resolve_alias(self._detector_alias)
             ).value,
@@ -296,8 +300,9 @@ class RealUIRuntimeAdapter:
         if self._closed:
             return
         self._closed = True
-        self._camera.cancel()
-        self._camera.release()
+        if self._camera is not None:
+            self._camera.cancel()
+            self._camera.release()
         self._runtime.release()
         self._detector_models.unload_all()
         self._embedding.release()

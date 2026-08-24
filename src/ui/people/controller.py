@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.core.biometrics.application import (
+    ExportGalleryUseCase,
+    ImportGalleryUseCase,
+)
 from src.engine.embedding.contracts import FaceEmbedding
 from src.engine.enrollment import EnrollmentService
 from src.engine.face_quality.contracts import FaceQualityScore
@@ -35,6 +39,8 @@ class PeopleManagerController:
         self.gallery = gallery
         self.enrollment = enrollment
         self.persistence = persistence
+        self._export_gallery = ExportGalleryUseCase(persistence)
+        self._import_gallery = ImportGalleryUseCase(persistence)
         self.manifest_path = manifest_path
         self.archive_path = archive_path
         self._state = PeopleManagerState.IDLE
@@ -191,11 +197,11 @@ class PeopleManagerController:
                     ),
                     additions={person_id: tuple(samples)},
                 )
-                self.persistence.export(
+                self._export_gallery.execute(
                     temporary, self.manifest_path, self.archive_path, overwrite=True,
                 )
                 persisted = FaceGallery()
-                self.persistence.import_into(
+                self._import_gallery.execute(
                     persisted, self.manifest_path, self.archive_path,
                 )
                 if (not any(item.person_id == person_id
@@ -231,7 +237,7 @@ class PeopleManagerController:
             count=len(self.gallery.templates(person_id))
             temporary=_rebuild(self.gallery,excluded={person_id})
             try:
-                self.persistence.export(
+                self._export_gallery.execute(
                     temporary,self.manifest_path,self.archive_path,overwrite=True,
                 )
                 self.gallery.replace_from(temporary)
@@ -258,7 +264,7 @@ class PeopleManagerController:
             self._state = (PeopleManagerState.SAVING if operation == "save"
                            else PeopleManagerState.EXPORTING)
             try:
-                self.persistence.export(
+                self._export_gallery.execute(
                     self.gallery, manifest, archive, overwrite=overwrite_confirmed
                 )
                 self._state = PeopleManagerState.IDLE
@@ -273,7 +279,7 @@ class PeopleManagerController:
             self._state = PeopleManagerState.IMPORTING
             temporary = FaceGallery()
             try:
-                self.persistence.import_into(temporary, manifest, archive)
+                self._import_gallery.execute(temporary, manifest, archive)
                 self._pending_import = temporary
                 return PeopleOperationResultDTO(
                     PeopleManagerState.IMPORTING, True, "import_preview",

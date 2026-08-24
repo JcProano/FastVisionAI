@@ -53,36 +53,18 @@
   },
   "camera": {
     "auto_discovery": true,
-    "network_sources": [
-      {
-        "id": "network-b5db53b2-21d5-4a9a-b266-6914b6783af9",
-        "name": "droid",
-        "type": "NETWORK_HTTP",
-        "url": "http://192.168.1.3:4747/video"
-      },
-      {
-        "id": "network-06acc2d4-f753-46c5-80e7-2be5d062385b",
-        "name": "droidcam",
-        "type": "NETWORK_HTTP",
-        "url": "http://192.168.100.240:4747/video"
-      },
-      {
-        "id": "network-2b3d1be4-bd70-49a0-a31b-4abd0bb139e7",
-        "name": "casa",
-        "type": "NETWORK_HTTP",
-        "url": "http://192.168.1.27:4747/video"
-      },
-      {
-        "id": "network-7b4e8bd7-9163-434d-bd62-a47c22b799c9",
-        "name": "Iphone local",
-        "type": "NETWORK_HTTP",
-        "url": "http://192.168.1.12:4747/video"
-      }
-    ],
-    "preferred_source": "network-2b3d1be4-bd70-49a0-a31b-4abd0bb139e7",
+    "network_sources": [],
+    "preferred_source": null,
     "presentation": {
       "mirror_horizontal": false,
       "rotation": 0
+    },
+    "presentation_crop": {
+      "bottom_percent": 0,
+      "enabled": false,
+      "left_percent": 0,
+      "right_percent": 0,
+      "top_percent": 0
     },
     "scan_indices": 10,
     "source": "auto"
@@ -139,10 +121,10 @@
   },
   "guided_capture": {
     "manual_capture": false,
-    "minimum_quality_score": 75,
-    "mirrored_source": true,
+    "minimum_quality_score": 55,
+    "mirrored_source": false,
     "policy_file": "config/guided_capture.dev.json",
-    "stability_frames": 3,
+    "stability_frames": 2,
     "target_samples": 5
   },
   "identification_policy": {

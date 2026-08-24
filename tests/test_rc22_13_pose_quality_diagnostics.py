@@ -78,15 +78,16 @@ class RC2213PoseQualityDiagnosticTests(unittest.TestCase):
         message = captured.output[0]
         self.assertIn("enrollment_quality_diag frame_id=91", message)
         self.assertIn("detection_confidence=0.700000", message)
-        self.assertIn("min_detection_confidence=0.750000", message)
+        self.assertIn("min_detection_confidence=0.650000", message)
         self.assertIn("expected_pose=slight_left detected_pose=slight_right", message)
         self.assertIn("quality_score=40.200000", message)
 
     def test_two_of_five_renders_two_completed_sample_labels(self):
         checklist = _enrollment_checklist(2, 5).splitlines()
-        self.assertEqual(checklist[0], "✓ Frontal")
-        self.assertEqual(checklist[1], "✓ Ligero giro izquierda")
-        self.assertTrue(all(line.startswith("○") for line in checklist[2:]))
+        self.assertIn("✓ 1 Frontal",checklist[0])
+        self.assertIn("✓ 2 Ligero giro izquierda",checklist[1])
+        self.assertIn("● 3 Ligero giro derecha",checklist[2])
+        self.assertTrue(all(line.startswith("○") for line in checklist[3:]))
 
 
 if __name__ == "__main__":

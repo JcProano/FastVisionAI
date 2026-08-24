@@ -1,4 +1,4 @@
-"""Command-line entry point for the FastVisionAI Camera Engine."""
+"""Launch the integrated FastVisionAI dashboard by default."""
 
 from __future__ import annotations
 

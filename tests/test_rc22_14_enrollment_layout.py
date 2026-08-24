@@ -37,17 +37,18 @@ class RC2214EnrollmentLayoutTests(unittest.TestCase):
 
     def test_modal_grid_prioritizes_expandable_video(self):
         source=inspect.getsource(LocalFaceTkApp._show_enrollment_capture)
-        self.assertIn("shell.columnconfigure(0,weight=3,minsize=700)",source)
-        self.assertIn("shell.columnconfigure(1,weight=1,minsize=300)",source)
+        self.assertIn("shell.columnconfigure(0,weight=7)",source)
+        self.assertIn("shell.columnconfigure(1,weight=3)",source)
         self.assertIn("left.rowconfigure(1,weight=1)",source)
         self.assertIn('self._enrollment_video.grid(row=1,column=0,sticky="nsew")',source)
-        self.assertIn("for index,(pose_name,asset_name) in enumerate(ENROLLMENT_POSES)",source)
+        self.assertIn("for index,(label,filename) in enumerate(ENROLLMENT_POSES)",source)
 
     def test_enrollment_uses_shared_frame_and_no_new_pipeline(self):
         frame_source=inspect.getsource(LocalFaceTkApp.show_rgb_frame)
         modal_source=inspect.getsource(LocalFaceTkApp._show_enrollment_capture)
         self.assertIn("source_rgb_bytes = rgb_bytes",frame_source)
-        self.assertIn("enrollment_bytes = render_rgb",frame_source)
+        self.assertIn("_latest_enrollment_frame",frame_source)
+        self.assertIn('bind("<Configure>"',modal_source)
         for forbidden in ("VideoCapture","CameraManager(","Runtime(","FaceDetectorPlugin("):
             self.assertNotIn(forbidden,modal_source)
             self.assertNotIn(forbidden,frame_source)

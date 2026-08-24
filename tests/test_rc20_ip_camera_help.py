@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from src.camera.source_discovery import CameraSourceType, parse_discovery_config, redact_url
@@ -9,19 +10,20 @@ from src.engine.gallery import FaceGallery, FaceIdentity
 from src.ui.dashboard.professional_controller import _recognition_state
 from src.ui.main import storage_synchronization_diagnostic
 from src.ui.main import _camera_network_type, _camera_url
-from src.ui.web_dashboard.controller import WebDashboardController
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class Rc20IpCameraHelpTests(unittest.TestCase):
     def test_camera_page_guides_rtsp_http_and_custom_urls(self):
-        page = WebDashboardController(lambda: None).render("/camera").decode("utf-8")
+        page = (ROOT / "web/src/pages/cameras.tsx").read_text(encoding="utf-8")
         for text in (
-            "AGREGAR CÁMARA IP / CCTV", "NETWORK_RTSP", "HTTP/MJPEG", "URL personalizada",
-            "¿Cómo encuentro la URL de mi cámara?", "Hikvision:", "Dahua:", "Reolink:",
-            "Axis:", "DroidCam:", "Probar conexión", "ONVIF → RTSP",
+            "Administración de cámaras", "NETWORK_RTSP", "HTTP / MJPEG",
+            "URL personalizada", "Cómo encontrar la URL", "Hikvision", "Dahua",
+            "Reolink", "Axis", "Probar", "ONVIF",
         ):
             self.assertIn(text, page)
-        self.assertLess(page.index('value="NETWORK_RTSP"'), page.index('value="NETWORK_HTTP"'))
+        self.assertLess(page.index('NETWORK_RTSP'), page.index('NETWORK_HTTP'))
 
     def test_custom_and_secure_rtsp_urls_are_valid_network_sources(self):
         config = parse_discovery_config({
